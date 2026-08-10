@@ -1,0 +1,227 @@
+import { memo, useEffect, useCallback, useMemo } from "react";
+import CollectionForm from "./CollectionForm";
+import AddIcon from "@mui/icons-material/Add";
+import CollectionHeader from "./CollectionHeader";
+import EmptyCollectionState from "./EmptyCollectionState";
+import CollectionItem from "./CollectionItem";
+import { useCollectionStore } from "../../stores/CollectionStore";
+import { useShallow } from "zustand/react/shallow";
+import {
+  CreateFab,
+  Dialog,
+  EditorButton,
+  EmptyState,
+  FlexColumn,
+  FlexRow,
+  ListGroup,
+  ListItemRow,
+  LoadingSpinner,
+  Surface,
+  Text,
+  BORDER_RADIUS
+} from "../ui_primitives";
+import { CollectionResponse } from "../../stores/ApiTypes";
+
+const CollectionList = () => {
+  const {
+    collections,
+    isLoading,
+    error,
+    deleteTarget,
+    deletingCollection,
+    showForm,
+    dragOverCollection,
+    indexProgress,
+    indexErrors,
+    setDeleteTarget,
+    setShowForm,
+    setIndexErrors,
+    fetchCollections,
+    confirmDelete,
+    cancelDelete,
+    handleDragOver: storeHandleDragOver,
+    handleDragLeave: storeHandleDragLeave,
+    handleDrop: storeHandleDrop
+  } = useCollectionStore(useShallow((state) => ({
+    collections: state.collections,
+    isLoading: state.isLoading,
+    error: state.error,
+    deleteTarget: state.deleteTarget,
+    deletingCollection: state.deletingCollection,
+    showForm: state.showForm,
+    dragOverCollection: state.dragOverCollection,
+    indexProgress: state.indexProgress,
+    indexErrors: state.indexErrors,
+    setDeleteTarget: state.setDeleteTarget,
+    setShowForm: state.setShowForm,
+    setIndexErrors: state.setIndexErrors,
+    fetchCollections: state.fetchCollections,
+    confirmDelete: state.confirmDelete,
+    cancelDelete: state.cancelDelete,
+    handleDragOver: state.handleDragOver,
+    handleDragLeave: state.handleDragLeave,
+    handleDrop: state.handleDrop
+  })));
+
+  useEffect(() => {
+    fetchCollections();
+  }, [fetchCollections]);
+
+  const handleDeleteClick = useCallback((collectionName: string) => {
+    setDeleteTarget(collectionName);
+  }, [setDeleteTarget]);
+
+  const handleShowForm = useCallback(() => {
+    setShowForm(true);
+  }, [setShowForm]);
+
+  const handleHideForm = useCallback(() => {
+    setShowForm(false);
+  }, [setShowForm]);
+
+  const handleClearIndexErrors = useCallback(() => {
+    setIndexErrors([]);
+  }, [setIndexErrors]);
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent<HTMLDivElement>, collectionName: string) => {
+      storeHandleDragOver(e, collectionName);
+    },
+    [storeHandleDragOver]
+  );
+
+  const handleDragLeave = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      storeHandleDragLeave(e);
+    },
+    [storeHandleDragLeave]
+  );
+
+  const dropHandlers = useMemo(() => {
+    const handlers: Record<string, (e: React.DragEvent<HTMLDivElement>) => void> = {};
+    if (collections?.collections) {
+      for (const collection of collections.collections) {
+        handlers[collection.name] = (e: React.DragEvent<HTMLDivElement>) => {
+          storeHandleDrop(collection.name)(e);
+        };
+      }
+    }
+    return handlers;
+  }, [collections?.collections, storeHandleDrop]);
+
+  const totalCount = collections?.collections.length || 0;
+
+  return (
+    <>
+      {!showForm && (
+        <>
+          <FlexRow
+            align="center"
+            justify="space-between"
+            sx={{
+              mb: 2,
+              mt: 1
+            }}
+          >
+            <Text size="small" color="secondary">
+              {totalCount} {totalCount === 1 ? "collection" : "collections"}
+            </Text>
+            <CreateFab
+              onClick={handleShowForm}
+              label="Create Collection"
+              icon={<AddIcon />}
+              aria-label="Create Collection"
+            />
+          </FlexRow>
+
+          {collections?.collections.length ? <CollectionHeader /> : null}
+          {isLoading ? (
+            <FlexColumn gap={2} justify="center" align="center" sx={{ mt: 4 }}>
+              <LoadingSpinner size="large" text="Loading collections" />
+            </FlexColumn>
+          ) : error ? (
+            <FlexColumn gap={2} justify="center" align="center" sx={{ mt: 4, px: 2 }}>
+              <EmptyState
+                variant="error"
+                title="Couldn't load collections"
+                description="Try again later."
+                actionText="Retry"
+                onAction={() => fetchCollections()}
+              />
+            </FlexColumn>
+          ) : !collections?.collections.length ? (
+            <EmptyCollectionState />
+          ) : (
+            <Surface
+              elevation={0}
+              background="transparent"
+              sx={(theme) => ({
+                mt: 2,
+                borderRadius: BORDER_RADIUS.md,
+                p: 1,
+                border: `1px solid ${theme.vars.palette.divider}`
+              })}
+            >
+              <ListGroup>
+                {collections?.collections.map((collection: CollectionResponse) => (
+                  <CollectionItem
+                    key={collection.name}
+                    collection={collection}
+                    dragOverCollection={dragOverCollection}
+                    indexProgress={indexProgress}
+                    onDelete={handleDeleteClick}
+                    onDrop={dropHandlers[collection.name]}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    deletingCollection={deletingCollection}
+                  />
+                ))}
+              </ListGroup>
+            </Surface>
+          )}
+        </>
+      )}
+      {showForm && <CollectionForm onClose={handleHideForm} />}
+
+      <Dialog
+        open={Boolean(deleteTarget)}
+        onClose={cancelDelete}
+        title="Delete this collection?"
+        onConfirm={confirmDelete}
+        confirmText="Delete"
+        cancelText="Cancel"
+        destructive
+      >
+        This will permanently delete the collection &quot;{deleteTarget}
+        &quot;.
+      </Dialog>
+
+      {indexErrors.length > 0 && (
+        <Dialog open={true} onClose={handleClearIndexErrors} title="Indexing report">
+          <FlexColumn gap={2}>
+            <Text>
+              The following files encountered errors during indexing:
+            </Text>
+            <ListGroup compact flush sx={{ pl: 2 }}>
+              {indexErrors.map((error) => (
+                <ListItemRow
+                  key={error.file}
+                  primary={<strong>{error.file}</strong>}
+                  secondary={error.error}
+                  sx={{ display: "list-item" }}
+                />
+              ))}
+            </ListGroup>
+            <FlexRow justify="flex-end">
+              <EditorButton onClick={handleClearIndexErrors}>
+                Close
+              </EditorButton>
+            </FlexRow>
+          </FlexColumn>
+        </Dialog>
+      )}
+    </>
+  );
+};
+
+export default memo(CollectionList);

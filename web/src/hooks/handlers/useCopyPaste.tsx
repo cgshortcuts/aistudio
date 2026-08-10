@@ -1,0 +1,330 @@
+/** Hook for copy/paste functionality of nodes and edges in the flow editor. */
+
+import { getMousePosition } from "../../utils/MousePosition";
+import { useReactFlow, Edge, Node } from "@xyflow/react";
+import { NodeData } from "../../stores/NodeData";
+import { useCallback } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { useNodeStoreRef } from "../../contexts/NodeContext";
+import useSessionStateStore from "../../stores/SessionStateStore";
+import { useClipboardContentPaste } from "./useClipboardContentPaste";
+import { isTextInputActive } from "../../utils/browser";
+
+interface ClipboardData {
+  nodes: unknown[];
+  edges: unknown[];
+}
+
+const isValidNode = (node: unknown): node is Node<NodeData> =>
+  !!node && typeof node === "object" && "id" in node && typeof (node as Node<NodeData>).id === "string";
+
+const isValidEdge = (edge: unknown): edge is Edge =>
+  !!edge && typeof edge === "object" && "source" in edge && "target" in edge && typeof (edge as Edge).source === "string" && typeof (edge as Edge).target === "string";
+
+interface UseCopyPasteResult {
+  handleCopy: (nodeId?: string) => Promise<{ nodesToCopy: Node<NodeData>[]; connectedEdges: Edge[] }>;
+  handleCut: (nodeId?: string) => Promise<void>;
+  handlePaste: () => Promise<void>;
+}
+
+export const useCopyPaste = (): UseCopyPasteResult => {
+  const reactFlow = useReactFlow();
+  // Use the live store ref so all callbacks always read the latest state,
+  // avoiding stale-closure bugs when the user acts faster than React's
+  // async effect scheduling (e.g. rubber-band select then immediately Ctrl+C).
+  const nodeStore = useNodeStoreRef();
+  const { setClipboardData, setIsClipboardValid } = useSessionStateStore(
+    useShallow((state) => ({
+      setClipboardData: state.setClipboardData,
+      setIsClipboardValid: state.setIsClipboardValid
+    }))
+  );
+
+  const { handleContentPaste, readClipboardContent, readClipboardText } =
+    useClipboardContentPaste();
+
+  const handleCopy = useCallback(
+    async (nodeId?: string) => {
+      if (!nodeId && isTextInputActive()) return { nodesToCopy: [], connectedEdges: [] };
+
+      // Always read fresh state to avoid stale closures.
+      const { nodes, edges, getSelectedNodes } = nodeStore.getState();
+      const selectedNodes = getSelectedNodes();
+
+      // Allow the browser to handle text copy when no nodes are selected and
+      // text is highlighted. But when nodes ARE selected, always copy them —
+      // rubber-band selection can accidentally create a text selection, which
+      // would otherwise silently block multi-node copy.
+      if (!nodeId && selectedNodes.length === 0 && (window.getSelection()?.toString().length ?? 0) > 0) {
+        return { nodesToCopy: [], connectedEdges: [] };
+      }
+
+      let nodesToCopy: Node<NodeData>[];
+      if (nodeId && nodeId !== "") {
+        const node = nodes.find((node) => node.id === nodeId);
+        nodesToCopy = node ? [node] : [];
+      } else {
+        nodesToCopy = selectedNodes;
+      }
+      if (nodesToCopy.length === 0) {
+        return { nodesToCopy: [], connectedEdges: [] };
+      }
+      const nodesToCopyIds = nodesToCopy.map((node) => node.id);
+      const nodesToCopyIdsSet = new Set(nodesToCopyIds);
+      const connectedEdges = edges.filter(
+        (edge) =>
+          nodesToCopyIdsSet.has(edge.source) ||
+          nodesToCopyIdsSet.has(edge.target)
+      );
+      const serializedData = JSON.stringify({
+        nodes: nodesToCopy,
+        edges: connectedEdges
+      });
+
+      // Use Electron's clipboard API if available, otherwise fallback to browser clipboard API
+      if (window.api?.clipboard?.writeText) {
+        await window.api.clipboard.writeText(serializedData);
+      } else if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(serializedData);
+        } catch (error) {
+          console.debug("Browser clipboard write failed:", error);
+        }
+      }
+
+      // Let UI know we have valid node data available for paste
+      setClipboardData(serializedData);
+      setIsClipboardValid(true);
+
+      return { nodesToCopy, connectedEdges };
+    },
+    [nodeStore, setClipboardData, setIsClipboardValid]
+  );
+
+  const handleCut = useCallback(
+    async (nodeId?: string) => {
+      const { nodesToCopy } = await handleCopy(nodeId);
+
+      if (nodesToCopy.length === 0) {
+        return;
+      }
+
+      // Go through deleteNodes rather than filtering the arrays directly: it
+      // re-parents children of a cut group back to the canvas (converting their
+      // parent-relative position to absolute) and clears errors/results. A raw
+      // setNodes would leave orphans pointing at a deleted parentId.
+      // Read fresh state so we don't lose nodes added after the cut callback was created.
+      const { deleteNodes } = nodeStore.getState();
+      deleteNodes(nodesToCopy.map((n) => n.id));
+    },
+    [handleCopy, nodeStore]
+  );
+
+  const handlePaste = useCallback(async () => {
+    // Skip paste handling if user is typing in a text field (should use native paste instead)
+    if (isTextInputActive()) {
+      return;
+    }
+
+    // 1. Check plain text clipboard for valid node JSON first.
+    //    This must happen before readClipboardContent() because that function
+    //    prioritizes image/HTML formats which can intercept node JSON text
+    //    (e.g. some environments wrap clipboard text in HTML tags).
+    let clipboardData: string | null = null;
+    const clipboardText = await readClipboardText();
+    if (clipboardText) {
+      try {
+        const parsed: unknown = JSON.parse(clipboardText);
+        if (
+          parsed &&
+          typeof parsed === "object" &&
+          "nodes" in parsed &&
+          "edges" in parsed &&
+          Array.isArray((parsed as ClipboardData).nodes) &&
+          Array.isArray((parsed as ClipboardData).edges) &&
+          (parsed as ClipboardData).nodes.every(isValidNode) &&
+          (parsed as ClipboardData).edges.every(isValidEdge)
+        ) {
+          clipboardData = clipboardText;
+        }
+      } catch {
+        // Not JSON, continue to other checks
+      }
+    }
+
+    // 2. If clipboard text is not valid node data, check for images/files/other content
+    if (!clipboardData) {
+      const clipboardContent = await readClipboardContent();
+
+      if (
+        clipboardContent.type === "image" ||
+        clipboardContent.type === "file"
+      ) {
+        await handleContentPaste();
+        return;
+      }
+
+      // For text/HTML/RTF types that aren't node JSON, handle as content paste
+      if (
+        clipboardContent.type === "text" ||
+        clipboardContent.type === "html" ||
+        clipboardContent.type === "rtf"
+      ) {
+        await handleContentPaste();
+        return;
+      }
+
+      // No valid clipboard content found
+      console.debug("No valid data found in clipboard");
+      return;
+    }
+
+    let parsedData: unknown;
+    try {
+      parsedData = JSON.parse(clipboardData);
+    } catch {
+      return;
+    }
+
+    if (
+      !parsedData ||
+      typeof parsedData !== "object" ||
+      !("nodes" in parsedData) ||
+      !("edges" in parsedData) ||
+      !Array.isArray((parsedData as ClipboardData).nodes) ||
+      !Array.isArray((parsedData as ClipboardData).edges) ||
+      !(parsedData as ClipboardData).nodes.every(isValidNode) ||
+      !(parsedData as ClipboardData).edges.every(isValidEdge)
+    ) {
+      return;
+    }
+
+    const mousePosition = getMousePosition();
+    if (!mousePosition) {
+      console.warn("Mouse position not available");
+      return;
+    }
+
+    // At this point, no text input is focused, so we can proceed with node paste.
+    // Read fresh state from the store so that cross-workflow paste always uses
+    // the current workflow's nodes/edges/workflowId rather than a stale snapshot
+    // captured when the callback was last created.
+    const { nodes: copiedNodes, edges: copiedEdges } = parsedData as {
+      nodes: Node<NodeData>[];
+      edges: Edge[];
+    };
+    const oldToNewIds = new Map<string, string>();
+    const newNodes: Node<NodeData>[] = [];
+    const newEdges: Edge[] = [];
+
+    const {
+      nodes,
+      edges,
+      setNodes,
+      setEdges,
+      generateNodeIds,
+      workflow
+    } = nodeStore.getState();
+    const workflowId = workflow.id;
+
+    // Generate new sequential IDs for all copied nodes
+    const newIds = generateNodeIds(copiedNodes.length);
+    copiedNodes.forEach((node: Node<NodeData>, index: number) => {
+      oldToNewIds.set(node.id, newIds[index]);
+    });
+
+    // calculate offset for pasting
+    const firstNodePosition = reactFlow.screenToFlowPosition({
+      x: mousePosition.x,
+      y: mousePosition.y
+    });
+
+    if (!firstNodePosition) {
+      console.warn("Failed to calculate paste position");
+      return;
+    }
+
+    const firstPos = copiedNodes[0].position ?? { x: 0, y: 0 };
+    const offset = {
+      x: firstNodePosition.x - (firstPos.x ?? 0),
+      y: firstNodePosition.y - (firstPos.y ?? 0)
+    };
+
+    // create new nodes with updated IDs and parent references
+    for (const node of copiedNodes) {
+      const newId = oldToNewIds.get(node.id)!;
+      let newParentId: string | undefined;
+
+      // check if parent exists in copied nodes
+      if (node.parentId && oldToNewIds.has(node.parentId)) {
+        newParentId = oldToNewIds.get(node.parentId);
+      } else {
+        newParentId = undefined;
+      }
+
+      const positionAbsolute = node.data?.positionAbsolute;
+
+      const newNode: Node<NodeData> = {
+        ...node,
+        id: newId,
+        parentId: newParentId,
+        data: {
+          ...node.data,
+          // Update workflow_id to current workflow when pasting
+          workflow_id: workflowId,
+          positionAbsolute: positionAbsolute
+            ? {
+              x: positionAbsolute.x + offset.x,
+              y: positionAbsolute.y + offset.y
+            }
+            : undefined
+        },
+        position: {
+          x: (node.position?.x ?? 0) + (newParentId ? 0 : offset.x),
+          y: (node.position?.y ?? 0) + (newParentId ? 0 : offset.y)
+        },
+        selected: true // Select pasted nodes
+      };
+
+      newNodes.push(newNode);
+    }
+
+    // Update edges
+    copiedEdges.forEach((edge: Edge) => {
+      const newSource = oldToNewIds.get(edge.source);
+      const newTarget = oldToNewIds.get(edge.target);
+
+      if (newSource && newTarget) {
+        newEdges.push({
+          ...edge,
+          id: crypto.randomUUID(), // Edge IDs can still be UUIDs
+          source: newSource,
+          target: newTarget,
+          selected: false // Edges should not be selected
+        });
+      }
+    });
+
+    // Deselect existing nodes, then add the new selected nodes
+    const deselectedNodes = nodes.map((node) => ({
+      ...node,
+      selected: false
+    }));
+    const deselectedEdges = edges.map((edge) => ({
+      ...edge,
+      selected: false
+    }));
+
+    // Update state
+    setNodes([...deselectedNodes, ...newNodes]);
+    setEdges([...deselectedEdges, ...newEdges]);
+  }, [
+    nodeStore,
+    reactFlow,
+    handleContentPaste,
+    readClipboardContent,
+    readClipboardText
+  ]);
+
+  return { handleCopy, handleCut, handlePaste };
+};

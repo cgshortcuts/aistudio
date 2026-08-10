@@ -1,0 +1,224 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import type { Theme } from "@mui/material/styles";
+import { MOTION, BORDER_RADIUS, SPACING, Z_INDEX, getSpacingPx } from "../ui_primitives";
+
+/**
+ * Styles for the NumberInput component.
+ * Extracted from properties.css for component co-location.
+ */
+export const numberInputStyles = (theme: Theme) =>
+  css({
+    "&.number-input": {
+      display: "block",
+      position: "relative",
+      cursor: "ew-resize !important",
+      fontFamily: theme.fontFamily1,
+      fontSize: theme.fontSizeSmall,
+      color: theme.vars.palette.primary.light,
+      marginBottom: 0
+    },
+
+    // Highlight when the owning PropertyInput is marked as changed.
+    // PropertyInput applies `value-changed` on a wrapper above this component.
+    ".value-changed & .slider-value .value": {
+      // color: theme.vars.palette.primary.main
+    },
+
+    label: {
+      cursor: "ew-resize !important"
+    },
+
+    ".value": {
+      marginTop: 0,
+      fontFamily: theme.fontFamily2,
+      fontSize: theme.fontSizeNormal
+    },
+
+    ".slider-value": {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "flex-start",
+      outline: "none !important",
+      width: "100%",
+      marginBottom: 0,
+      minHeight: "18px",
+      marginTop: `-${getSpacingPx(SPACING.micro)}` // was -1px
+    },
+
+    ".value-container": {
+      position: "relative",
+      display: "flex",
+      alignItems: "center",
+      width: "100%",
+      minWidth: "30px",
+      minHeight: "20px" // Ensure stable height
+    },
+
+    ".slider-value .property-label": {
+      width: "100%",
+      height: "auto",
+      margin: 0,
+      padding: 0
+    },
+
+    ".slider-value .value": {
+      display: "flex",
+      alignItems: "center",
+      color: theme.vars.palette.grey[100],
+      fontFamily: theme.fontFamily2,
+      fontSize: theme.fontSizeSmall,
+      lineHeight: "20px",
+      height: "20px",
+      textAlign: "left",
+      flexShrink: 0,
+      minWidth: "10px",
+      letterSpacing: "normal",
+      fontWeight: 400,
+      padding: 0,
+      marginTop: 0,
+      userSelect: "none",
+      WebkitUserSelect: "none",
+
+      "&::selection": {
+        backgroundColor: "transparent"
+      }
+    },
+
+    ".number-stepper": {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: getSpacingPx(SPACING.micro),
+      marginLeft: "auto",
+      opacity: 0,
+      pointerEvents: "none",
+      transition: theme.transitions.create("opacity", {
+        duration: theme.transitions.duration.shorter
+      })
+    },
+
+    "&:hover .number-stepper": {
+      opacity: 1,
+      pointerEvents: "auto"
+    },
+
+    ".step-button": {
+      width: "16px",
+      height: "16px",
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      backgroundColor: "transparent",
+      border: `1px solid ${theme.vars.palette.grey[600]}`,
+      borderRadius: BORDER_RADIUS.sm,
+      color: theme.vars.palette.grey[100],
+      cursor: "pointer",
+      padding: 0,
+      fontSize: "var(--fontSizeSmaller)",
+      lineHeight: 1,
+      userSelect: "none",
+      WebkitUserSelect: "none",
+
+      "&::selection": {
+        backgroundColor: "transparent"
+      },
+
+      "&:hover": {
+        borderColor: theme.vars.palette.primary.main,
+        color: theme.vars.palette.primary.main
+      }
+    },
+
+    // Changed state: value differs from default
+    "&.changed .slider-value .value": {
+      color: theme.vars.palette.primary.main
+    },
+
+    ".edit-value": {
+      display: "flex",
+      alignItems: "center",
+      outline: "none",
+      color: theme.vars.palette.grey[100] + " !important",
+      backgroundColor: "transparent",
+      border: "none",
+      borderRadius: 0,
+      fontFamily: theme.fontFamily2,
+      fontSize: theme.fontSizeSmall,
+      lineHeight: "20px !important",
+      height: "20px !important",
+      marginLeft: "0 !important",
+      marginTop: "0 !important",
+      padding: "0 !important",
+      textAlign: "left",
+      maxWidth: "100px",
+      zIndex: Z_INDEX.dropdown,
+      letterSpacing: "normal",
+      fontWeight: 400,
+      appearance: "none",
+      boxShadow: "none"
+    },
+
+    ".editable-input-container": {
+      display: "contents"
+    },
+
+    "&:not(.focused) .edit-value": {
+      userSelect: "none",
+      WebkitUserSelect: "none"
+    },
+
+    "&:not(.focused) .edit-value::selection": {
+      backgroundColor: "transparent"
+    },
+
+    ".edit-value input::selection": {
+      backgroundColor: "var(--c-hl1)"
+    },
+
+    ".range-container-wrapper": {
+      display: "block",
+      width: "100%",
+      marginTop: 0,
+      height: "4px",
+      opacity: 0,
+      transition: MOTION.opacity
+    },
+
+    "&:hover .range-container-wrapper": {
+      opacity: 1
+    },
+
+    ".range-container": {
+      transition: `opacity ${MOTION.normal}, background-color ${MOTION.slow}, height ${MOTION.fast}`,
+      backgroundColor: theme.vars.palette.grey[600],
+      display: "block",
+      width: "100%",
+      height: "4px",
+      marginTop: 0,
+      borderRadius: BORDER_RADIUS.xs,
+      fontSize: "0.5em",
+      minWidth: "1px"
+    },
+
+    ".range-indicator": {
+      transition: `background-color ${MOTION.slow}, height ${MOTION.normal}`,
+      opacity: 1,
+      backgroundColor: theme.vars.palette.grey[500],
+      height: "100%",
+      borderRadius: BORDER_RADIUS.xs,
+
+      "&:hover": {
+        backgroundColor: theme.vars.palette.primary.main
+      }
+    },
+
+    ".range-container.dragging .range-indicator": {
+      backgroundColor: theme.vars.palette.primary.main,
+      height: "100%"
+    },
+
+    // Always show slider when dragging
+    "&:has(.range-container.dragging) .range-container-wrapper": {
+      opacity: 1
+    }
+  });

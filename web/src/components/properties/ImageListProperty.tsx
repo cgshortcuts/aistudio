@@ -1,0 +1,572 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { memo, useCallback, useState, useRef, useMemo, ChangeEvent } from "react";
+import { PropertyProps } from "../node/PropertyInput";
+import PropertyLabel from "../node/PropertyLabel";
+import { Asset } from "../../stores/ApiTypes";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { Tooltip, CloseButton, MOTION, SPACING, BORDER_RADIUS, Z_INDEX, getSpacingPx } from "../ui_primitives";
+import isEqual from "../../utils/isEqual";
+import { useAssetUpload } from "../../serverState/useAssetUpload";
+import ImageDimensions from "../node/ImageDimensions";
+import { isElectron } from "../../utils/browser";
+import {
+  deserializeDragData,
+  hasExternalFiles,
+  resolveAssetsMultiple
+} from "../../lib/dragdrop";
+import { useAssetGridStore } from "../../stores/AssetGridStore";
+import { useUpstreamValue } from "../../hooks/nodes/useNodeIO";
+import { resolveUri } from "../../utils/imageUtils";
+
+interface ImageItem {
+  uri: string;
+  type: string;
+}
+
+const styles = (theme: Theme) =>
+  css({
+    ".image-list-property": {
+      width: "100%",
+      marginBottom: getSpacingPx(SPACING.md)
+    },
+    ".property-label": {
+      marginBottom: theme.spacing(SPACING.sm)
+    },
+    ".image-grid": {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fill, minmax(80px, 1fr))",
+      gap: getSpacingPx(SPACING.md),
+      marginTop: getSpacingPx(SPACING.md)
+    },
+    ".image-item": {
+      position: "relative",
+      width: "100%",
+      paddingTop: "100%", // 1:1 aspect ratio
+      backgroundColor: theme.vars.palette.c_scrim_soft,
+      borderRadius: BORDER_RADIUS.md,
+      overflow: "hidden",
+      border: `1px solid ${theme.vars.palette.grey[700]}`,
+      transition: MOTION.all,
+      "&:hover": {
+        borderColor: theme.vars.palette.grey[500],
+        ".remove-button": {
+          opacity: 1
+        },
+        ".image-dimensions": {
+          opacity: 1
+        }
+      }
+    },
+    ".image-content": {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden"
+    },
+    ".image-content img": {
+      width: "100%",
+      height: "100%",
+      objectFit: "cover",
+      cursor: "pointer"
+    },
+    ".remove-button": {
+      position: "absolute",
+      top: "2px",
+      right: "2px",
+      opacity: 0,
+      transition: `opacity ${MOTION.normal}`,
+      backgroundColor: theme.vars.palette.c_scrim,
+      color: theme.vars.palette.grey[100],
+      padding: getSpacingPx(SPACING.micro),
+      width: "20px",
+      height: "20px",
+      zIndex: Z_INDEX.raised,
+      "&:hover": {
+        backgroundColor: theme.vars.palette.error.main,
+        color: theme.vars.palette.common.white
+      }
+    },
+    ".remove-button .MuiSvgIcon-root": {
+      fontSize: "var(--fontSizeNormal)"
+    },
+    ".dropzone": {
+      position: "relative",
+      minHeight: "80px",
+      width: "100%",
+      border: "0",
+      maxWidth: "none",
+      textAlign: "center",
+      transition: MOTION.all,
+      outline: `1px dashed ${theme.vars.palette.grey[600]}`,
+      margin: `${theme.spacing(SPACING.sm)} 0`,
+      backgroundColor: theme.vars.palette.c_scrim_soft,
+      borderRadius: BORDER_RADIUS.md,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      cursor: "pointer",
+      "&:hover": {
+        outline: `1px dashed ${theme.vars.palette.grey[400]}`,
+        backgroundColor: theme.vars.palette.c_scrim_soft
+      },
+      "&.drag-over": {
+        backgroundColor: theme.vars.palette.grey[600],
+        outline: `2px dashed ${theme.vars.palette.grey[100]}`,
+        outlineOffset: "-2px"
+      }
+    },
+    ".dropzone p": {
+      textAlign: "center",
+      fontFamily: theme.fontFamily2,
+      textTransform: "uppercase",
+      letterSpacing: "1px",
+      fontSize: "var(--fontSizeSmaller)",
+      color: theme.vars.palette.grey[500],
+      margin: "1em",
+      lineHeight: "1.1em"
+    },
+    ".image-dimensions": {
+      opacity: 0,
+      transition: `opacity ${MOTION.normal}`
+    }
+  });
+
+// Helper to flatten potentially nested arrays of items (handles constants + lists)
+const flattenImageItems = (items: unknown): ImageItem[] => {
+  if (!items) {
+    return [];
+  }
+  if (!Array.isArray(items)) {
+    if (typeof items === "object" && items !== null && "uri" in items) {
+      return [items as ImageItem];
+    }
+    return [];
+  }
+
+  const result: ImageItem[] = [];
+  for (const item of items) {
+    if (Array.isArray(item)) {
+      result.push(...flattenImageItems(item));
+    } else if (typeof item === "object" && item !== null && "uri" in item) {
+      result.push(item as ImageItem);
+    }
+  }
+  return result;
+};
+
+const ImageListProperty = (props: PropertyProps) => {
+  const theme = useTheme();
+  const cssStyles = useMemo(() => styles(theme), [theme]);
+  const id = `image-list-${props.property.name}-${props.propertyIndex}`;
+  const { uploadAsset } = useAssetUpload();
+
+  const filteredAssets = useAssetGridStore((state) => state.filteredAssets);
+  const globalSearchResults = useAssetGridStore((state) => state.globalSearchResults);
+  const selectedAssets = useAssetGridStore((state) => state.selectedAssets);
+
+  // Resolve upstream value for connected handle preview
+  const upstreamValue = useUpstreamValue(
+    props.workflowId ?? "",
+    props.nodeId,
+    props.property.name
+  );
+  const upstreamImages: ImageItem[] = useMemo(
+    () => flattenImageItems(upstreamValue),
+    [upstreamValue]
+  );
+
+  // Convert value to array of ImageItem, flattening nested arrays
+  const images: ImageItem[] = useMemo(
+    () => flattenImageItems(props.value),
+    [props.value]
+  );
+
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [imageDimensions, setImageDimensions] = useState<Record<string, { width: number; height: number }>>({});
+  const imageRefs = useRef<Record<string, HTMLImageElement>>({});
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAddImages = useCallback(
+    (newImages: ImageItem[]) => {
+      const updatedImages = [...images, ...newImages];
+      props.onChange(updatedImages);
+    },
+    [images, props]
+  );
+
+  const handleRemoveImage = useCallback(
+    (index: number) => {
+      const updatedImages = images.filter((_, i) => i !== index);
+      // Clean up dimensions and refs for removed image
+      const removedImageUri = images[index]?.uri;
+      if (removedImageUri) {
+        setImageDimensions(prev => {
+          const next = { ...prev };
+          delete next[removedImageUri];
+          return next;
+        });
+        delete imageRefs.current[removedImageUri];
+      }
+      props.onChange(updatedImages);
+    },
+    [images, props]
+  );
+
+  const removeHandlers = useMemo(() => {
+    const handlers: Record<number, () => void> = {};
+    for (let i = 0; i < images.length; i++) {
+      handlers[i] = () => handleRemoveImage(i);
+    }
+    return handlers;
+  }, [images, handleRemoveImage]);
+
+  const handleImageLoad = useCallback((uri: string) => {
+    const img = imageRefs.current[uri];
+    if (img) {
+      setImageDimensions(prev => ({
+        ...prev,
+        [uri]: {
+          width: img.naturalWidth,
+          height: img.naturalHeight
+        }
+      }));
+    }
+  }, []);
+
+  const loadHandlers = useMemo(() => {
+    const handlers: Record<string, () => void> = {};
+    for (const image of images) {
+      handlers[image.uri] = () => handleImageLoad(image.uri);
+    }
+    return handlers;
+  }, [images, handleImageLoad]);
+
+  // Handle file drops (both internal nodetool assets and external files)
+  const onDrop = useCallback(
+    async (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsDragOver(false);
+
+      // First, try to handle internal nodetool asset drops
+      const dragData = deserializeDragData(event.dataTransfer);
+      if (dragData) {
+        const droppedImages: ImageItem[] = [];
+
+        // Handle multiple assets
+        if (dragData.type === "assets-multiple") {
+          const selectedIds = dragData.payload as string[];
+          const uniqueAssets = resolveAssetsMultiple(
+            selectedIds,
+            dragData.metadata?.assets,
+            [...filteredAssets, ...globalSearchResults, ...(selectedAssets || [])]
+          );
+
+          uniqueAssets.forEach(asset => {
+            if (asset.get_url && asset.content_type?.startsWith("image/")) {
+              droppedImages.push({ uri: asset.get_url, type: "image" });
+            }
+          });
+        }
+
+        // Handle single asset
+        if (droppedImages.length === 0 && dragData.type === "asset") {
+          const asset = dragData.payload as Asset;
+          if (asset.get_url && asset.content_type?.startsWith("image/")) {
+            droppedImages.push({ uri: asset.get_url, type: "image" });
+          }
+        }
+
+        if (droppedImages.length > 0) {
+          handleAddImages(droppedImages);
+          return;
+        }
+      }
+
+      // Fall back to handling external file drops
+      if (!hasExternalFiles(event.dataTransfer)) {
+        return;
+      }
+
+      const files = Array.from(event.dataTransfer.files).filter((file) =>
+        file.type.startsWith("image/")
+      );
+
+      if (files.length === 0) {
+        return;
+      }
+
+      // Upload all files and collect their assets
+      const uploadPromises = files.map(
+        (file) =>
+          new Promise<ImageItem>((resolve, reject) => {
+            uploadAsset({
+              file,
+              onCompleted: (asset: Asset) => {
+                // Validate asset URL before adding
+                const uri = asset.get_url;
+                if (!uri) {
+                  reject(new Error("Asset URL is missing"));
+                  return;
+                }
+                resolve({
+                  uri,
+                  type: "image"
+                });
+              },
+              onFailed: (error: string) => {
+                reject(new Error(error));
+              }
+            });
+          })
+      );
+
+      try {
+        const newImages = await Promise.all(uploadPromises);
+        handleAddImages(newImages);
+      } catch (error) {
+        console.error("Failed to upload images:", error);
+      }
+    },
+    [uploadAsset, handleAddImages, filteredAssets, globalSearchResults, selectedAssets]
+  );
+
+  const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setIsDragOver(false);
+  }, []);
+
+  // Native file picker for Electron
+  const handleNativeFilePicker = useCallback(async () => {
+    if (!window.api?.dialog?.openFile) {
+      return;
+    }
+
+    try {
+      const result = await window.api.dialog.openFile({
+        title: "Select images",
+        filters: [
+          { name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "bmp", "webp", "svg"] }
+        ],
+        multiSelections: true
+      });
+
+      if (!result.canceled && result.filePaths.length > 0) {
+        const uploadPromises = result.filePaths.map(async (filePath: string) => {
+          const result = await window.api.clipboard?.readFileBuffer(filePath);
+          if (!result) {
+            throw new Error("Failed to read file");
+          }
+
+          const pathSegments = filePath.split(/[\\/]/);
+          const fileName = pathSegments[pathSegments.length - 1] || "image.png";
+
+          const file = new File([result.buffer as BlobPart], fileName, { type: result.mimeType });
+
+          return new Promise<ImageItem>((resolve, reject) => {
+            uploadAsset({
+              file,
+              onCompleted: (asset: Asset) => {
+                const uri = asset.get_url;
+                if (!uri) {
+                  reject(new Error("Asset URL is missing"));
+                  return;
+                }
+                resolve({ uri, type: "image" });
+              },
+              onFailed: (error: string) => {
+                reject(new Error(error));
+              }
+            });
+          });
+        });
+
+        const newImages = await Promise.all(uploadPromises);
+        handleAddImages(newImages);
+      }
+    } catch (error) {
+      console.error("Error opening file picker:", error);
+    }
+  }, [uploadAsset, handleAddImages]);
+
+  // Handle files from browser file input
+  const handleBrowserFilePicker = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  // Handle file input change (browser fallback)
+  const handleFileInputChange = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []).filter((file) =>
+      file.type.startsWith("image/")
+    );
+    if (files.length === 0) {
+      return;
+    }
+
+    const uploadPromises = files.map(
+      (file) =>
+        new Promise<ImageItem>((resolve, reject) => {
+          uploadAsset({
+            file,
+            onCompleted: (asset: Asset) => {
+              const uri = asset.get_url;
+              if (!uri) {
+                reject(new Error("Asset URL is missing"));
+                return;
+              }
+              resolve({ uri, type: "image" });
+            },
+            onFailed: (error: string) => {
+              reject(new Error(error));
+            }
+          });
+        })
+    );
+
+    try {
+      const newImages = await Promise.all(uploadPromises);
+      handleAddImages(newImages);
+    } catch (error) {
+      console.error("Failed to upload images:", error);
+    }
+
+    // Reset input so same file can be selected again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, [uploadAsset, handleAddImages]);
+
+  // Handle dropzone click - use native dialog in Electron, file input in browser
+  const handleDropzoneClick = useCallback(() => {
+    if (isElectron && window.api?.dialog?.openFile) {
+      handleNativeFilePicker();
+    } else {
+      handleBrowserFilePicker();
+    }
+  }, [handleNativeFilePicker, handleBrowserFilePicker]);
+
+  if (props.isConnected) {
+    return (
+      <div className="image-list-property" css={cssStyles}>
+        <PropertyLabel
+          name={props.property.name}
+          description={props.property.description}
+          id={id}
+        />
+        {upstreamImages.length > 0 ? (
+          <div className="image-grid">
+            {upstreamImages.map((image, index) => (
+              <div key={image.uri} className="image-item">
+                <div className="image-content">
+                  <img
+                    src={resolveUri(image.uri)}
+                    alt={`Item ${index + 1}`}
+                    draggable={false}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div
+            css={css({
+              color: theme.vars.palette.text.disabled,
+              fontSize: "var(--fontSizeSmall)",
+              textAlign: "center",
+              padding: `${getSpacingPx(SPACING.xl)} ${getSpacingPx(SPACING.md)}`,
+              outline: `1px dashed ${theme.vars.palette.c_overlay_strong}`,
+              borderRadius: BORDER_RADIUS.md,
+              margin: `${theme.spacing(SPACING.sm)} 0`
+            })}
+          >
+            Awaiting upstream
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="image-list-property" css={cssStyles}>
+      {/* Hidden file input for browser fallback */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        hidden
+        multiple
+        accept="image/*,.jpg,.jpeg,.png,.gif,.bmp,.webp,.svg"
+        onChange={handleFileInputChange}
+      />
+
+      <PropertyLabel
+        name={props.property.name}
+        description={props.property.description}
+        id={id}
+      />
+
+      {/* Image Grid */}
+      {images.length > 0 && (
+        <div className="image-grid">
+          {images.map((image, index) => (
+            <div key={image.uri} className="image-item">
+              <div className="image-content">
+                <img
+                  ref={(el) => {
+                    if (el) {
+                      imageRefs.current[image.uri] = el;
+                    }
+                  }}
+                  src={resolveUri(image.uri)}
+                  alt={`Item ${index + 1}`}
+                  draggable={false}
+                  onLoad={loadHandlers[image.uri]}
+                />
+                {imageDimensions[image.uri] && (
+                  <ImageDimensions
+                    width={imageDimensions[image.uri].width}
+                    height={imageDimensions[image.uri].height}
+                  />
+                )}
+              </div>
+              <CloseButton
+                className="remove-button"
+                onClick={removeHandlers[index]}
+                buttonSize="small"
+                tooltip="Remove image"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Dropzone */}
+      <Tooltip title="Click to select images or drag and drop">
+        <div
+          role="button"
+          tabIndex={0}
+          className={`dropzone ${isDragOver ? "drag-over" : ""}`}
+          onClick={handleDropzoneClick}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleDropzoneClick(); } }}
+          onDragOver={onDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={onDrop}
+        >
+          <p>Click or drop images here</p>
+        </div>
+      </Tooltip>
+    </div>
+  );
+};
+
+export default memo(ImageListProperty, isEqual);

@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="
+      default-src 'self';
+      script-src 'self' 'unsafe-inline';
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+      font-src 'self' https://fonts.gstatic.com;
+      frame-src 'self' http://127.0.0.1:*;
+      img-src 'self' data: blob: https:;
+      media-src 'self' blob: mediadevices: *;
+      connect-src 'self' http://127.0.0.1:7777 http://localhost:8000 http://127.0.0.1:8000 ws://localhost:8000 ws://127.0.0.1:8000 mediadevices: * blob: data:;
+      child-src 'self' http://127.0.0.1:7777;
+    "
+    />
+    <meta
+      http-equiv="Permissions-Policy"
+      content="
+      microphone=*,
+      camera=*,
+      display-capture=*,
+      fullscreen=*,
+      midi=*,
+    "
+    />
+    <!-- === CUSTOM FORK START: AiStudio Branding === -->
+    <title>AiStudio</title>
+    <!-- === CUSTOM FORK END === -->
+    <link rel="stylesheet" href="src/index.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="src/main.tsx"></script>
+  </body>
+</html>

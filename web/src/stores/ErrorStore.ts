@@ -1,0 +1,181 @@
+import { create } from "zustand";
+import { nodeKey, type NodeKey } from "./nodeKey";
+
+interface ErrorObject {
+  message?: string;
+  [key: string]: unknown;
+}
+
+type NodeError = Error | string | null | ErrorObject;
+
+type ErrorStore = {
+  errors: Record<NodeKey, NodeError>;
+  clearErrors: (workflowId: string, nodeIds?: Set<string>) => void;
+  clearNodeErrors: (workflowId: string, nodeId: string) => void;
+  setError: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    error: NodeError
+  ) => void;
+  getError: (workflowId: string, jobId: string, nodeId: string) => NodeError;
+};
+
+export const normalizeNodeError = (
+  error: NodeError | undefined
+): NodeError | undefined => {
+  if (error === null || error === undefined) {
+    return undefined;
+  }
+
+  if (typeof error === "string") {
+    const trimmed = error.trim();
+    if (
+      trimmed === "" ||
+      trimmed.toLowerCase() === "null" ||
+      trimmed.toLowerCase() === "undefined"
+    ) {
+      return undefined;
+    }
+    return trimmed;
+  }
+
+  if (error instanceof Error) {
+    return error.message.trim() === "" ? undefined : error;
+  }
+
+  return error;
+};
+
+export const hasNodeError = (error: NodeError | undefined): boolean =>
+  normalizeNodeError(error) !== undefined;
+
+export const nodeErrorToDisplayString = (
+  error: NodeError | undefined
+): string => {
+  const normalized = normalizeNodeError(error);
+  if (normalized === undefined) {
+    return "";
+  }
+
+  if (typeof normalized === "string") {
+    return normalized;
+  }
+
+  if (normalized instanceof Error) {
+    return normalized.message;
+  }
+
+  if (
+    normalized &&
+    typeof normalized === "object" &&
+    "message" in normalized
+  ) {
+    const message = normalized.message;
+    if (message != null && String(message).trim() !== "") {
+      return String(message);
+    }
+    // A nullish/blank `message` carries no display text — stringifying it yields
+    // the literal "null"/"undefined", which reads as a spurious error. If the
+    // object holds nothing else, it isn't a displayable error at all.
+    const otherKeys = Object.keys(normalized).filter((k) => k !== "message");
+    if (otherKeys.length === 0) {
+      return "";
+    }
+  }
+
+  const json = JSON.stringify(normalized);
+  // `{}` and friends serialize to noise, not an error the user can act on.
+  return json === undefined || json === "{}" || json === "null" ? "" : json;
+};
+
+const useErrorStore = create<ErrorStore>((set, get) => ({
+  errors: {},
+  /**
+   * Clear the errors for a workflow. If nodeIds is provided, only clears
+   * errors for those specific nodes.
+   */
+  clearErrors: (workflowId: string, nodeIds?: Set<string>) => {
+    if (nodeIds) {
+      const prefix = `${workflowId}:`;
+      set((state) => {
+        // Keys are `${wf}:${job}:${node}`; the node is the final segment, so
+        // match on the wf prefix AND the `:${node}` suffix to clear that node
+        // across all of the workflow's jobs.
+        const newErrors = { ...state.errors };
+        for (const key in newErrors) {
+          if (key.startsWith(prefix)) {
+            const lastColonIndex = key.lastIndexOf(':');
+            if (lastColonIndex !== -1) {
+              const id = key.substring(lastColonIndex + 1);
+              if (nodeIds.has(id)) {
+                delete newErrors[key as NodeKey];
+              }
+            }
+          }
+        }
+        return { errors: newErrors };
+      });
+    } else {
+      set((state) => {
+        // Match on the colon boundary to avoid clearing entries for workflows
+        // whose IDs happen to share a prefix.
+        const prefix = `${workflowId}:`;
+        const newErrors: Record<NodeKey, NodeError> = {};
+        for (const key in state.errors) {
+          if (!key.startsWith(prefix)) {
+            newErrors[key as NodeKey] = state.errors[key as NodeKey];
+          }
+        }
+        return { errors: newErrors };
+      });
+    }
+  },
+  /**
+   * Clear the errors for a specific node across all of the workflow's jobs.
+   */
+  clearNodeErrors: (workflowId: string, nodeId: string) => {
+    const prefix = `${workflowId}:`;
+    const suffix = `:${nodeId}`;
+    set((state) => {
+      const newErrors = { ...state.errors };
+      let changed = false;
+      for (const key in newErrors) {
+        if (key.startsWith(prefix) && key.endsWith(suffix)) {
+          delete newErrors[key as NodeKey];
+          changed = true;
+        }
+      }
+      return changed ? { errors: newErrors } : state;
+    });
+  },
+  /** Set the error for a node within a specific job. */
+  setError: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    error: NodeError
+  ) => {
+    const key = nodeKey(workflowId, jobId, nodeId);
+    const normalized = normalizeNodeError(error);
+    set((state) => {
+      if (normalized === undefined) {
+        const { [key]: removed, ...remainingErrors } = state.errors;
+        return { errors: remainingErrors };
+      }
+
+      return {
+        errors: { ...state.errors, [key]: normalized }
+      };
+    });
+  },
+
+  /** Get the error for a node within a specific job. */
+  getError: (workflowId: string, jobId: string, nodeId: string) => {
+    const errors = get().errors;
+    const key = nodeKey(workflowId, jobId, nodeId);
+    return errors[key];
+  }
+}));
+
+export default useErrorStore;

@@ -1,0 +1,506 @@
+/**
+ * UI Primitives
+ *
+ * Re-exports all UI primitives for easy importing.
+ * These primitives follow semantic design principles and are theme-driven.
+ */
+
+// Export slider components
+export { NodeSlider } from "./NodeSlider";
+export type { NodeSliderProps } from "./NodeSlider";
+
+export { Slider } from "./Slider";
+export type { SliderProps } from "./Slider";
+
+// Export dialog primitives
+export { Dialog } from "./Dialog";
+export type { DialogProps } from "./Dialog";
+
+export { DialogActionButtons } from "./DialogActionButtons";
+export type { DialogActionButtonsProps } from "./DialogActionButtons";
+
+export { ToolbarIconButton } from "./ToolbarIconButton";
+export type { ToolbarIconButtonProps } from "./ToolbarIconButton";
+
+// Export shortcut hint component
+export { ShortcutHint } from "./ShortcutHint";
+export type { ShortcutHintProps } from "./ShortcutHint";
+
+export { NavButton } from "./NavButton";
+export type { NavButtonProps } from "./NavButton";
+
+export { CreateFab } from "./CreateFab";
+export type { CreateFabProps } from "./CreateFab";
+
+export { PlaybackButton } from "./PlaybackButton";
+export type { PlaybackButtonProps, PlaybackState, PlaybackAction } from "./PlaybackButton";
+
+export { RunWorkflowButton } from "./RunWorkflowButton";
+export type { RunWorkflowButtonProps } from "./RunWorkflowButton";
+
+export { ExpandCollapseButton } from "./ExpandCollapseButton";
+export type { ExpandCollapseButtonProps } from "./ExpandCollapseButton";
+
+export { ViewModeToggle } from "./ViewModeToggle";
+export type { ViewModeToggleProps, ViewModeOption } from "./ViewModeToggle";
+
+export { RefreshButton } from "./RefreshButton";
+export type { RefreshButtonProps } from "./RefreshButton";
+
+export { SelectionControls } from "./SelectionControls";
+export type { SelectionControlsProps } from "./SelectionControls";
+
+// New action buttons
+export { CopyButton } from "./CopyButton";
+export type { CopyButtonProps } from "./CopyButton";
+
+export { CloseButton } from "./CloseButton";
+export type { CloseButtonProps } from "./CloseButton";
+
+export { DeleteButton } from "./DeleteButton";
+export type { DeleteButtonProps } from "./DeleteButton";
+
+export { DownloadButton } from "./DownloadButton";
+export type { DownloadButtonProps } from "./DownloadButton";
+
+export { UploadButton } from "./UploadButton";
+export type { UploadButtonProps } from "./UploadButton";
+
+export { EditButton } from "./EditButton";
+export type { EditButtonProps } from "./EditButton";
+
+export { SettingsButton } from "./SettingsButton";
+export type { SettingsButtonProps } from "./SettingsButton";
+
+// Display & feedback primitives
+export { ZoomControls } from "./ZoomControls";
+export type { ZoomControlsProps } from "./ZoomControls";
+
+// Re-export the memoized default (not the raw named export) so barrel
+// consumers keep memoization.
+export { default as FavoriteButton } from "./FavoriteButton";
+export type { FavoriteButtonProps } from "./FavoriteButton";
+
+export { EmptyState } from "./EmptyState";
+export type { EmptyStateProps, EmptyStateVariant } from "./EmptyState";
+
+export { LoadingSpinner } from "./LoadingSpinner";
+export type { LoadingSpinnerProps, LoadingVariant } from "./LoadingSpinner";
+
+export { default as MagicGenerationFill } from "./MagicGenerationFill";
+
+export { ShimmerText } from "./ShimmerText";
+export type { ShimmerTextProps } from "./ShimmerText";
+
+export { ProgressBar } from "./ProgressBar";
+export type { ProgressBarProps } from "./ProgressBar";
+
+export { ExternalLink } from "./ExternalLink";
+export type { ExternalLinkProps } from "./ExternalLink";
+
+export { StatusIndicator } from "./StatusIndicator";
+export type { StatusIndicatorProps, StatusType } from "./StatusIndicator";
+
+export { HighlightText } from "./HighlightText";
+
+export { TagButton } from "./TagButton";
+export type { TagButtonProps } from "./TagButton";
+
+export { TagInput } from "./TagInput";
+export type { TagInputProps, TagValidationResult } from "./TagInput";
+
+export { ThemeToggleButton } from "./ThemeToggleButton";
+export type { ThemeToggleButtonProps } from "./ThemeToggleButton";
+
+export { AutocompleteTagInput } from "./AutocompleteTagInput";
+export type { AutocompleteTagInputProps } from "./AutocompleteTagInput";
+
+// Navigation & Layout primitives
+export { SearchInput } from "./SearchInput";
+export type { SearchInputProps } from "./SearchInput";
+
+export { Breadcrumbs } from "./Breadcrumbs";
+export type { BreadcrumbsProps, BreadcrumbItem } from "./Breadcrumbs";
+
+export { InfoTooltip } from "./InfoTooltip";
+export type { InfoTooltipProps } from "./InfoTooltip";
+
+export { WarningBanner } from "./WarningBanner";
+export type { WarningBannerProps, BannerVariant } from "./WarningBanner";
+
+export { NotificationBadge } from "./NotificationBadge";
+export type { NotificationBadgeProps } from "./NotificationBadge";
+
+export { UndoRedoButtons } from "./UndoRedoButtons";
+export type { UndoRedoButtonsProps } from "./UndoRedoButtons";
+
+export { ConfirmButton } from "./ConfirmButton";
+export type { ConfirmButtonProps, ConfirmIconVariant } from "./ConfirmButton";
+
+export { MenuItemPrimitive } from "./MenuItemPrimitive";
+export type { MenuItemPrimitiveProps } from "./MenuItemPrimitive";
+
+export { HelpButton } from "./HelpButton";
+export type { HelpButtonProps, HelpIconVariant } from "./HelpButton";
+
+export { DocsHelpLink } from "./DocsHelpLink";
+export type { DocsHelpLinkProps } from "./DocsHelpLink";
+
+// New composite/state buttons
+export { StateIconButton } from "./StateIconButton";
+export type { StateIconButtonProps } from "./StateIconButton";
+
+export { LabeledToggle } from "./LabeledToggle";
+export type { LabeledToggleProps } from "./LabeledToggle";
+
+export { CircularActionButton } from "./CircularActionButton";
+export type { CircularActionButtonProps } from "./CircularActionButton";
+
+export { ActionButtonGroup } from "./ActionButtonGroup";
+export type { ActionButtonGroupProps } from "./ActionButtonGroup";
+
+// Re-export editor_ui primitives for convenience
+export {
+  NodeTextField,
+  NodeSwitch,
+  NodeSelect,
+  NodeMenuItem,
+  EditorButton,
+  EditorMenu,
+  EditorMenuItem
+} from "../editor_ui";
+export type {
+  NodeTextFieldProps,
+  NodeSwitchProps,
+  NodeSelectProps,
+  NodeMenuItemProps,
+  EditorButtonProps
+} from "../editor_ui";
+
+// Re-export utilities
+export {
+  editorClassNames,
+  reactFlowClasses,
+  cn,
+  stopPropagationHandlers,
+  textFieldNodragSlotProps,
+  editorUiClasses
+} from "../editor_ui/editorUtils";
+
+// Re-export context
+export {
+  EditorUiProvider,
+  useEditorScope
+} from "../editor_ui/EditorUiContext";
+export type { EditorUiScope } from "../editor_ui/EditorUiContext";
+
+// Layout primitives
+export { Box } from "./Box";
+export type { BoxProps } from "./Box";
+
+export { FlexColumn } from "./FlexColumn";
+export type { FlexColumnProps } from "./FlexColumn";
+
+export { FlexRow } from "./FlexRow";
+export type { FlexRowProps } from "./FlexRow";
+
+export { Stack } from "./Stack";
+export type { StackProps } from "./Stack";
+
+export { Container } from "./Container";
+export type { ContainerProps } from "./Container";
+
+// Surface primitives
+export { Card } from "./Card";
+export type { CardProps } from "./Card";
+
+export { Panel } from "./Panel";
+export type { PanelProps } from "./Panel";
+
+// Typography primitives
+export { Text } from "./Text";
+export type { TextProps } from "./Text";
+
+export { Label } from "./Label";
+export type { LabelProps } from "./Label";
+
+export { Caption } from "./Caption";
+export type { CaptionProps } from "./Caption";
+
+// Spacing utilities
+export {
+  SPACING,
+  SPACING_PX,
+  SPACING_STEPS,
+  GAP,
+  PADDING,
+  MARGIN,
+  getSpacingPx,
+  createPadding,
+  resolveSpacing,
+  snapSpacing
+} from "./spacing";
+export type { SpacingValue } from "./spacing";
+
+// Design tokens
+export {
+  MOTION,
+  Z_INDEX,
+  BORDER_RADIUS,
+  CONTROL,
+  TYPOGRAPHY,
+  FONT_WEIGHT,
+  FONT_SIZE_SANS,
+  FONT_SIZE_MONO,
+  scrollbarStyles,
+  thinScrollbarStyles,
+  reducedMotion
+} from "./tokens";
+
+// Keyboard activation for non-native-button click targets
+export { activateOnKey } from "./keyboardActivation";
+
+// Keyboard shortcuts display
+export { KeyboardShortcutCard } from "./KeyboardShortcutCard";
+export type { KeyboardShortcutCardProps, ShortcutItem } from "./KeyboardShortcutCard";
+
+// New primitives - Phase 2
+
+export { TruncatedText } from "./TruncatedText";
+export type { TruncatedTextProps } from "./TruncatedText";
+
+export { ScrollArea } from "./ScrollArea";
+export type { ScrollAreaProps } from "./ScrollArea";
+
+export { Divider } from "./Divider";
+export type { DividerProps } from "./Divider";
+
+export { Chip } from "./Chip";
+export type { ChipProps } from "./Chip";
+
+export { AlertBanner } from "./AlertBanner";
+export type { AlertBannerProps } from "./AlertBanner";
+
+export { TabGroup, TabPanel } from "./TabGroup";
+export type { TabGroupProps, TabPanelProps, TabItem } from "./TabGroup";
+
+// Form composition
+export { FormField } from "./FormField";
+export type { FormFieldProps } from "./FormField";
+
+export { FormSection } from "./FormSection";
+export type { FormSectionProps } from "./FormSection";
+
+export { FormGrid } from "./FormGrid";
+export type { FormGridProps } from "./FormGrid";
+
+export { SectionHeader } from "./SectionHeader";
+export type { SectionHeaderProps } from "./SectionHeader";
+
+export { ColorSwatch } from "./ColorSwatch";
+export type { ColorSwatchProps } from "./ColorSwatch";
+
+export { Overlay } from "./Overlay";
+export type { OverlayProps } from "./Overlay";
+
+export { ResponsiveImage } from "./ResponsiveImage";
+export type { ResponsiveImageProps } from "./ResponsiveImage";
+
+// Phase 3 - Additional primitives
+
+export { Tooltip } from "./Tooltip";
+export type { TooltipProps } from "./Tooltip";
+
+export { Popover } from "./Popover";
+export type { PopoverProps, PopoverPlacement } from "./Popover";
+
+export { CollapsibleSection } from "./CollapsibleSection";
+export type { CollapsibleSectionProps } from "./CollapsibleSection";
+
+export { Collapse } from "./Collapse";
+export type { CollapseProps } from "./Collapse";
+
+export { ListGroup, ListItemRow } from "./ListGroup";
+export type { ListGroupProps, ListItemRowProps } from "./ListGroup";
+
+export { Toast } from "./Toast";
+export type { ToastProps } from "./Toast";
+
+export { TextLink } from "./TextLink";
+export type { TextLinkProps } from "./TextLink";
+
+export { Skeleton } from "./Skeleton";
+export type { SkeletonProps } from "./Skeleton";
+
+export { DrawerPanel } from "./DrawerPanel";
+export type { DrawerPanelProps } from "./DrawerPanel";
+
+export { MobileBottomSheet } from "./MobileBottomSheet";
+export type { MobileBottomSheetProps } from "./MobileBottomSheet";
+
+// Phase 4 - Additional primitives
+
+export { Checkbox } from "./Checkbox";
+export type { CheckboxProps } from "./Checkbox";
+export { Radio, RadioSet } from "./Radio";
+export type { RadioProps } from "./Radio";
+
+export { ContextMenu } from "./ContextMenu";
+export type { ContextMenuProps } from "./ContextMenu";
+
+export { TextInput } from "./TextInput";
+export type { TextInputProps } from "./TextInput";
+
+export { DataTable } from "./DataTable";
+export type { DataTableProps, DataTableColumn } from "./DataTable";
+
+export { ButtonGroup } from "./ButtonGroup";
+export type { ButtonGroupProps } from "./ButtonGroup";
+
+export { ToggleGroup, ToggleOption } from "./ToggleGroup";
+export type { ToggleGroupProps, ToggleOptionProps } from "./ToggleGroup";
+
+export { Surface } from "./Surface";
+export type { SurfaceProps } from "./Surface";
+
+export { Autocomplete } from "./Autocomplete";
+export type { AutocompleteProps, AutocompleteOption } from "./Autocomplete";
+
+export { LabeledSwitch } from "./LabeledSwitch";
+export type { LabeledSwitchProps } from "./LabeledSwitch";
+
+export { SelectField } from "./SelectField";
+export type { SelectFieldProps, SelectOption } from "./SelectField";
+
+// Accessibility
+export { SkipLinks } from "./SkipLinks";
+
+// Phase 5 - Additional primitives
+
+export { PositionedDialog } from "./PositionedDialog";
+export type { PositionedDialogProps } from "./PositionedDialog";
+
+export { HoverActionGroup } from "./HoverActionGroup";
+export type { HoverActionGroupProps } from "./HoverActionGroup";
+
+export { SelectableListItem } from "./SelectableListItem";
+export type { SelectableListItemProps } from "./SelectableListItem";
+
+export { DropZoneOverlay } from "./DropZoneOverlay";
+export type { DropZoneOverlayProps } from "./DropZoneOverlay";
+
+export { MetadataListRow } from "./MetadataListRow";
+export type { MetadataListRowProps, MetadataItem } from "./MetadataListRow";
+
+// Node-editor redesign (PR 3) — primitives for ContentCardBody,
+// editing-node bodies, and the edge renderer. Consumed by later PRs.
+
+export { CheckerDropzone } from "./CheckerDropzone";
+export type { CheckerDropzoneProps } from "./CheckerDropzone";
+
+export { VideoPlayer } from "./VideoPlayer";
+export type { VideoPlayerProps } from "./VideoPlayer";
+
+export { DynamicInputButton } from "./DynamicInputButton";
+export type { DynamicInputButtonProps } from "./DynamicInputButton";
+
+export { RunModelButton } from "./RunModelButton";
+export type { RunModelButtonProps } from "./RunModelButton";
+
+// Low-level MUI re-exports — structural / control building blocks (lists, dialog
+// sub-parts, form controls, plain menus/selects/switches, tabs, …) that have no
+// richer primitive of their own. Theme-governed pass-throughs so app code imports
+// from the barrel, never from @mui/material. Prefer a semantic primitive when one
+// fits (see ./muiReexports for the policy).
+export {
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemIcon,
+  ListItemText,
+  ListItemAvatar,
+  ListItemSecondaryAction,
+  ListSubheader,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  FormControl,
+  FormGroup,
+  FormHelperText,
+  FormControlLabel,
+  InputLabel,
+  InputAdornment,
+  OutlinedInput,
+  Input,
+  Menu,
+  MenuItem,
+  MenuList,
+  Select,
+  Switch,
+  TextField,
+  IconButton,
+  Button,
+  ButtonBase,
+  Drawer,
+  Fab,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Tabs,
+  Tab,
+  ToggleButton,
+  ToggleButtonGroup,
+  Modal,
+  Fade,
+  Toolbar,
+  LinearProgress,
+  MuiAutocomplete,
+  MuiDialog
+} from "./muiReexports";
+export type {
+  ListProps,
+  ListItemProps,
+  ListItemButtonProps,
+  ListItemIconProps,
+  ListItemTextProps,
+  ListItemAvatarProps,
+  ListSubheaderProps,
+  DialogTitleProps,
+  DialogContentProps,
+  DialogContentTextProps,
+  DialogActionsProps,
+  FormControlProps,
+  FormGroupProps,
+  FormHelperTextProps,
+  FormControlLabelProps,
+  InputLabelProps,
+  InputAdornmentProps,
+  OutlinedInputProps,
+  InputProps,
+  MenuProps,
+  MenuItemProps,
+  MenuListProps,
+  SelectProps,
+  SelectChangeEvent,
+  SwitchProps,
+  TextFieldProps,
+  IconButtonProps,
+  ButtonProps,
+  ButtonBaseProps,
+  DrawerProps,
+  FabProps,
+  AccordionProps,
+  AccordionSummaryProps,
+  AccordionDetailsProps,
+  TabsProps,
+  TabProps,
+  ToggleButtonProps,
+  ToggleButtonGroupProps,
+  ModalProps,
+  FadeProps,
+  ToolbarProps,
+  LinearProgressProps,
+  MuiAutocompleteProps,
+  MuiDialogProps
+} from "./muiReexports";

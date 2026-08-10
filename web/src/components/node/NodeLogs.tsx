@@ -1,0 +1,288 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import {
+  memo,
+  useRef,
+  useEffect,
+  useCallback,
+  useState,
+  useMemo,
+  useId
+} from "react";
+
+import useLogsStore, { nodeLogKey } from "../../stores/LogStore";
+import isEqual from "../../utils/isEqual";
+import {
+  CopyButton,
+  Text,
+  Chip,
+  EditorButton,
+  Dialog,
+  FlexRow,
+  BORDER_RADIUS,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Z_INDEX
+} from "../ui_primitives";
+import ListAltIcon from "@mui/icons-material/ListAlt";
+import LogsTable, { LogRow, Severity } from "../common/LogsTable";
+
+type NodeLogsProps = {
+  id: string;
+  workflowId: string;
+};
+
+type NodeLogsDialogProps = {
+  id: string;
+  workflowId: string;
+  open: boolean;
+  onClose: () => void;
+};
+
+const styles = (theme: Theme) =>
+  css({
+    width: "100%",
+    zIndex: Z_INDEX.overlay,
+    ".logs-button": {
+      width: "100%",
+      justifyContent: "space-between",
+      borderRadius: BORDER_RADIUS.lg,
+      backgroundColor: "transparent",
+      color: theme.vars.palette.grey[200],
+      textTransform: "none",
+      height: "3em",
+      padding: ".6em .8em",
+      marginBottom: "1em",
+      border: `1px solid ${theme.vars.palette.grey[700]}`,
+      "&:hover": { backgroundColor: theme.vars.palette.grey[600] }
+    }
+  });
+
+export const NodeLogsDialog: React.FC<NodeLogsDialogProps> = memo(
+  ({ id, workflowId, open, onClose }) => {
+    const theme = useTheme();
+    const titleId = useId();
+    const logsRef = useRef<HTMLDivElement>(null);
+    // O(1) lookup via pre-keyed map instead of filtering the full logs array.
+    const logs = useLogsStore(
+      (state) => state.logsByNode[nodeLogKey(workflowId, id)]
+    );
+    const [selectedSeverities, setSelectedSeverities] = useState<Severity[]>(
+      []
+    );
+
+    const count = logs?.length || 0;
+
+    // Gated on `open`: while the dialog is closed there's no point walking
+    // the (potentially large) logs array on every appended line. Kept even
+    // though the dialog is now only mounted while open (see NodeHeader),
+    // for robustness against other callers.
+    const logText = useMemo(() => {
+      if (!open) return "";
+      const MAX_LINES = 2000;
+      const logsToCopy = (logs || []).slice(-MAX_LINES);
+      return logsToCopy
+        .map((log) => `${log.timestamp} ${log.severity} ${log.content}`)
+        .join("\n");
+    }, [logs, open]);
+
+    const logRows = useMemo(() => {
+      if (!open) return [] as LogRow[];
+      return (logs || []).map((l) => ({
+        severity: l.severity as LogRow["severity"],
+        timestamp: l.timestamp,
+        content: l.content,
+        workflowName: undefined,
+        data: l.data
+      }));
+    }, [logs, open]);
+
+    useEffect(() => {
+      if (!open) return;
+      if (logsRef.current) {
+        logsRef.current.scrollTop = logsRef.current.scrollHeight;
+      }
+    }, [logs, open]);
+
+    const toggleSeverity = useCallback(
+      (severity: Severity) => () => {
+        setSelectedSeverities((prev) =>
+          prev.includes(severity)
+            ? prev.filter((s) => s !== severity)
+            : [...prev, severity]
+        );
+      },
+      []
+    );
+
+    const toggleInfoSeverity = useCallback(
+      () => toggleSeverity("info"),
+      [toggleSeverity]
+    );
+    const toggleWarningSeverity = useCallback(
+      () => toggleSeverity("warning"),
+      [toggleSeverity]
+    );
+    const toggleErrorSeverity = useCallback(
+      () => toggleSeverity("error"),
+      [toggleSeverity]
+    );
+
+    return (
+      <Dialog
+        open={open}
+        onClose={onClose}
+        aria-labelledby={titleId}
+        fullWidth
+        maxWidth="md"
+        slotProps={{
+          backdrop: {
+            style: {
+              backdropFilter: theme.vars.palette.glass.blur,
+              backgroundColor: theme.vars.palette.glass.backgroundDialog
+            }
+          },
+          paper: {
+            style: {
+              maxWidth: "950px",
+              width: "950px",
+              border: `1px solid ${theme.vars.palette.grey[700]}`,
+              borderRadius: theme.vars.rounded.dialog,
+              background: theme.vars.palette.glass.backgroundDialogContent
+            }
+          }
+        }}
+      >
+        <DialogTitle className="dialog-title" id={titleId}>
+          <FlexRow gap={1} align="center">
+            <Text size="normal" weight={600} component="h6">
+              Node Logs
+            </Text>
+            <Chip size="small" label={`${count}`} />
+            <CopyButton
+              value={logText}
+              tooltip="Copy logs"
+              nodrag={false}
+            />
+          </FlexRow>
+        </DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          <div style={{ padding: 8 }}>
+            <Chip
+              size="small"
+              label={`Info`}
+              variant={
+                selectedSeverities.includes("info") ? "filled" : "outlined"
+              }
+              onClick={toggleInfoSeverity}
+            />
+            <Chip
+              size="small"
+              label={`Warnings`}
+              color="warning"
+              variant={
+                selectedSeverities.includes("warning") ? "filled" : "outlined"
+              }
+              onClick={toggleWarningSeverity}
+            />
+            <Chip
+              size="small"
+              label={`Errors`}
+              color="error"
+              variant={
+                selectedSeverities.includes("error") ? "filled" : "outlined"
+              }
+              onClick={toggleErrorSeverity}
+            />
+            <Chip
+              size="small"
+              label={`Warnings`}
+              color="warning"
+              variant={
+                selectedSeverities.includes("warning") ? "filled" : "outlined"
+              }
+              onClick={toggleWarningSeverity}
+            />
+            <Chip
+              size="small"
+              label={`Errors`}
+              color="error"
+              variant={
+                selectedSeverities.includes("error") ? "filled" : "outlined"
+              }
+              onClick={toggleErrorSeverity}
+            />
+          </div>
+          <div style={{ padding: 8 }} ref={logsRef}>
+            <LogsTable
+              rows={logRows}
+              height={400}
+              severities={selectedSeverities}
+            />
+          </div>
+        </DialogContent>
+        <DialogActions>
+          <EditorButton onClick={onClose}>Close</EditorButton>
+        </DialogActions>
+      </Dialog>
+    );
+  },
+  isEqual
+);
+
+NodeLogsDialog.displayName = "NodeLogsDialog";
+
+const NodeLogsImpl: React.FC<NodeLogsProps> = ({ id, workflowId }) => {
+  const theme = useTheme();
+  const memoizedStyles = useMemo(() => styles(theme), [theme]);
+  // O(1) lookup via pre-keyed map instead of filtering the full logs array.
+  const logs = useLogsStore(
+    (state) => state.logsByNode[nodeLogKey(workflowId, id)]
+  );
+  const [open, setOpen] = useState(false);
+
+  const count = logs?.length || 0;
+
+  const handleOpen = useCallback(() => {
+    setOpen(true);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    setOpen(false);
+  }, []);
+
+  if (count === 0) {
+    return null;
+  }
+
+  return (
+    <div className="node-logs-container" css={memoizedStyles}>
+      <div className="node-logs">
+        <EditorButton
+          className="logs-button"
+          size="small"
+          variant="contained"
+          onClick={handleOpen}
+          startIcon={<ListAltIcon />}
+        >
+          <span>Logs</span>
+          <Chip size="small" label={count} sx={{ ml: 1 }} />
+        </EditorButton>
+      </div>
+
+      <NodeLogsDialog
+        id={id}
+        workflowId={workflowId}
+        open={open}
+        onClose={handleClose}
+      />
+    </div>
+  );
+};
+
+export const NodeLogs = memo(NodeLogsImpl, isEqual);
+NodeLogs.displayName = "NodeLogs";
+export default NodeLogs;

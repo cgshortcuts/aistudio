@@ -1,0 +1,194 @@
+"use client";
+import React from "react";
+import { motion } from "framer-motion";
+import Tilt3D from "./Tilt3D";
+import { Cloud, Server, Terminal, Zap } from "lucide-react";
+
+interface DeploySectionProps {
+  reducedMotion?: boolean;
+}
+
+export default function DeploySection({
+  reducedMotion = false,
+}: DeploySectionProps) {
+  return (
+    <section id="deploy" className="relative py-24 overflow-hidden">
+      {/* Background Glow */}
+      <div className="absolute top-1/2 right-0 -translate-y-1/2 w-[600px] h-[600px] bg-purple-900/20 blur-[120px] rounded-full pointer-events-none" />
+
+      <div className="relative z-10 mx-auto max-w-7xl px-6 lg:px-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-center">
+          {/* Left Column: Text Content */}
+          <motion.div
+            initial={false}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.25 }}
+          >
+            <h2 className="text-3xl md:text-5xl font-bold tracking-tight text-white mb-6">
+              Self host <br />
+              <span className="text-white">
+                on VPS
+              </span>
+            </h2>
+
+            <p className="text-lg text-slate-400 mb-8 leading-relaxed">
+              The same workflow runs on your machine or on a rented GPU, with
+              nothing to rewrite. NodeTool packages it and sends it to the host
+              you pick: RunPod, Google Cloud Run, Fly.io, Railway, or a server
+              of your own.
+            </p>
+
+            <div className="flex flex-col gap-6">
+              <div className="flex items-start gap-4">
+                <div className="p-2 rounded-lg bg-purple-500/10 border border-purple-500/20">
+                  <Terminal className="w-5 h-5 text-purple-400" />
+                </div>
+                <div>
+                  <h3 className="text-white font-semibold">
+                    One command to go live
+                  </h3>
+                  <p className="text-slate-400 text-sm mt-1 leading-relaxed">
+                    Run{" "}
+                    <code className="bg-slate-800 px-1.5 py-0.5 rounded text-purple-300 text-xs font-mono border border-white/5">
+                      nodetool deploy
+                    </code>{" "}
+                    sends your workflow to the cloud.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start gap-4">
+                <div className="p-2 rounded-lg bg-pink-500/10 border border-pink-500/20">
+                  <Zap className="w-5 h-5 text-pink-400" />
+                </div>
+                <div>
+                  <h3 className="text-white font-semibold">Pay only while it runs</h3>
+                  <p className="text-slate-400 text-sm mt-1 leading-relaxed">
+                    On Google Cloud Run or RunPod, the workflow starts when a
+                    request comes in and shuts down when it is done, so you are
+                    billed only for the time it was working.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-10 pt-8 border-t border-white/5">
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">
+                Supported Providers
+              </p>
+              <div className="flex gap-8 grayscale opacity-70 hover:grayscale-0 hover:opacity-100 transition-all duration-300">
+                {/* RunPod */}
+                <a
+                  href="https://www.runpod.io"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 group"
+                >
+                  <Server className="w-5 h-5 text-purple-400 group-hover:scale-110 transition-transform" />
+                  <span className="text-slate-300 font-medium group-hover:text-white transition-colors">
+                    RunPod
+                  </span>
+                </a>
+                {/* GCP */}
+                <a
+                  href="https://cloud.google.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 group"
+                >
+                  <Cloud className="w-5 h-5 text-blue-400 group-hover:scale-110 transition-transform" />
+                  <span className="text-slate-300 font-medium group-hover:text-white transition-colors">
+                    Google Cloud
+                  </span>
+                </a>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Right Column: Visual */}
+          <motion.div
+            initial={false}
+            whileInView={{ opacity: 1, x: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.25, delay: 0.05 }}
+            className="relative hidden lg:block"
+          >
+            <Tilt3D>
+              <div className="relative rounded-2xl border border-white/10 bg-slate-900/50 backdrop-blur-xl p-6 shadow-2xl">
+                {/* Mock Terminal Window */}
+                <div className="flex items-center gap-2 mb-4 border-b border-white/5 pb-4">
+                  <div className="w-3 h-3 rounded-full bg-red-500/20 border border-red-500/50" />
+                  <div className="w-3 h-3 rounded-full bg-yellow-500/20 border border-yellow-500/50" />
+                  <div className="w-3 h-3 rounded-full bg-green-500/20 border border-green-500/50" />
+                  <div className="ml-auto text-xs text-slate-400 font-mono">
+                    deploy.sh
+                  </div>
+                </div>
+
+                <div className="font-mono text-sm space-y-3">
+                  <div className="flex gap-2">
+                    <span className="text-green-400">➜</span>
+                    <span className="text-blue-400">~</span>
+                    <span className="text-slate-300">
+                      nodetool deploy --provider runpod
+                    </span>
+                  </div>
+                  <div className="text-slate-400 pt-2">
+                    [+] Packaging workflow...{" "}
+                    <span className="text-green-400">Done</span>
+                  </div>
+                  <div className="text-slate-400">
+                    [+] Starting GPU machine (RTX 4090)...{" "}
+                    <span className="text-green-400">Done</span>
+                  </div>
+                  <div className="text-slate-400">
+                    [+] Syncing models (2.4GB)...{" "}
+                    <span className="text-green-400">Done</span>
+                  </div>
+                  <div className="text-slate-400 pb-2">
+                    [+] Setting up the web address...{" "}
+                    <span className="text-green-400">Done</span>
+                  </div>
+                  <div className="text-purple-400 pt-2 border-t border-white/5">
+                    🚀 Deployment active: <br />
+                    <span className="underline opacity-80 hover:opacity-100 cursor-pointer">
+                      https://your-endpoint.at.your-domain.com/
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Floating Badge */}
+              <motion.div
+                className="absolute -right-6 -bottom-6 bg-slate-900/90 backdrop-blur-md border border-purple-500/30 p-4 rounded-xl shadow-xl shadow-purple-900/20"
+                animate={{ y: [0, -10, 0] }}
+                transition={{
+                  duration: 4,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="relative">
+                    <div className="w-3 h-3 bg-green-500 rounded-full" />
+                    <div className="absolute inset-0 w-3 h-3 bg-green-500 rounded-full animate-ping opacity-75" />
+                  </div>
+                  <div>
+                    <div className="text-xs text-slate-400">Status</div>
+                    <div className="text-sm font-semibold text-white">
+                      Healthy (24ms)
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </Tilt3D>
+          </motion.div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+
+

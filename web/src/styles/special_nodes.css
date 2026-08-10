@@ -1,0 +1,392 @@
+/* SPECIAL NODE STYLES */
+
+/**
+ * Styles for special node types in the node editor
+ */
+
+/* Loop + Group node */
+.react-flow__node-nodetool\.group\.Loop,
+.react-flow__node-nodetool\.workflows\.base_node\.Group {
+  z-index: -1 !important;
+  min-width: 100px;
+  min-height: 100px;
+  background-color: transparent;
+  box-shadow: none;
+  pointer-events: none !important; /* allow selection rectangle inside node*/
+}
+.react-flow__node-nodetool\.group\.Loop .node-header,
+.react-flow__node-nodetool\.group\.Loop .node-resizer,
+.react-flow__node-nodetool\.group\.Loop .tools,
+.react-flow__node-nodetool\.workflows\.base_node\.Group .node-header,
+.react-flow__node-nodetool\.workflows\.base_node\.Group .node-resizer,
+.react-flow__node-nodetool\.workflows\.base_node\.Group .tools {
+  pointer-events: all;
+}
+
+/* Comment node */
+.react-flow__node-nodetool\.workflows\.base_node\.Comment {
+  z-index: -1 !important;
+  width: auto;
+  min-width: 100px;
+  max-width: 5000px;
+  min-height: 50px;
+  max-height: 5000px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--rounded-lg);
+  border: none;
+  background-color: var(--palette-grey-700);
+  box-shadow: none;
+  overflow: visible;
+}
+
+.react-flow.zoomed-out
+  .react-flow__node-nodetool\.workflows\.base_node\.Comment,
+.react-flow.zoomed-out .react-flow__node-nodetool\.group\.Loop,
+.react-flow.zoomed-out .react-flow__node-nodetool\.workflows\.base_node\.Group {
+  background-color: var(--palette-grey-900);
+}
+.react-flow.zoomed-out
+  .react-flow__node-nodetool\.workflows\.base_node\.Group
+  .node-header
+  input {
+  font-size: 3em;
+  height: 1em;
+}
+
+.react-flow__node-nodetool\.workflows\.base_node\.Comment.selected {
+  border: 0;
+  outline: 1px solid var(--palette-grey-300) !important;
+  box-shadow: none !important;
+}
+
+.comment-node label {
+  display: none;
+}
+
+.react-flow__node-comment .node-header {
+  position: absolute;
+  top: 0;
+  left: 0px;
+  height: 20px;
+  min-height: unset;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background-color: transparent !important;
+}
+
+.comment-node textarea {
+  border: 0;
+  outline: none;
+  background-color: transparent;
+}
+
+/* Input & Output node */
+.react-flow .input-node .node-header,
+.react-flow .output-node .node-header {
+  margin: 0;
+}
+/* Preview node */
+.react-flow__nodes .react-flow__node-nodetool\.workflows\.base_node\.Preview {
+  border: 1px solid var(--palette-grey-700) !important;
+}
+
+/* Preview target handle — global .handle-left uses top:5px; align with title row expanded + strip when collapsed */
+.react-flow__node-nodetool\.workflows\.base_node\.Preview:not(.collapsed)
+  .preview-node
+  .react-flow__handle-left {
+  top: var(--preview-target-handle-top-expanded) !important;
+}
+
+.react-flow__node-nodetool\.workflows\.base_node\.Preview:not(.collapsed)
+  .preview-node
+  .react-flow__handle-left:hover {
+  transform: translate(0, -50%) scale(1.75, 1.5) !important;
+}
+
+.react-flow__node-nodetool\.workflows\.base_node\.Preview.collapsed
+  .preview-node
+  .react-flow__handle-left:not(.control-handle) {
+  top: calc(
+    var(--node-collapsed-handle-mid-y) + var(--preview-target-handle-extra-top-collapsed)
+  ) !important;
+}
+
+.react-flow__node-nodetool\.workflows\.base_node\.Preview.collapsed
+  .preview-node
+  .react-flow__handle-left:not(.control-handle):hover {
+  top: calc(
+    var(--node-collapsed-handle-mid-y) + var(--preview-target-handle-extra-top-collapsed)
+  ) !important;
+  transform: translate(0, calc(-50% - var(--node-collapsed-handle-y-nudge)))
+    scale(1.75, 1.5) !important;
+}
+
+/* Constant node */
+.react-flow__node-nodetool\.constant\.Audio .node-property .property-label,
+.react-flow__node-nodetool\.constant\.Image .node-property .property-label,
+.react-flow__node-nodetool\.constant\.Video .node-property .property-label,
+.react-flow__node-nodetool\.constant\.Bool .node-property .property-label {
+  display: none;
+}
+
+/* Constant.String uses a custom node (ConstantStringNode) —
+   keep the input handle flush left. */
+.react-flow__node-nodetool\.constant\.String .input-handle-wrapper {
+  left: -8px !important;
+}
+
+/* Let Constant.Model3D use the full body area */
+.react-flow__node-nodetool\.constant\.Model3D .node-content-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.react-flow__node-nodetool\.constant\.Model3D .node-content-container > div {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.react-flow__node-nodetool\.constant\.Model3D .node-inputs {
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.react-flow__node-nodetool\.constant\.Model3D .node-property.model_3d {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .property-label {
+  display: none;
+}
+
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .dropzone,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .property-input-container,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .model3d-property,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .drop-container,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .dropzone.dropped,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .model-preview,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .model-3d-viewer,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .model-container,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .canvas-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .dropzone,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .dropzone.dropped,
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .model-container {
+  border-radius: 0 !important;
+}
+
+.react-flow__node-nodetool\.constant\.Model3D
+  .node-property.model_3d
+  .handle-popup {
+  left: -8px !important;
+}
+
+/* Let Constant.Image use the full body area — image fills the resizable node. */
+.react-flow__node-nodetool\.constant\.Image .node-content-container,
+.react-flow__node-nodetool\.constant\.Image .node-content-container > div {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.react-flow__node-nodetool\.constant\.Image .node-inputs {
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.react-flow__node-nodetool\.constant\.Image .node-property.image {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.react-flow__node-nodetool\.constant\.Image
+  .node-property.image
+  .property-label {
+  display: none;
+}
+
+.react-flow__node-nodetool\.constant\.Image .node-property.image .image-property,
+.react-flow__node-nodetool\.constant\.Image .node-property.image .drop-container,
+.react-flow__node-nodetool\.constant\.Image .node-property.image .dropzone,
+.react-flow__node-nodetool\.constant\.Image
+  .node-property.image
+  .dropzone.dropped,
+.react-flow__node-nodetool\.constant\.Image
+  .node-property.image
+  .image-preview-surface {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.react-flow__node-nodetool\.constant\.Image .node-property.image .dropzone img {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: none !important;
+  object-fit: contain !important;
+  border-radius: 0 !important;
+}
+
+/* Let Constant.Video use the full body area — video fills the resizable node. */
+.react-flow__node-nodetool\.constant\.Video .node-content-container,
+.react-flow__node-nodetool\.constant\.Video .node-content-container > div {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.react-flow__node-nodetool\.constant\.Video .node-inputs {
+  margin: 0 !important;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.react-flow__node-nodetool\.constant\.Video .node-property.video {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.react-flow__node-nodetool\.constant\.Video
+  .node-property.video
+  .property-label {
+  display: none;
+}
+
+.react-flow__node-nodetool\.constant\.Video .node-property.video .video-property,
+.react-flow__node-nodetool\.constant\.Video .node-property.video .drop-container,
+.react-flow__node-nodetool\.constant\.Video .node-property.video .dropzone,
+.react-flow__node-nodetool\.constant\.Video
+  .node-property.video
+  .dropzone.dropped {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.react-flow__node-nodetool\.constant\.Video
+  .node-property.video
+  .dropzone
+  video {
+  width: 100% !important;
+  height: 100% !important;
+  max-height: none !important;
+  object-fit: contain !important;
+  border-radius: 0 !important;
+  background: var(--palette-c_scrim_strong);
+}
+
+/* Hide filename caption to maximize video area */
+.react-flow__node-nodetool\.constant\.Video
+  .node-property.video
+  .dropzone
+  > p.centered {
+  display: none;
+}
+
+/* Collapsed Loop node - styles moved to collapsed.css */
+
+/* Datatable */
+.node-property.dataframe {
+  padding: 0.5em;
+}
+
+/* Selected node - handled in nodes.css */
+
+.react-flow__node-default .react-flow__handle-left {
+  left: -6px !important;
+}
+
+.react-flow__node-default .node-header {
+  border: 0;
+  background-color: transparent;
+}

@@ -1,0 +1,178 @@
+import { normalizeOutputUpdateValue } from "../outputUpdateValue";
+import type { Chunk, OutputUpdate, WorkflowAttributes } from "../ApiTypes";
+import useResultsStore from "../ResultsStore";
+import {
+  handleUpdate,
+  flushPendingNodeStreams,
+  mergeNodeUpdateProperties
+} from "../workflowUpdates";
+
+const mockRunnerStore = {
+  getState: () => ({
+    job_id: "job-1",
+    state: "running",
+    addNotification: jest.fn(),
+    dequeueNextPendingRun: jest.fn()
+  }),
+  setState: jest.fn(),
+  subscribe: jest.fn()
+};
+
+const mockWorkflow = {
+  id: "workflow-1",
+  name: "Workflow 1"
+} as WorkflowAttributes;
+
+beforeEach(() => {
+  useResultsStore.setState({
+    outputResults: {},
+    progress: {},
+    edges: {},
+    chunks: {},
+    tasks: {},
+    toolCalls: {},
+    planningUpdates: {}
+  });
+  mockRunnerStore.setState.mockClear();
+});
+
+describe("normalizeOutputUpdateValue", () => {
+  it("wraps raw image output values with their media type", () => {
+    const rawValue = { data: [1, 2, 3] };
+    const update: OutputUpdate = {
+      type: "output_update",
+      node_id: "node-1",
+      node_name: "Image Node",
+      output_name: "image",
+      output_type: "image",
+      value: rawValue,
+      metadata: {}
+    };
+
+    expect(normalizeOutputUpdateValue(update)).toEqual({
+      type: "image",
+      data: [1, 2, 3]
+    });
+  });
+
+  it("preserves values that already declare their own type", () => {
+    const typedValue = { type: "image", data: [1, 2, 3] };
+    const update: OutputUpdate = {
+      type: "output_update",
+      node_id: "node-1",
+      node_name: "Image Node",
+      output_name: "image",
+      output_type: "image",
+      value: typedValue,
+      metadata: {}
+    };
+
+    expect(normalizeOutputUpdateValue(update)).toBe(typedValue);
+  });
+
+  it("leaves non-media outputs unchanged", () => {
+    const update: OutputUpdate = {
+      type: "output_update",
+      node_id: "node-2",
+      node_name: "Text Node",
+      output_name: "output",
+      output_type: "string",
+      value: "hello",
+      metadata: {}
+    };
+
+    expect(normalizeOutputUpdateValue(update)).toBe("hello");
+  });
+});
+
+describe("handleUpdate", () => {
+  it("stores workflow chunk updates by node id", () => {
+    const chunk = {
+      type: "chunk",
+      node_id: "node-1",
+      workflow_id: "workflow-1",
+      content_type: "text",
+      content: "hello",
+      // Per-node chunks are keyed by the producing run's job_id.
+      job_id: "job-1"
+    } as unknown as Chunk;
+
+    handleUpdate(
+      mockWorkflow,
+      chunk,
+      mockRunnerStore as never,
+      () => undefined
+    );
+    // Text chunks are coalesced on a timer; settle them before reading.
+    flushPendingNodeStreams();
+
+    expect(
+      useResultsStore.getState().getChunk("workflow-1", "job-1", "node-1")
+    ).toBe("hello");
+  });
+
+  it("ignores workflow chunk updates without node id", () => {
+    const chunk = {
+      type: "chunk",
+      workflow_id: "workflow-1",
+      content_type: "text",
+      content: "done",
+      done: true,
+      job_id: "job-1"
+    } as unknown as Chunk;
+
+    handleUpdate(
+      mockWorkflow,
+      chunk,
+      mockRunnerStore as never,
+      () => undefined
+    );
+
+    expect(
+      useResultsStore.getState().getChunk("workflow-1", "job-1", "node-1")
+    ).toBeUndefined();
+  });
+});
+
+describe("mergeNodeUpdateProperties", () => {
+  it("preserves existing static properties when node_update contains stale values", () => {
+    const merged = mergeNodeUpdateProperties({
+      updateProperties: { prompt: "stale prompt", temperature: 0.9 },
+      existingStatic: { prompt: "edited prompt", temperature: 0.2 },
+      existingDynamic: {},
+      isDynamicSchemaNode: false
+    });
+
+    expect(merged.staticProperties).toEqual({
+      prompt: "edited prompt",
+      temperature: 0.2
+    });
+  });
+
+  it("adds static properties that do not already exist", () => {
+    const merged = mergeNodeUpdateProperties({
+      updateProperties: { seed: 42 },
+      existingStatic: { prompt: "edited prompt" },
+      existingDynamic: {},
+      isDynamicSchemaNode: false
+    });
+
+    expect(merged.staticProperties).toEqual({
+      prompt: "edited prompt",
+      seed: 42
+    });
+  });
+
+  it("skips dynamic overwrites for dynamic schema nodes", () => {
+    const merged = mergeNodeUpdateProperties({
+      updateProperties: { prompt: "stale dynamic value" },
+      existingStatic: {},
+      existingDynamic: { prompt: "edited dynamic value" },
+      isDynamicSchemaNode: true
+    });
+
+    expect(merged.dynamicProperties).toEqual({
+      prompt: "edited dynamic value"
+    });
+  });
+});

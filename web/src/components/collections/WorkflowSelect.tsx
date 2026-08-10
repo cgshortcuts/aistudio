@@ -1,0 +1,73 @@
+import type { SxProps } from "@mui/material";
+import {
+  Text,
+  TextField,
+  MuiAutocomplete as Autocomplete
+} from "../ui_primitives";
+import { WorkflowList } from "../../stores/ApiTypes";
+import { useQuery } from "@tanstack/react-query";
+import { memo } from "react";
+import isEqual from "../../utils/isEqual";
+import { useWorkflowManager } from "../../contexts/WorkflowManagerContext";
+import { workflowListQueryKey } from "../../serverState/workflowQueryKeys";
+
+interface WorkflowSelectProps {
+  id?: string;
+  value?: { id: string };
+  label?: string;
+  loading?: boolean;
+  open?: boolean;
+  onChange: (value: { type: "workflow"; id: string }) => void;
+  onBlur?: () => void;
+  sx?: SxProps;
+}
+
+const WORKFLOW_SELECT_LIMIT = 100;
+
+const WorkflowSelect = (props: WorkflowSelectProps) => {
+  const load = useWorkflowManager((state) => state.load);
+
+  const { data, error, isLoading } = useQuery<WorkflowList, Error>({
+    queryKey: workflowListQueryKey(WORKFLOW_SELECT_LIMIT),
+    queryFn: async () => {
+      return await load("", WORKFLOW_SELECT_LIMIT);
+    }
+  });
+
+  const selectedWorkflow = data?.workflows?.find(
+    (w) => w.id === props.value?.id
+  );
+
+  if (error) {
+    return <Text>{error.message}</Text>;
+  }
+
+  return (
+    <Autocomplete
+      id={props.id}
+      value={selectedWorkflow || null}
+      options={data?.workflows || []}
+      getOptionLabel={(option) => option.name}
+      loading={props.loading || isLoading}
+      sx={props.sx}
+      open={props.open}
+      onBlur={props.onBlur}
+      onChange={(_, newValue) => {
+        props.onChange({
+          type: "workflow",
+          id: newValue?.id || ""
+        });
+      }}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          variant="outlined"
+          label={selectedWorkflow ? selectedWorkflow.name : props.label}
+        />
+      )}
+      className="mui-select"
+    />
+  );
+};
+
+export default memo(WorkflowSelect, isEqual);

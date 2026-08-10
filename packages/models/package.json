@@ -1,0 +1,75 @@
+{
+  "name": "@nodetool-ai/models",
+  "version": "0.7.0-rc.34",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "nodetool-dev": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./secret": {
+      "nodetool-dev": "./src/secret.ts",
+      "types": "./dist/secret.d.ts",
+      "import": "./dist/secret.js",
+      "default": "./dist/secret.js"
+    }
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-typescript-workspace.mjs",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nodetool-ai/app-runtime": "*",
+    "@nodetool-ai/config": "*",
+    "@nodetool-ai/protocol": "*",
+    "@nodetool-ai/security": "*",
+    "@nodetool-ai/image-editor": "*",
+    "@nodetool-ai/timeline": "*",
+    "better-sqlite3": "^12.8.0",
+    "drizzle-orm": "^0.45.2",
+    "postgres": "^3.4.7"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "drizzle-kit": "^0.31.10",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodetool-ai/nodetool.git",
+    "directory": "packages/models"
+  },
+  "homepage": "https://nodetool.ai",
+  "bugs": {
+    "url": "https://github.com/nodetool-ai/nodetool/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "nodetool",
+    "ai",
+    "workflow",
+    "workflow-automation",
+    "typescript",
+    "database",
+    "sqlite",
+    "drizzle",
+    "orm",
+    "data-models"
+  ]
+}

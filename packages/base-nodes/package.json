@@ -1,0 +1,89 @@
+{
+  "name": "@nodetool-ai/base-nodes",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "version": "0.7.0-rc.34",
+  "description": "Compatibility shell re-exporting the 11 domain-specific node packages (core, text, llm, data, document, image, audio, video, integration, code, automation)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "node ../../scripts/build-typescript-workspace.mjs",
+    "test": "vitest run",
+    "test:all": "vitest run --config vitest.config.all.ts",
+    "test:e2e": "vitest run --config vitest.config.e2e.ts",
+    "test:metadata-parity": "vitest run tests/metadata-parity.test.ts",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nodetool-ai/audio-nodes": "*",
+    "@nodetool-ai/automation-nodes": "*",
+    "@nodetool-ai/code-nodes": "*",
+    "@nodetool-ai/core-nodes": "*",
+    "@nodetool-ai/data-nodes": "*",
+    "@nodetool-ai/document-nodes": "*",
+    "@nodetool-ai/image-nodes": "*",
+    "@nodetool-ai/integration-nodes": "*",
+    "@nodetool-ai/llm-nodes": "*",
+    "@nodetool-ai/node-sdk": "*",
+    "@nodetool-ai/nodes-utils": "*",
+    "@nodetool-ai/protocol": "*",
+    "@nodetool-ai/text-nodes": "*",
+    "@nodetool-ai/video-nodes": "*"
+  },
+  "devDependencies": {
+    "@nodetool-ai/execution": "*",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./platforms/browser": {
+      "nodetool-dev": "./src/platforms/browser.ts",
+      "types": "./dist/platforms/browser.d.ts",
+      "import": "./dist/platforms/browser.js",
+      "default": "./dist/platforms/browser.js"
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodetool-ai/nodetool.git",
+    "directory": "packages/base-nodes"
+  },
+  "homepage": "https://nodetool.ai",
+  "bugs": {
+    "url": "https://github.com/nodetool-ai/nodetool/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "nodetool",
+    "ai",
+    "workflow",
+    "workflow-automation",
+    "typescript",
+    "ai-nodes",
+    "no-code",
+    "visual-programming",
+    "workflow-nodes",
+    "nodes",
+    "text",
+    "image",
+    "llm",
+    "agents"
+  ]
+}

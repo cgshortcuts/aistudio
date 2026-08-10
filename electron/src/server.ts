@@ -1,0 +1,677 @@
+import { dialog, shell, app } from "electron";
+import { logMessage } from "./logger";
+import {
+  getOptionalNodeModulesPath,
+  getPythonPath,
+  getProcessEnv,
+  PID_FILE_PATH,
+  webPath,
+} from "./config";
+
+/**
+ * Resolves the path to the Node.js-based backend server entry point.
+ * In packaged mode: resources/backend/server.mjs
+ * In dev mode: ../../packages/websocket/src/server.ts (run via tsx)
+ */
+function getNodeBackendPath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "backend", "server.mjs");
+  }
+  return path.join(__dirname, "..", "..", "packages", "websocket", "src", "server.ts");
+}
+
+/** In dev mode we need tsx to run TypeScript source directly. */
+function isDevMode(): boolean {
+  return !app.isPackaged;
+}
+import { emitBootMessage, emitServerError, emitServerStarted, emitServerLog } from "./events";
+import { serverState } from "./state";
+import type { ServerState } from "./state";
+import { getServerUrl, errorMessage, isErrnoException } from "./utils";
+import fs from "fs/promises";
+import net from "net";
+import path from "path";
+import { pathToFileURL } from "url";
+import { emitServerStateChanged } from "./tray";
+import { LOG_FILE } from "./logger";
+import { createWorkflowWindow } from "./workflowWindow";
+import { Watchdog } from "./watchdog";
+import { probeHttpOk, waitForHttpOk } from "./httpProbe";
+import {
+  ensureActiveVaultDirs,
+  getActiveVault,
+  getActiveVaultEnv,
+} from "./vaults";
+
+let backendWatchdog: Watchdog | null = null;
+
+/**
+ * Set when the backend subprocess emits a `KeychainAccessError` marker on its
+ * stderr/stdout during startup. The Electron main process reads this to decide
+ * whether a startup failure is recoverable by re-prompting the user for
+ * keychain access.
+ */
+let backendKeychainErrorSeen = false;
+
+export function backendFailedDueToKeychain(): boolean {
+  return backendKeychainErrorSeen;
+}
+
+/** Server Management Module */
+
+/** Checks if a specific port is available for use */
+async function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = net
+      .createServer()
+      .listen(port, "127.0.0.1")
+      .once("listening", () => {
+        server.close();
+        resolve(true);
+      })
+      .once("error", () => resolve(false));
+  });
+}
+
+/**
+ * Checks if a process with the given PID is running
+ * @param pid - Process ID to check
+ * @returns True if the process is running, false otherwise
+ */
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Checks if there's an existing NodeTool server process from a PID file
+ * @returns Promise resolving to the PID if a running server is found, null otherwise
+ */
+async function findExistingServerPid(): Promise<number | null> {
+  try {
+    const pidContent = await fs.readFile(PID_FILE_PATH, "utf8");
+    const pid = parseInt(pidContent.trim(), 10);
+    
+    if (!pid || isNaN(pid)) {
+      return null;
+    }
+    
+    if (isProcessRunning(pid)) {
+      logMessage(`Found existing NodeTool server process with PID ${pid}`);
+      return pid;
+    }
+    
+    logMessage(`PID file exists but process ${pid} is not running, will clean up`);
+    return null;
+  } catch (error) {
+    if (isErrnoException(error) && error.code === "ENOENT") {
+      logMessage("No PID file found, no existing server process");
+      return null;
+    }
+    logMessage(`Error reading PID file: ${errorMessage(error)}`, "warn");
+    return null;
+  }
+}
+
+/**
+ * Prompts the user about an existing server and gets their choice
+ * @param pid - Process ID of the existing server
+ * @returns Promise resolving to true if user wants to kill the server, false otherwise
+ */
+async function promptUserAboutExistingServer(pid: number): Promise<boolean> {
+  const result = await dialog.showMessageBox({
+    type: "question",
+    title: "NodeTool Server Already Running",
+    message: "A NodeTool server is already running.",
+    detail: `An existing NodeTool server process (PID ${pid}) was detected. Would you like to stop it and start a new server, or connect to the existing server?`,
+    buttons: ["Stop and Start New", "Use Existing Server"],
+    defaultId: 0,
+    cancelId: 1,
+  });
+
+  return result.response === 0;
+}
+
+/**
+ * Finds the next available port starting from a base port
+ * @param startPort - Port to start scanning from
+ * @param maxIncrements - Maximum number of increments to try
+ */
+async function findAvailablePort(
+  startPort: number,
+  maxIncrements: number = 50
+): Promise<number> {
+  let candidate = startPort;
+  for (let i = 0; i <= maxIncrements; i += 1) {
+    const available = await isPortAvailable(candidate);
+    if (available) return candidate;
+    candidate += 1;
+  }
+  throw new Error(
+    `No available port found from ${startPort} to ${startPort + maxIncrements}`
+  );
+}
+
+/**
+ * Attempts to kill any existing server process using the stored PID
+ */
+async function killExistingServer(): Promise<void> {
+  try {
+    const pidContent = await fs.readFile(PID_FILE_PATH, "utf8");
+    const pid = parseInt(pidContent, 10);
+
+    if (pid) {
+      try {
+        logMessage(`Killing existing server process ${pid}`);
+        process.kill(pid);
+
+        await new Promise<void>((resolve) => {
+          const checkInterval = setInterval(() => {
+            try {
+              process.kill(pid, 0);
+            } catch (e) {
+              if (isErrnoException(e) && e.code === "ESRCH") {
+                clearInterval(checkInterval);
+                resolve();
+              }
+            }
+          }, 100);
+
+          setTimeout(() => {
+            clearInterval(checkInterval);
+            resolve();
+          }, 5000);
+        });
+
+        logMessage(`Killed existing server process ${pid}`);
+      } catch (error) {
+        if (!isErrnoException(error) || error.code !== "ESRCH") {
+          logMessage(
+            `Error killing process ${pid}: ${errorMessage(error)}`,
+            "error"
+          );
+        }
+      }
+    }
+  } catch (error) {
+    if (!isErrnoException(error) || error.code !== "ENOENT") {
+      logMessage(
+        `Error reading PID file: ${errorMessage(error)}`,
+        "error"
+      );
+    }
+  }
+}
+
+/**
+ * Starts the NodeTool backend server process.
+ * Spawns the Node.js-based TypeScript backend (packages/websocket/dist/server.js).
+ */
+async function startServer(): Promise<void> {
+  emitBootMessage("Configuring server environment...");
+  serverState.status = "starting";
+  serverState.error = undefined;
+  serverState.isStarted = false;
+
+  const backendEntryPoint = getNodeBackendPath();
+  logMessage(`Resolved Node.js backend entry point: ${backendEntryPoint}`);
+
+  try {
+    await fs.access(backendEntryPoint);
+  } catch {
+    const message = `Node.js backend not found at ${backendEntryPoint}. Run 'npm run build:packages' first.`;
+    logMessage(message, "error");
+    if (!process.env.CI) {
+      dialog.showErrorBox("Backend Not Found", message);
+    }
+    throw new Error(message);
+  }
+
+  const basePort = 7777;
+  logMessage(`Finding available port starting from ${basePort}...`);
+  const selectedPort = await findAvailablePort(basePort);
+  serverState.serverPort = selectedPort;
+  serverState.initialURL = `http://127.0.0.1:${selectedPort}`;
+  logMessage(`Selected port: ${selectedPort}`);
+
+  logMessage(`Starting backend server: ${backendEntryPoint}`);
+  logMessage(`Backend directory: ${path.dirname(backendEntryPoint)}`);
+  emitBootMessage("Starting backend server...");
+
+  // afterPack promotes the staged backend/_modules directory to a real
+  // backend/node_modules directory so Node.js can resolve externalized
+  // ESM packages with standard package resolution.
+  const backendNodeModules = path.join(path.dirname(backendEntryPoint), "node_modules");
+  const optionalNodeModules = getOptionalNodeModulesPath();
+  const backendNodePath = [backendNodeModules, optionalNodeModules].join(path.delimiter);
+  logMessage(`Backend NODE_PATH: ${backendNodePath}`);
+
+  // Python path may not exist if the Python runtime hasn't been installed yet.
+  // The backend will start without Python support in that case.
+  let pythonPath = "";
+  try {
+    const candidatePath = getPythonPath();
+    const { promises: fsPromises } = await import("fs");
+    try {
+      await fsPromises.access(candidatePath);
+      pythonPath = candidatePath;
+    } catch {
+      logMessage(
+        `Python executable not found at ${candidatePath}. Backend will start without Python support.`,
+        "warn",
+      );
+    }
+  } catch {
+    logMessage("Could not resolve Python path. Backend will start without Python support.", "warn");
+  }
+
+  const rootDir = path.join(__dirname, "..", "..");
+
+  // In dev mode, preload tsx/esm as a Node.js startup hook via --import so that
+  // TypeScript files can be loaded inside the utilityProcess without calling
+  // register() at runtime (which spawns a worker thread and fails in utility processes).
+  const nodeOptionsParts = [process.env.NODE_OPTIONS, "--conditions=nodetool-dev"];
+  if (isDevMode()) {
+    const tsxEsmHook = path.join(rootDir, "node_modules", "tsx", "dist", "esm", "index.mjs");
+    nodeOptionsParts.push(`--import=${pathToFileURL(tsxEsmHook).href}`);
+  }
+
+  const backendEnv: Record<string, string> = {
+    ...getProcessEnv(),
+    PORT: String(selectedPort),
+    HOST: "127.0.0.1",
+    STATIC_FOLDER: webPath,
+    NODETOOL_PYTHON: pythonPath,
+    NODE_ENV: isDevMode() ? "development" : "production",
+    NODE_OPTIONS: nodeOptionsParts.filter(Boolean).join(" "),
+    NODE_PATH: backendNodePath,
+    NODETOOL_OPTIONAL_NODE_MODULES: optionalNodeModules,
+  };
+
+  // Point the backend at the active vault's database/assets/vector store.
+  // Vaults are SQLite-only, so skip this when an external DATABASE_URL
+  // (e.g. PostgreSQL) is configured. The default vault contributes no
+  // overrides, preserving the original single-database behaviour.
+  if (!backendEnv.DATABASE_URL) {
+    try {
+      ensureActiveVaultDirs();
+      Object.assign(backendEnv, getActiveVaultEnv());
+      const activeVault = getActiveVault();
+      logMessage(
+        `Active vault: "${activeVault.name}" (${activeVault.id})` +
+          (activeVault.dbPath ? ` db=${activeVault.dbPath}` : " (default data store)")
+      );
+    } catch (error) {
+      logMessage(
+        `Failed to apply active vault environment, using default database: ${errorMessage(error)}`,
+        "warn"
+      );
+    }
+  }
+
+  const dbConfig = backendEnv.DB_PATH || backendEnv.DATABASE_URL;
+  if (dbConfig) {
+    logMessage(`Database configuration detected: ${dbConfig}`);
+  } else {
+    logMessage(`No database override set, using default path`);
+  }
+
+  // Dev mode: spawn the backend as a SEPARATE Node process (child_process),
+  // not Electron's utilityProcess. Electron's embedded V8 enables the heap
+  // sandbox, which rejects the external ArrayBuffers that dawn.node returns
+  // from GPU buffer readback (`getMappedRange` → "External buffers are not
+  // allowed"). A vanilla, non-sandboxed Node has no such restriction, so the
+  // GPU compositor (and any native addon that maps GPU memory) works. We use
+  // the Node that launched the dev run (npm sets `npm_node_execpath`).
+  const devNodeBinary =
+    process.env.NODETOOL_NODE || process.env.npm_node_execpath || "node";
+  const watchdogOpts: import("./watchdog").WatchdogOptions = isDevMode()
+    ? {
+        name: "nodetool",
+        command: devNodeBinary,
+        args: [
+          path.join(__dirname, "..", "dev-server-runner.cjs"),
+          backendEntryPoint,
+        ],
+        env: backendEnv,
+        cwd: rootDir,
+        pidFilePath: PID_FILE_PATH,
+        healthUrl: `http://127.0.0.1:${selectedPort}/health`,
+        onOutput: (line) => handleServerOutput(Buffer.from(line)),
+        logOutput: false,
+      }
+    : {
+        // Production: run the backend on the bundled, non-sandboxed Node
+        // (Resources/backend/runtime/node) via child_process — NOT Electron's
+        // sandboxed utilityProcess. The V8 heap sandbox in Electron's embedded
+        // Node rejects Dawn's external GPU-readback buffers, breaking the GPU
+        // compositor. The bundled Node has no such sandbox.
+        name: "nodetool",
+        command: path.join(
+          path.dirname(backendEntryPoint),
+          "runtime",
+          process.platform === "win32" ? "node.exe" : "node"
+        ),
+        args: [backendEntryPoint],
+        env: backendEnv,
+        cwd: path.dirname(backendEntryPoint),
+        pidFilePath: PID_FILE_PATH,
+        healthUrl: `http://127.0.0.1:${selectedPort}/health`,
+        onOutput: (line) => handleServerOutput(Buffer.from(line)),
+        logOutput: false,
+      };
+
+  backendWatchdog = new Watchdog(watchdogOpts);
+
+  try {
+    logMessage("Calling watchdog.start() - this will wait for server to become healthy...");
+    await backendWatchdog.start();
+    logMessage("Watchdog.start() completed - server is healthy");
+  } catch (error) {
+    const errMsg = errorMessage(error);
+    logMessage(
+      `Watchdog failed to start server: ${errMsg}`,
+      "error"
+    );
+    logMessage(`Error stack: ${error instanceof Error ? error.stack : undefined}`, "error");
+
+    backendWatchdog = null;
+    throw error;
+  }
+}
+
+/**
+ * Handles server process output streams (stdout/stderr)
+ * Processes server messages, handles error conditions, and emits relevant events
+ * @param data - Buffer containing server output
+ */
+function handleServerOutput(data: Buffer): void {
+  const output = data.toString().trim();
+
+  if (output.includes("KeychainAccessError")) {
+    backendKeychainErrorSeen = true;
+    logMessage("Backend reported KeychainAccessError", "error");
+  }
+
+  if (output.includes("Address already in use")) {
+    const message =
+      "The server cannot start because the port is already in use. Please close any applications using the port and try again.";
+    logMessage("Port is blocked, server startup failed", "error");
+    serverState.error = message;
+    serverState.status = "error";
+    serverState.isStarted = false;
+    if (!process.env.CI) {
+      dialog.showErrorBox("Server Error", message);
+    }
+    emitServerError(message);
+  }
+
+  if (output.includes("Application startup complete.")) {
+    logMessage("Server startup complete");
+    emitBootMessage("Loading application...");
+    emitServerStarted();
+    emitServerStateChanged();
+  }
+  emitServerLog(output);
+}
+
+/**
+ * Checks if the backend server process is currently running
+ * @returns Promise resolving to true if server is running, false otherwise
+ */
+async function isServerRunning(): Promise<boolean> {
+  // Quick check: if we have a watchdog, server is likely running
+  // But we should verify with a health check to be sure
+  const port = serverState.serverPort;
+  if (!port) {
+    return false;
+  }
+
+  return probeHttpOk(`http://127.0.0.1:${port}/health`, { timeoutMs: 1000 });
+}
+
+/**
+ * Initializes the backend server, performing necessary checks and startup procedures
+ * Handles server health checks, port availability, and process management
+ */
+async function initializeBackendServer(): Promise<void> {
+  logMessage("Initializing backend server");
+  backendKeychainErrorSeen = false;
+  try {
+    serverState.status = "starting";
+    serverState.error = undefined;
+    
+    // Check if there's an existing NodeTool server process from PID file
+    const existingPid = await findExistingServerPid();
+    
+    if (existingPid) {
+      // Server process is running, check if it's responsive
+      logMessage(`Checking if server PID ${existingPid} is responsive...`);
+      
+      // Try to connect to the default port to verify it's actually running
+      const defaultPort = 7777;
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const response = await fetch(`http://127.0.0.1:${defaultPort}/health`, {
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          logMessage(`Existing server is responsive on port ${defaultPort}`);
+          
+          // Prompt the user
+          const shouldKillExisting = await promptUserAboutExistingServer(existingPid);
+          
+          if (shouldKillExisting) {
+            // User wants to kill the existing server
+            logMessage("User chose to stop existing server");
+            
+            try {
+              logMessage(`Killing process ${existingPid}`);
+              process.kill(existingPid);
+              
+              // Wait for the process to die
+              await new Promise<void>((resolve) => {
+                const checkInterval = setInterval(() => {
+                  try {
+                    process.kill(existingPid, 0);
+                  } catch (e) {
+                    if (isErrnoException(e) && e.code === "ESRCH") {
+                      clearInterval(checkInterval);
+                      resolve();
+                    }
+                  }
+                }, 100);
+
+                setTimeout(() => {
+                  clearInterval(checkInterval);
+                  resolve();
+                }, 3000);
+              });
+
+              logMessage(`Successfully killed process ${existingPid}`);
+              
+              // Clean up the PID file
+              try {
+                await fs.unlink(PID_FILE_PATH);
+                logMessage("Removed stale PID file");
+              } catch (error) {
+                logMessage(`Failed to remove PID file: ${errorMessage(error)}`, "warn");
+              }
+
+              // Small delay to ensure port is released
+              await new Promise((resolve) => setTimeout(resolve, 500));
+            } catch (error) {
+              logMessage(
+                `Failed to kill process ${existingPid}: ${errorMessage(error)}`,
+                "error"
+              );
+            }
+          } else {
+            // User wants to use the existing server
+            logMessage("User chose to use existing server");
+            serverState.serverPort = defaultPort;
+            serverState.initialURL = `http://127.0.0.1:${defaultPort}`;
+            emitServerStarted();
+            emitServerStateChanged();
+            return;
+          }
+        }
+      } catch {
+        logMessage(`Existing server process exists but is not responsive, will start new server`);
+        // Server process exists but is not responsive, we can kill it and start fresh
+        try {
+          logMessage(`Killing unresponsive process ${existingPid}`);
+          process.kill(existingPid);
+          
+          // Wait for the process to die
+          await new Promise<void>((resolve) => {
+            const checkInterval = setInterval(() => {
+              try {
+                process.kill(existingPid, 0);
+              } catch (e) {
+                if (isErrnoException(e) && e.code === "ESRCH") {
+                  clearInterval(checkInterval);
+                  resolve();
+                }
+              }
+            }, 100);
+
+            setTimeout(() => {
+              clearInterval(checkInterval);
+              resolve();
+            }, 3000);
+          });
+
+          // Clean up the PID file
+          try {
+            await fs.unlink(PID_FILE_PATH);
+            logMessage("Removed stale PID file");
+          } catch (error) {
+            logMessage(`Failed to remove PID file: ${errorMessage(error)}`, "warn");
+          }
+          
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        } catch (error) {
+          logMessage(
+            `Failed to kill unresponsive process ${existingPid}: ${errorMessage(error)}`,
+            "warn"
+          );
+        }
+      }
+    }
+    
+    // Check if watchdog thinks server is running
+    if (await isServerRunning()) {
+      logMessage("Watchdog indicates server is running, waiting for health check...");
+      await waitForServer();
+      return;
+    }
+
+    logMessage("No existing server found, starting new server...");
+    await killExistingServer();
+    logMessage("Starting server process...");
+    await startServer();
+    logMessage("Server process started, waiting for health check...");
+    await waitForServer();
+    logMessage("Backend server initialization complete");
+  } catch (error) {
+    logMessage(
+      `Critical error starting server: ${errorMessage(error)}`,
+      "error"
+    );
+    logMessage(`Error stack: ${error instanceof Error ? error.stack : undefined}`, "error");
+    const errMsg = errorMessage(error) || "Unknown server error";
+    serverState.status = "error";
+    serverState.error = errMsg;
+    emitServerError(`Critical error starting server: ${errMsg}`);
+    throw error;
+  }
+}
+
+/**
+ * Waits for the server to become available by polling the health endpoint
+ * @param timeout - Maximum time to wait in milliseconds (default: 30000)
+ * @throws Error if server doesn't become available within timeout period
+ */
+async function waitForServer(timeout: number = 60000): Promise<void> {
+  const readyUrl = getServerUrl("/ready");
+  await waitForHttpOk(readyUrl, {
+    timeoutMs: timeout,
+    requestTimeoutMs: 3000,
+    pollIntervalMs: 250,
+    errorMessage: "Server failed to become available",
+  });
+  logMessage(`Server endpoint is available at ${readyUrl}`);
+  emitServerStarted();
+}
+
+/**
+ * Gracefully stops the backend server process
+ * Attempts SIGTERM first, followed by SIGKILL if necessary
+ */
+async function stopServer(): Promise<void> {
+  logMessage("Initiating graceful shutdown");
+
+  try {
+    if (backendWatchdog) {
+      logMessage("Stopping NodeTool server (watchdog)");
+      await backendWatchdog.stopGracefully();
+      backendWatchdog = null;
+    }
+  } catch (error) {
+    logMessage(`Error during shutdown: ${errorMessage(error)}`, "error");
+  }
+
+  serverState.isStarted = false;
+  serverState.status = "idle";
+  emitServerStateChanged();
+  logMessage("Graceful shutdown complete");
+}
+
+/**
+ * Returns the current server state
+ * @returns Current server state object
+ */
+export function getServerState(): ServerState {
+  return serverState;
+}
+
+/**
+ * Opens the log file in the system's default file explorer
+ */
+export function openLogFile(): void {
+  shell.showItemInFolder(LOG_FILE);
+}
+
+/**
+ * Opens the log file in the system's default file explorer
+ */
+export function showItemInFolder(fullPath: string): void {
+  shell.showItemInFolder(fullPath);
+}
+
+/**
+ * Creates a new workflow window for a specific workflow
+ * @param workflowId - ID of the workflow to run
+ */
+export async function runApp(workflowId: string) {
+  logMessage(`Running app with workflow ID: ${workflowId}`);
+  createWorkflowWindow(workflowId);
+}
+
+export {
+  serverState,
+  initializeBackendServer,
+  stopServer,
+  isServerRunning,
+};

@@ -1,0 +1,198 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { memo, useCallback, useState } from "react";
+import isEqual from "../../../utils/isEqual";
+import PropertyLabel from "../../node/PropertyLabel";
+import { PropertyProps } from "../../node/PropertyInput";
+import { useTheme } from "@mui/material/styles";
+import { Text, MOTION, BORDER_RADIUS, SPACING, getSpacingPx } from "../../ui_primitives";
+import type { Theme } from "@mui/material/styles";
+import FileBrowserDialog from "../../dialogs/FileBrowserDialog";
+
+export type PathType = "file_path" | "folder_path";
+
+interface PathPreviewProps {
+  value?: { path: string };
+  onBrowseClick: () => void;
+  onClear: () => void;
+  ariaLabel: string;
+}
+
+interface BasePathPropertyProps extends PropertyProps {
+  pathType: PathType;
+  dialogTitle: string;
+  onlyDirs: boolean;
+}
+
+const hasNativeDialog = (): boolean => {
+  return typeof window !== "undefined" && window.api?.dialog !== undefined;
+};
+
+const createPathPropertyStyles = (theme: Theme) =>
+  css({
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.5em",
+
+    ".path-picker__inputs": {
+      display: "flex",
+      alignItems: "center",
+      gap: getSpacingPx(SPACING.md),
+      minHeight: "20px",
+      flex: 1
+    },
+
+    ".path-picker__browse-button": {
+      backgroundColor: theme.vars.palette.grey[600],
+      border: `1px solid ${theme.vars.palette.grey[500]}`,
+      borderRadius: BORDER_RADIUS.xs,
+      color: theme.vars.palette.common.white,
+      cursor: "pointer",
+      padding: `${getSpacingPx(SPACING.micro)} ${getSpacingPx(SPACING.xs)}`,
+      height: "100%",
+      transition: MOTION.all,
+      "&:hover": {
+        backgroundColor: theme.vars.palette.grey[500]
+      }
+    },
+
+    ".path-picker__preview": {
+      display: "flex",
+      alignItems: "center",
+      flex: 1,
+      color: theme.vars.palette.grey[400],
+      fontSize: theme.vars.fontSizeSmaller,
+      marginLeft: ".5em",
+      wordBreak: "break-all",
+      minHeight: "20px"
+    },
+
+    ".path-picker__reset-button": {
+      backgroundColor: "transparent",
+      border: "none",
+      borderRadius: BORDER_RADIUS.circle,
+      color: theme.vars.palette.grey[400],
+      cursor: "pointer",
+      padding: `${getSpacingPx(SPACING.xs)} ${getSpacingPx(SPACING.md)}`,
+      minWidth: "20px",
+      height: "24px",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      transition: MOTION.all,
+      "&:hover": {
+        color: "var(--palette-primary-main)"
+      }
+    }
+  });
+
+const PathPreview = ({
+  value,
+  onBrowseClick,
+  onClear,
+  ariaLabel
+}: PathPreviewProps) => {
+  return (
+    <div className="path-picker__inputs">
+      <button type="button" onClick={onBrowseClick} className="path-picker__browse-button">
+        Browse
+      </button>
+      <div className="path-picker__preview">
+        <Text>{value?.toString()}</Text>
+        {value?.toString() && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="path-picker__reset-button"
+            aria-label={ariaLabel}
+          >
+            ×
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const BasePathProperty = (props: BasePathPropertyProps) => {
+  const theme = useTheme();
+  const id = `${props.pathType}-${props.property.name}-${props.propertyIndex}`;
+  const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
+
+  const handleBrowseClick = useCallback(async () => {
+    // The second check is required for TypeScript type narrowing.
+    if (hasNativeDialog() && window.api.dialog) {
+      try {
+        const currentValue = typeof props.value === "string" ? props.value : undefined;
+
+        if (props.onlyDirs) {
+          const result = await window.api.dialog.openFolder({
+            title: props.dialogTitle,
+            defaultPath: currentValue
+          });
+          if (!result.canceled && result.filePaths.length > 0) {
+            props.onChange(result.filePaths[0]);
+          }
+        } else {
+          const result = await window.api.dialog.openFile({
+            title: props.dialogTitle,
+            defaultPath: currentValue
+          });
+          if (!result.canceled && result.filePaths.length > 0) {
+            props.onChange(result.filePaths[0]);
+          }
+        }
+      } catch (error) {
+        // Fall back to the custom dialog when the native dialog fails.
+        console.error("Native dialog failed, falling back to custom dialog:", error);
+        setIsFileBrowserOpen(true);
+      }
+    } else {
+      setIsFileBrowserOpen(true);
+    }
+  }, [props]);
+
+  const handleClear = useCallback(() => {
+    props.onChange("");
+  }, [props]);
+
+  const handleConfirm = useCallback(
+    (path: string) => {
+      props.onChange(path);
+      setIsFileBrowserOpen(false);
+    },
+    [props]
+  );
+
+  const handleCancel = useCallback(() => {
+    setIsFileBrowserOpen(false);
+  }, []);
+
+  return (
+    <div css={createPathPropertyStyles(theme)} className="path-picker">
+      <PropertyLabel
+        name={props.property.name}
+        description={props.property.description}
+        id={id}
+      />
+
+      <PathPreview
+        value={props.value}
+        onBrowseClick={handleBrowseClick}
+        onClear={handleClear}
+        ariaLabel={`Clear ${props.pathType.split("_")[0]} selection`}
+      />
+
+      <FileBrowserDialog
+        open={isFileBrowserOpen}
+        onClose={handleCancel}
+        onConfirm={handleConfirm}
+        title={props.dialogTitle}
+        initialPath={typeof props.value === "string" ? props.value : "~"}
+        selectionMode={props.onlyDirs ? "directory" : "file"}
+      />
+    </div>
+  );
+};
+
+export default memo(BasePathProperty, isEqual);

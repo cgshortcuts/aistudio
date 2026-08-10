@@ -1,0 +1,574 @@
+import { createWorkflowRunnerStore, deriveJobTitle } from "../WorkflowRunner";
+import useMetadataStore from "../MetadataStore";
+import { globalWebSocketManager } from "../../lib/websocket/GlobalWebSocketManager";
+import type { WorkflowAttributes } from "../ApiTypes";
+
+jest.mock("../../contexts/EditorInsertionContext", () => ({
+  EditorInsertionProvider: ({ children }: any) => children,
+  useEditorInsertion: () => null,
+  __esModule: true,
+  default: {
+    Provider: ({ children }: any) => children,
+  },
+}));
+
+jest.mock("../../lib/websocket/GlobalWebSocketManager", () => ({
+  globalWebSocketManager: {
+    ensureConnection: jest.fn().mockResolvedValue(undefined),
+    send: jest.fn().mockResolvedValue(undefined),
+    subscribe: jest.fn().mockReturnValue(jest.fn()),
+    isConnectionOpen: jest.fn().mockReturnValue(true),
+    setResumeJobIdProvider: jest.fn(),
+  },
+}));
+
+jest.mock("../../lib/env", () => ({
+  isLocalhost: true,
+}));
+
+jest.mock("../../lib/supabaseClient", () => ({
+  supabase: {
+    auth: {
+      getSession: jest.fn().mockResolvedValue({
+        data: { session: null },
+      }),
+    },
+  },
+}));
+
+jest.mock("../ResultsStore", () => ({
+  __esModule: true,
+  default: {
+    getState: jest.fn().mockReturnValue({
+      clearEdges: jest.fn(),
+      clearResults: jest.fn(),
+      clearProgress: jest.fn(),
+      clearToolCalls: jest.fn(),
+      clearTasks: jest.fn(),
+      clearChunks: jest.fn(),
+      clearPlanningUpdates: jest.fn(),
+      clearOutputResults: jest.fn(),
+      clearJobRunVisuals: jest.fn(),
+    }),
+  },
+}));
+
+jest.mock("../StatusStore", () => ({
+  __esModule: true,
+  default: {
+    getState: jest.fn().mockReturnValue({
+      clearStatuses: jest.fn(),
+      clearJobStatuses: jest.fn(),
+      setNodeStatus: jest.fn(),
+    }),
+  },
+}));
+
+jest.mock("../ErrorStore", () => ({
+  __esModule: true,
+  default: {
+    getState: jest.fn().mockReturnValue({
+      clearErrors: jest.fn(),
+    }),
+  },
+}));
+
+jest.mock("../../queryClient", () => ({
+  queryClient: {
+    invalidateQueries: jest.fn().mockResolvedValue(undefined),
+  },
+}));
+
+// WorkflowRunner generates job ids via crypto.randomUUID(); stub it with a jest
+// mock for stable, per-test assertions (jsdom may not provide a native randomUUID).
+const randomUUIDMock = jest.fn(() => "test-job-id-123");
+if (typeof globalThis.crypto === "undefined") {
+  (globalThis as { crypto: Crypto }).crypto = {} as Crypto;
+}
+(globalThis.crypto as { randomUUID: () => string }).randomUUID =
+  randomUUIDMock as unknown as Crypto["randomUUID"];
+
+describe("WorkflowRunner", () => {
+  let store: ReturnType<typeof createWorkflowRunnerStore>;
+  const testWorkflow = {
+    id: "test-workflow-id",
+    settings: {},
+  } as unknown as WorkflowAttributes;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    store = createWorkflowRunnerStore("test-workflow-id");
+  });
+
+  afterEach(() => {
+    store.getState().cleanup();
+  });
+
+  describe("initial state", () => {
+    it("initializes with default values", () => {
+      const state = store.getState();
+      expect(state.workflow).toBeNull();
+      expect(state.nodes).toEqual([]);
+      expect(state.edges).toEqual([]);
+      expect(state.job_id).toBeNull();
+      expect(state.state).toBe("idle");
+      expect(state.statusMessage).toBeNull();
+      expect(state.notifications).toEqual([]);
+    });
+
+    it("initializes a message handler", () => {
+      expect(typeof store.getState().messageHandler).toBe("function");
+    });
+  });
+
+  describe("setMessageHandler", () => {
+    it("updates the message handler", () => {
+      const mockHandler = jest.fn();
+      store.getState().setMessageHandler(mockHandler);
+      expect(store.getState().messageHandler).toBe(mockHandler);
+    });
+  });
+
+  describe("setStatusMessage", () => {
+    it("updates the status message", () => {
+      store.getState().setStatusMessage("Running workflow...");
+      expect(store.getState().statusMessage).toBe("Running workflow...");
+    });
+
+    it("clears status message when null is passed", () => {
+      store.getState().setStatusMessage("Test message");
+      store.getState().setStatusMessage(null);
+      expect(store.getState().statusMessage).toBeNull();
+    });
+  });
+
+  describe("addNotification", () => {
+    it("adds a notification with timestamp", () => {
+      store.getState().addNotification({
+        type: "info",
+        content: "Test message",
+      });
+
+      const notifications = store.getState().notifications;
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].id).toBeDefined();
+      expect(notifications[0].timestamp).toBeDefined();
+      expect(notifications[0].type).toBe("info");
+    });
+
+    it("limits notifications to 50", () => {
+      for (let i = 0; i < 60; i++) {
+        store.getState().addNotification({
+          type: "info",
+          content: `Test message ${i}`,
+        });
+      }
+
+      expect(store.getState().notifications).toHaveLength(50);
+    });
+  });
+
+  describe("cleanup", () => {
+    it("cleans up unsubscribe function if present", () => {
+      const mockUnsubscribe = jest.fn();
+      store.setState({ unsubscribe: mockUnsubscribe });
+
+      store.getState().cleanup();
+
+      expect(mockUnsubscribe).toHaveBeenCalled();
+      expect(store.getState().unsubscribe).toBeNull();
+    });
+
+    it("does nothing if unsubscribe is null", () => {
+      store.setState({ unsubscribe: null });
+      expect(() => store.getState().cleanup()).not.toThrow();
+    });
+  });
+
+  describe("state transitions", () => {
+    it("can transition through connection states", async () => {
+      expect(store.getState().state).toBe("idle");
+
+      await store.getState().ensureConnection();
+
+      expect(store.getState().state).toBe("connected");
+    });
+
+    it("transitions to error state on connection failure", async () => {
+      (globalWebSocketManager.ensureConnection as jest.Mock).mockRejectedValueOnce(
+        new Error("Connection failed")
+      );
+
+      await expect(store.getState().ensureConnection()).rejects.toThrow();
+      expect(store.getState().state).toBe("error");
+    });
+
+    it("transitions to running state on reconnect", async () => {
+      await store.getState().ensureConnection();
+      await store.getState().reconnect("job-123");
+
+      expect(store.getState().state).toBe("running");
+      expect(store.getState().job_id).toBe("job-123");
+    });
+  });
+
+  describe("resume cursor", () => {
+    it("reconnects from the cursor of the job it is already tracking", async () => {
+      store.setState({ job_id: "job-123", jobReplayCursor: 12 });
+
+      await store.getState().reconnect("job-123");
+
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "reconnect_job",
+          data: expect.objectContaining({
+            job_id: "job-123",
+            last_seq: 12,
+          }),
+        })
+      );
+    });
+
+    it("reconnects from zero for a job it was not tracking", async () => {
+      store.setState({ job_id: "job-other", jobReplayCursor: 12 });
+
+      await store.getState().reconnect("job-123");
+
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "reconnect_job",
+          data: expect.objectContaining({ job_id: "job-123", last_seq: 0 }),
+        })
+      );
+      expect(store.getState().jobReplayCursor).toBe(0);
+    });
+
+    it("reconnectWithWorkflow carries the cursor too", async () => {
+      store.setState({ job_id: "job-123", jobReplayCursor: 4 });
+
+      await store.getState().reconnectWithWorkflow("job-123", testWorkflow);
+
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "reconnect_job",
+          data: expect.objectContaining({
+            job_id: "job-123",
+            workflow_id: "test-workflow-id",
+            last_seq: 4,
+          }),
+        })
+      );
+    });
+
+    it.each([
+      ["reconnect", (jobId: string) => store.getState().reconnect(jobId)],
+      [
+        "reconnectWithWorkflow",
+        (jobId: string) =>
+          store.getState().reconnectWithWorkflow(jobId, testWorkflow),
+      ],
+    ] as const)(
+      "%s clears isBrowserRun so the job stays eligible for auto-resume",
+      async (_name, doReconnect) => {
+        // A previous in-browser run left the flag set; the job being attached
+        // to is a server job, and the open-event resume skips browser runs.
+        store.setState({ isBrowserRun: true, job_id: "job-browser" });
+
+        await doReconnect("job-server");
+
+        expect(store.getState().isBrowserRun).toBe(false);
+      }
+    );
+
+    it("starts a fresh run at cursor zero", async () => {
+      store.setState({ jobReplayCursor: 9 });
+
+      await store.getState().run({}, testWorkflow, [], []);
+
+      expect(store.getState().jobReplayCursor).toBe(0);
+    });
+  });
+
+  describe("streaming methods", () => {
+    beforeEach(async () => {
+      await store.getState().ensureConnection();
+      await store.getState().reconnect("job-123");
+    });
+
+    it("streams input to running job", async () => {
+      await store.getState().streamInput("text", "Hello");
+
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "stream_input",
+          data: expect.objectContaining({
+            input: "text",
+            value: "Hello",
+            job_id: "job-123",
+          }),
+        })
+      );
+    });
+
+    it("ends input stream", async () => {
+      await store.getState().endInputStream("text");
+
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "end_input_stream",
+          data: expect.objectContaining({
+            input: "text",
+            job_id: "job-123",
+          }),
+        })
+      );
+    });
+
+    it("warns when streaming without active job", async () => {
+      const logSpy = jest.spyOn(console, "warn").mockImplementation();
+      
+      store.setState({ job_id: null });
+      await store.getState().streamInput("text", "Hello");
+
+      expect(logSpy).toHaveBeenCalledWith(
+        "streamInput called without an active job"
+      );
+      logSpy.mockRestore();
+    });
+  });
+
+  describe("deriveJobTitle", () => {
+    const wf = { id: "wf", name: "My Flow" } as unknown as WorkflowAttributes;
+    const node = (id: string, type: string, title?: string) =>
+      ({ id, type, data: title ? { title } : {} }) as never;
+
+    it("uses the workflow name for a full run", () => {
+      expect(deriveJobTitle(wf, [])).toBe("My Flow");
+    });
+
+    it("uses the node's custom title for a single-node run", () => {
+      const nodes = [node("n1", "nodetool.image.SaveImage", "Save Hero")];
+      expect(deriveJobTitle(wf, nodes, new Set(["n1"]))).toBe("Save Hero");
+    });
+
+    it("uses the node's metadata title when there's no custom title", () => {
+      useMetadataStore.getState().setMetadata({
+        "nodetool.image.Flux": { title: "Flux Image" } as never
+      });
+      const nodes = [node("n1", "nodetool.image.Flux")];
+      expect(deriveJobTitle(wf, nodes, new Set(["n1"]))).toBe("Flux Image");
+      useMetadataStore.getState().setMetadata({});
+    });
+
+    it("falls back to the node type when there's no title or metadata", () => {
+      const nodes = [node("n1", "nodetool.text.Concat")];
+      expect(deriveJobTitle(wf, nodes, new Set(["n1"]))).toBe("Concat");
+    });
+
+    it("uses the workflow name when multiple nodes are selected", () => {
+      const nodes = [node("n1", "a.B"), node("n2", "c.D")];
+      expect(deriveJobTitle(wf, nodes, new Set(["n1", "n2"]))).toBe("My Flow");
+    });
+  });
+
+  describe("run", () => {
+    it.each(["connecting", "running", "paused", "suspended"] as const)(
+      "submits a queued run_job while state is %s without disturbing the active run",
+      async (state) => {
+        store.setState({ state, job_id: "job-active" });
+
+        await store.getState().run({}, testWorkflow, [], []);
+
+        // The queued run is sent to the backend (which persists + queues it),
+        // but the active run's display state is left untouched and no new
+        // connection handshake is forced.
+        expect(globalWebSocketManager.ensureConnection).not.toHaveBeenCalled();
+        expect(globalWebSocketManager.send).toHaveBeenCalledTimes(1);
+        expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "run_job", command: "run_job" })
+        );
+        expect(store.getState().state).toBe(state);
+      }
+    );
+
+    it("submits each run while busy", async () => {
+      store.setState({ state: "running", job_id: "job-active" });
+
+      await store.getState().run({ n: 1 }, testWorkflow, [], []);
+      await store.getState().run({ n: 2 }, testWorkflow, [], []);
+
+      expect(globalWebSocketManager.send).toHaveBeenCalledTimes(2);
+    });
+
+    it("cancel transitions to the cancelled state", async () => {
+      store.setState({ state: "running", job_id: "job-active" });
+
+      await store.getState().cancel();
+
+      expect(store.getState().state).toBe("cancelled");
+    });
+
+    it("submits both the active and the queued run when called consecutively", async () => {
+      let resolveConnection!: () => void;
+      (globalWebSocketManager.ensureConnection as jest.Mock).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveConnection = resolve;
+          })
+      );
+
+      const firstRunPromise = store.getState().run({}, testWorkflow, [], []);
+      expect(store.getState().state).toBe("connecting");
+      const secondRunPromise = store.getState().run({}, testWorkflow, [], []);
+
+      // run() awaits an async browser-eligibility check before opening the
+      // socket; flush microtasks so the (server-bound) active run reaches
+      // ensureConnection and exposes its resolver.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      resolveConnection();
+      await Promise.all([firstRunPromise, secondRunPromise]);
+
+      // The first run owns the connection handshake; the second is submitted
+      // as a queued run. Both reach the backend as run_job commands.
+      expect(globalWebSocketManager.ensureConnection).toHaveBeenCalledTimes(1);
+      expect(globalWebSocketManager.send).toHaveBeenCalledTimes(2);
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "run_job",
+          command: "run_job"
+        })
+      );
+    });
+
+    it("claims the run synchronously so an immediate second run() queues", () => {
+      // The claim (job_id + state "connecting") must land before any await so
+      // a concurrent run() can't also see "idle" and clobber the first claim.
+      const promise = store.getState().run({}, testWorkflow, [], []);
+      expect(store.getState().state).toBe("connecting");
+      expect(store.getState().job_id).toBe("test-job-id-123");
+      return promise;
+    });
+
+    it("does not treat a live in-browser run as stuck when the socket is closed", async () => {
+      (globalWebSocketManager.isConnectionOpen as jest.Mock).mockReturnValueOnce(
+        false
+      );
+      store.setState({
+        state: "running",
+        job_id: "job-browser",
+        isBrowserRun: true
+      });
+
+      await store.getState().run({}, testWorkflow, [], []);
+
+      // The new run is queued behind the browser run instead of hijacking it.
+      expect(store.getState().job_id).toBe("job-browser");
+      expect(store.getState().state).toBe("running");
+      expect(globalWebSocketManager.send).toHaveBeenCalledTimes(1);
+    });
+
+    it("recovers a stuck server run when the socket is closed", async () => {
+      (globalWebSocketManager.isConnectionOpen as jest.Mock).mockReturnValueOnce(
+        false
+      );
+      store.setState({
+        state: "running",
+        job_id: "job-server",
+        isBrowserRun: false
+      });
+      randomUUIDMock.mockReturnValueOnce("job-recovered");
+
+      const jobId = await store.getState().run({}, testWorkflow, [], []);
+
+      expect(jobId).toBe("job-recovered");
+      expect(store.getState().job_id).toBe("job-recovered");
+    });
+
+    it("allows starting a new run after state returns to idle", async () => {
+      await store.getState().run({}, testWorkflow, [], []);
+      expect(globalWebSocketManager.send).toHaveBeenCalledTimes(1);
+
+      store.setState({ state: "idle" });
+
+      await store.getState().run({}, testWorkflow, [], []);
+      expect(globalWebSocketManager.send).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("run() return value", () => {
+    it("returns the job_id it created for a fresh run", async () => {
+      randomUUIDMock.mockReturnValueOnce("job-fresh");
+
+      const jobId = await store.getState().run({}, testWorkflow, [], []);
+
+      expect(jobId).toBe("job-fresh");
+      expect(store.getState().job_id).toBe("job-fresh");
+    });
+
+    it("returns the queued run's id (not the active one) when busy", async () => {
+      // A run is already in flight. Callers (sketch/timeline layer generation)
+      // need run() to hand back the NEW queued job's id so they subscribe to
+      // the right job. Before the fix run() returned void and callers fell
+      // back to runnerStore.job_id — the *previous* run's id — which stranded
+      // the queued job's updates and left its layer stuck "running".
+      store.setState({ state: "running", job_id: "job-active" });
+      randomUUIDMock.mockReturnValueOnce("job-queued");
+
+      const jobId = await store.getState().run({}, testWorkflow, [], []);
+
+      expect(jobId).toBe("job-queued");
+      // The queued run reached the backend under that same id.
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "run_job",
+          data: expect.objectContaining({ job_id: "job-queued" })
+        })
+      );
+      // The active run's tracked job_id is left untouched.
+      expect(store.getState().job_id).toBe("job-active");
+    });
+
+    it("passes the concurrent flag into the run_job payload when requested", async () => {
+      randomUUIDMock.mockReturnValueOnce("job-c");
+      await store.getState().run({}, testWorkflow, [], [], undefined, undefined, true);
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "run_job",
+          data: expect.objectContaining({ concurrent: true })
+        })
+      );
+    });
+
+    it("sends the app operation so the ledger row records which one ran", async () => {
+      randomUUIDMock.mockReturnValueOnce("job-op");
+      await store
+        .getState()
+        .run({}, testWorkflow, [], [], undefined, undefined, undefined, undefined, {
+          application: { id: "app-1", version: 2 },
+          operationId: "draft"
+        });
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "run_job",
+          data: expect.objectContaining({
+            application_id: "app-1",
+            application_version: 2,
+            operation_id: "draft"
+          })
+        })
+      );
+    });
+
+    it("sends a null operation for a run no app started", async () => {
+      randomUUIDMock.mockReturnValueOnce("job-no-op");
+      await store.getState().run({}, testWorkflow, [], []);
+      expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "run_job",
+          data: expect.objectContaining({ operation_id: null })
+        })
+      );
+    });
+  });
+});

@@ -1,0 +1,382 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import React, { memo, useCallback, useMemo } from "react";
+import { Tooltip, Text, Divider, MOTION, BORDER_RADIUS, FONT_WEIGHT, SPACING, getSpacingPx } from "../ui_primitives";
+import { NodeMetadata } from "../../stores/ApiTypes";
+import { colorForType, descriptionForType } from "../../config/data_types";
+import { hexToRgba } from "../../utils/ColorUtils";
+import { TOOLTIP_ENTER_DELAY } from "../../config/constants";
+import useNodeMenuStore from "../../stores/NodeMenuStore";
+import { titleizeString } from "../../utils/titleizeString";
+import { formatNodeDocumentation } from "../../stores/formatNodeDocumentation";
+import { HighlightText } from "../ui_primitives";
+import {
+  formatFalUnitPricingShort,
+  formatFalUnitPricingTooltip,
+  isFalVagueBillingSummary
+} from "../../utils/formatFalUnitPricing";
+import KieCreditsFooter from "../node/KieCreditsFooter";
+import { isKieNodeMetadata } from "../../utils/isKieNode";
+import {
+  formatKieUnitPricingShort,
+  formatKieUnitPricingTooltip,
+  isKieVagueBillingSummary,
+} from "../../utils/formatKieUnitPricing";
+import isEqual from "../../utils/isEqual";
+
+interface NodeInfoProps {
+  nodeMetadata: NodeMetadata;
+  showConnections?: boolean;
+  menuWidth?: number;
+}
+
+const nodeInfoStyles = (theme: Theme) =>
+  css({
+    display: "flex",
+    flexDirection: "column",
+    overflowY: "auto",
+    gap: ".5em",
+    padding: "0.75em 1em 1em 1em",
+    maxHeight: "55vh",
+    position: "relative",
+    ".node-title": {
+      color: theme.vars.palette.text.primary,
+      marginBottom: "0.25em"
+    },
+    ".title-container": {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      minHeight: "1em"
+    },
+    ".status-container": {
+      display: "flex",
+      alignItems: "center"
+    },
+    h4: {
+      color: theme.vars.palette.text.secondary
+    },
+    ".replicate-status": {
+      fontWeight: FONT_WEIGHT.normal,
+      width: "fit-content",
+      color: theme.vars.palette.grey[0],
+      display: "inline-flex",
+      alignItems: "center",
+      padding: "0.25em 0.5em",
+      borderRadius: BORDER_RADIUS.sm,
+      height: "1.5em"
+    },
+    ".replicate-status.online": {
+      backgroundColor: "success.main"
+    },
+    ".replicate-status.offline": {
+      backgroundColor: "error.main"
+    },
+    ".node-description": {
+      fontWeight: FONT_WEIGHT.normal,
+      fontSize: "var(--fontSizeSmall)",
+      color: theme.vars.palette.text.primary,
+      whiteSpace: "pre-wrap",
+      marginBottom: ".5em",
+      display: "block",
+      "& span": {
+        display: "inline-block",
+        position: "static",
+        height: "auto",
+        maxHeight: "none",
+        lineHeight: "1.3em"
+      }
+    },
+    ".node-tags span": {
+      fontWeight: FONT_WEIGHT.medium,
+      fontSize: theme.fontSizeSmaller,
+      color: theme.vars.palette.text.secondary,
+      backgroundColor: theme.vars.palette.action.hover,
+      border: `1px solid ${theme.vars.palette.divider}`,
+      borderRadius: BORDER_RADIUS.sm,
+      padding: `${getSpacingPx(SPACING.xs)} ${getSpacingPx(SPACING.md)}`,
+      textTransform: "uppercase",
+      display: "inline-block",
+      cursor: "pointer",
+      marginRight: ".5em",
+      transition: `background-color ${MOTION.normal}`,
+      "&:hover": {
+        backgroundColor: theme.vars.palette.action.selected
+      }
+    },
+    ".node-usecases": {
+      fontSize: "var(--fontSizeSmaller)",
+      fontWeight: FONT_WEIGHT.normal,
+      color: theme.vars.palette.text.secondary,
+      lineHeight: "1.3em",
+      ul: {
+        margin: "0.5em 0",
+        paddingLeft: "0"
+      },
+      li: {
+        position: "relative",
+        marginBottom: "0.25em",
+        paddingLeft: "1.5em",
+        listStyleType: "none",
+        "&::before": {
+          content: '"•"',
+          position: "absolute",
+          left: "0.5em",
+          color: theme.vars.palette.text.secondary
+        }
+      }
+    },
+    ".inputs-outputs": {
+      paddingBottom: "1em"
+    },
+    ".inputs-outputs h4": {
+      fontFamily: theme.fontFamily2,
+      fontSize: "var(--fontSizeNormal)",
+      lineHeight: "2em",
+      color: theme.vars.palette.text.secondary,
+      textTransform: "uppercase",
+      letterSpacing: "0.5px"
+    },
+    ".inputs, .outputs": {
+      display: "flex",
+      justifyContent: "space-between",
+      flexDirection: "column",
+      gap: 0
+    },
+    ".inputs-outputs .item": {
+      padding: ".25em 0 .25em .5em",
+      display: "flex",
+      justifyContent: "space-between",
+      fontFamily: theme.fontFamily2,
+      fontSize: "var(--fontSizeSmall)",
+      flexDirection: "row",
+      gap: ".5em",
+      cursor: "default"
+    },
+    ".inputs-outputs .item:nth-of-type(odd)": {
+      backgroundColor: theme.vars.palette.action.hover
+    },
+    ".inputs-outputs .item .type": {
+      color: theme.vars.palette.text.primary,
+      textAlign: "right",
+      borderRight: `4px solid ${theme.vars.palette.divider}`,
+      paddingRight: ".5em"
+    },
+    ".inputs-outputs .item .property": {
+      color: theme.vars.palette.text.secondary
+    },
+    ".inputs-outputs .item .property.description": {
+      color: theme.vars.palette.text.primary
+    },
+    ".preview-image": {
+      width: "100%",
+      height: "auto",
+      minHeight: "200px",
+      maxHeight: "320px",
+      objectFit: "contain"
+    }
+  });
+
+const NodeInfo: React.FC<NodeInfoProps> = ({
+  nodeMetadata,
+  menuWidth = 300,
+  showConnections = true
+}) => {
+  const searchTerm = useNodeMenuStore((state) => state.searchTerm);
+  const setSearchTerm = useNodeMenuStore((state) => state.setSearchTerm);
+
+  const description = useMemo(
+    () =>
+      formatNodeDocumentation(
+        nodeMetadata?.description || "",
+        searchTerm,
+        nodeMetadata.searchInfo
+      ),
+    [nodeMetadata, searchTerm]
+  );
+
+  const handleTagClick = useCallback(
+    (tag: string) => () => {
+      setSearchTerm(tag.trim());
+    },
+    [setSearchTerm]
+  );
+
+  const renderTags = (tags: string = "") => {
+    return tags?.split(",").map((tag) => {
+      const trimmedTag = tag.trim();
+      const handler = handleTagClick(trimmedTag);
+      return (
+        <span
+          onClick={handler}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handler();
+            }
+          }}
+          key={trimmedTag}
+          role="button"
+          tabIndex={0}
+          className="tag"
+        >
+          {trimmedTag}
+        </span>
+      );
+    });
+  };
+
+  const theme = useTheme();
+  return (
+    <div css={nodeInfoStyles(theme)} style={{ width: menuWidth }}>
+      <div className="title-container">
+        <Text className="node-title">
+          {titleizeString(nodeMetadata.title)}
+        </Text>
+      </div>
+      <div className="node-description">
+        <HighlightText
+          text={description.description}
+          query={searchTerm}
+          matchStyle="primary"
+        />
+      </div>
+      <Text className="node-tags">
+        {renderTags(description.tags.join(", "))}
+      </Text>
+      <Text component="div" className="node-usecases">
+        {description.useCases.raw && (
+          <>
+            <HighlightText
+              text={description.useCases.raw}
+              query={searchTerm}
+              matchStyle="primary"
+              isBulletList={true}
+            />
+          </>
+        )}
+      </Text>
+
+      <Divider sx={{ opacity: 0.5, margin: ".1em 0" }} />
+
+      {nodeMetadata.fal_unit_pricing && (
+        <Tooltip
+          delay={TOOLTIP_ENTER_DELAY}
+          placement="top-start"
+          title={
+            <Text sx={{ whiteSpace: "pre-line" }}>
+              {formatFalUnitPricingTooltip(nodeMetadata.fal_unit_pricing)}
+            </Text>
+          }
+        >
+          <Text
+            size="small"
+            weight={600}
+            sx={{
+              color: isFalVagueBillingSummary(nodeMetadata.fal_unit_pricing)
+                ? theme.vars.palette.warning.main
+                : theme.vars.palette.success.main,
+              cursor: "default"
+            }}
+          >
+            FAL: {formatFalUnitPricingShort(nodeMetadata.fal_unit_pricing)}
+          </Text>
+        </Tooltip>
+      )}
+
+      {isKieNodeMetadata(nodeMetadata) && nodeMetadata.kie_unit_pricing && (
+        <Tooltip
+          delay={TOOLTIP_ENTER_DELAY}
+          placement="top-start"
+          title={
+            <Text sx={{ whiteSpace: "pre-line" }}>
+              {formatKieUnitPricingTooltip(nodeMetadata.kie_unit_pricing)}
+            </Text>
+          }
+        >
+          <Text
+            size="small"
+            weight={600}
+            sx={{
+              color: isKieVagueBillingSummary(nodeMetadata.kie_unit_pricing)
+                ? theme.vars.palette.warning.main
+                : theme.vars.palette.success.main,
+              cursor: "default"
+            }}
+          >
+            KIE: {formatKieUnitPricingShort(nodeMetadata.kie_unit_pricing)}
+          </Text>
+        </Tooltip>
+      )}
+
+      {isKieNodeMetadata(nodeMetadata) && !nodeMetadata.kie_unit_pricing && (
+        <KieCreditsFooter metadata={nodeMetadata} selected variant="inline" />
+      )}
+
+      {showConnections && (
+        <div className="inputs-outputs">
+          <div className="inputs">
+            <Text size="big">Inputs</Text>
+            {nodeMetadata.properties.map((property) => (
+              <div key={property.name} className="item">
+                <Tooltip
+                  delay={TOOLTIP_ENTER_DELAY}
+                  placement="top-start"
+                  title={property.description}
+                >
+                  <Text
+                    className={
+                      property.description ? "property description" : "property"
+                    }
+                  >
+                    {property.name}
+                  </Text>
+                </Tooltip>
+                <Tooltip
+                  delay={TOOLTIP_ENTER_DELAY}
+                  placement="top-end"
+                  title={descriptionForType(property.type.type || "")}
+                >
+                  <Text
+                    className="type"
+                    style={{
+                      borderColor: hexToRgba(colorForType(property.type.type), 0.4)
+                    }}
+                  >
+                    {property.type.type}
+                  </Text>
+                </Tooltip>
+              </div>
+            ))}
+          </div>
+          <div className="outputs">
+            <Text size="big">Outputs</Text>
+            {nodeMetadata.outputs.map((property) => (
+              <div key={property.name} className="item">
+                <Text className="property">{property.name}</Text>
+                <Tooltip
+                  delay={TOOLTIP_ENTER_DELAY}
+                  placement="top-end"
+                  title={descriptionForType(property.type.type || "")}
+                >
+                  <Text
+                    className="type"
+                    style={{
+                      borderColor: hexToRgba(colorForType(property.type.type), 0.4)
+                    }}
+                  >
+                    {property.type.type}
+                  </Text>
+                </Tooltip>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default memo(NodeInfo, isEqual);

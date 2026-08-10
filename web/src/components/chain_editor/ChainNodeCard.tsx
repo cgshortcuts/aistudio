@@ -1,0 +1,272 @@
+/** @jsxImportSource @emotion/react */
+import React, { memo, useMemo } from "react";
+import { css, keyframes } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+
+import {
+  Collapse,
+  MOTION,
+  BORDER_RADIUS,
+  LinearProgress,
+  FlexRow,
+  FlexColumn,
+  Text,
+  Divider,
+  ToolbarIconButton,
+  Box,
+  reducedMotion,
+  activateOnKey
+} from "../ui_primitives";
+import { PREVIEW_NODE_TYPE } from "../../constants/nodeTypes";
+import { getOutputFromResult } from "../node/outputResult";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import { ChainNodeProperties } from "./ChainNodeProperties";
+import { OutputSelector } from "./OutputSelector";
+import OutputRenderer from "../node/OutputRenderer";
+import {
+  useNodeStatus,
+  useNodeProgress,
+  useNodeResultValue
+} from "../../hooks/nodes/useNodeExecState";
+import type { ChainNode, InputSource } from "./chainTypes";
+
+interface ChainNodeCardProps {
+  node: ChainNode;
+  index: number;
+  totalNodes: number;
+  workflowId: string | null;
+  previousNodes: ChainNode[];
+  onToggleExpanded: () => void;
+  onUpdateProperty: (name: string, value: unknown) => void;
+  onSetOutput: (name: string) => void;
+  onSetInputMapping: (inputName: string, source: InputSource | null) => void;
+  onRemove: () => void;
+  onDuplicate: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+}
+
+const NS_COLORS: Record<string, string> = {
+  text: "#3B82F6", image: "#8B5CF6", audio: "#EC4899", video: "#F97316",
+  math: "#10B981", list: "#06B6D4", logic: "#F59E0B", input: "#6366F1",
+  output: "#14B8A6", llm: "#8B5CF6", agents: "#F43F5E", http: "#0EA5E9", data: "#84CC16",
+};
+
+function getNsColor(ns: string): string {
+  return NS_COLORS[ns.split(".").pop()?.toLowerCase() ?? ""] ?? "#6B7280";
+}
+
+function formatNs(ns: string): string {
+  const parts = ns.split(".");
+  return parts.length > 1 ? parts.slice(1).join(" / ") : ns;
+}
+
+const pulseGlow = keyframes`
+  0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+  50% { box-shadow: 0 0 8px 2px currentColor; }
+`;
+
+const runningCardStyles = (nsColor: string) =>
+  css({
+    borderColor: `${nsColor}80 !important`,
+    animation: `${pulseGlow} ${MOTION.pulse} infinite`,
+    ...reducedMotion({ animation: "none" }),
+    color: `${nsColor}60`,
+  });
+
+const completedCardStyles = (theme: Theme) =>
+  css({
+    borderColor: `${theme.vars.palette.success.main} !important`,
+    transition: `border-color ${MOTION.slow}`,
+  });
+
+const errorCardStyles = (theme: Theme) =>
+  css({
+    borderColor: `${theme.vars.palette.error.main} !important`,
+  });
+
+type NodeStatus = "idle" | "running" | "booting" | "starting" | "completed" | "error";
+
+function useNodeExecState(workflowId: string | null, nodeId: string) {
+  const wf = workflowId ?? "";
+  const status = useNodeStatus(wf, nodeId) as NodeStatus | undefined;
+  const progress = useNodeProgress(wf, nodeId);
+  const result = useNodeResultValue(wf, nodeId);
+
+  const isRunning = status === "running" || status === "booting" || status === "starting";
+  const isCompleted = status === "completed";
+  const isError = status === "error";
+
+  return { status, progress, result, isRunning, isCompleted, isError };
+}
+
+export const ChainNodeCard: React.FC<ChainNodeCardProps> = memo(function ChainNodeCard({
+  node, index, totalNodes, workflowId, previousNodes,
+  onToggleExpanded, onUpdateProperty, onSetOutput, onSetInputMapping,
+  onRemove, onDuplicate, onMoveUp, onMoveDown,
+}) {
+  const theme = useTheme();
+  const nsColor = getNsColor(node.metadata.namespace);
+
+  const { progress, result, isRunning, isCompleted, isError } =
+    useNodeExecState(workflowId, node.id);
+
+  const outputValue = useMemo(() => getOutputFromResult(result), [result]);
+
+  const cardCss = isRunning
+    ? runningCardStyles(nsColor)
+    : isError
+      ? errorCardStyles(theme)
+      : isCompleted
+        ? completedCardStyles(theme)
+        : undefined;
+
+  return (
+    <Box
+      css={cardCss}
+      sx={{
+        borderRadius: BORDER_RADIUS.sm,
+        border: `1.5px solid ${node.expanded ? `${nsColor}50` : theme.vars.palette.divider}`,
+        backgroundColor: theme.vars.palette.background.paper,
+        overflow: "hidden",
+        transition: MOTION.border,
+        boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+      }}
+    >
+      {isRunning && (
+        <LinearProgress
+          variant={progress ? "determinate" : "indeterminate"}
+          value={progress ? (progress.progress / progress.total) * 100 : undefined}
+          sx={{
+            height: 3,
+            backgroundColor: `${nsColor}20`,
+            "& .MuiLinearProgress-bar": {
+              backgroundColor: nsColor,
+            },
+          }}
+        />
+      )}
+
+      <FlexRow
+        gap={1.5}
+        align="center"
+        padding={2}
+        onClick={onToggleExpanded}
+        onKeyDown={activateOnKey(onToggleExpanded)}
+        role="button"
+        tabIndex={0}
+        aria-expanded={node.expanded}
+        aria-label={node.metadata.title}
+        sx={{ cursor: "pointer", "&:hover": { backgroundColor: theme.vars.palette.action.hover } }}
+      >
+        <Box
+          sx={{
+            width: 32, height: 32, borderRadius: BORDER_RADIUS.sm,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            backgroundColor: `${nsColor}18`, color: nsColor,
+            fontSize: "var(--fontSizeSmall)", fontWeight: 600,
+          }}
+        >
+          {index + 1}
+        </Box>
+
+        <FlexColumn gap={0.5} sx={{ flex: 1, minWidth: 0 }}>
+          <Text size="small" weight={600} truncate>{node.metadata.title}</Text>
+          {node.expanded && (
+            <Text size="smaller" weight={600} sx={{ color: nsColor }}>{formatNs(node.metadata.namespace)}</Text>
+          )}
+        </FlexColumn>
+
+        {isCompleted && (
+          <CheckCircleOutlineIcon sx={{ fontSize: 18, color: theme.vars.palette.success.main }} />
+        )}
+        {isError && (
+          <ErrorOutlineIcon sx={{ fontSize: 18, color: theme.vars.palette.error.main }} />
+        )}
+
+        {node.expanded ? (
+          <ExpandLessIcon sx={{ fontSize: 20, color: theme.vars.palette.text.secondary }} />
+        ) : (
+          <ExpandMoreIcon sx={{ fontSize: 20, color: theme.vars.palette.text.secondary }} />
+        )}
+      </FlexRow>
+
+      {/* Result preview (visible even when collapsed) */}
+      {outputValue != null && !isRunning && (
+        <Box
+          sx={{
+            px: 2,
+            pb: 1.5,
+            ...(node.nodeType !== PREVIEW_NODE_TYPE && {
+              maxHeight: 300,
+              overflow: "auto",
+            }),
+          }}
+        >
+          <OutputRenderer value={outputValue} />
+        </Box>
+      )}
+
+      <Collapse in={node.expanded} unmountOnExit>
+        <FlexColumn gap={1.5} sx={{ px: 2, pb: 2 }}>
+          {node.metadata.description && (
+            <Text size="smaller" color="secondary" lineClamp={3}>
+              {node.metadata.description}
+            </Text>
+          )}
+
+          <ChainNodeProperties
+            nodeId={node.id}
+            nodeType={node.nodeType}
+            properties={node.metadata.properties}
+            values={node.properties}
+            inputMappings={node.inputMappings}
+            previousNodes={previousNodes}
+            onUpdate={onUpdateProperty}
+            onSetInputMapping={onSetInputMapping}
+          />
+
+          {node.metadata.outputs.length > 1 && (
+            <Box sx={{ pt: 1 }}>
+              <OutputSelector
+                outputs={node.metadata.outputs}
+                selectedOutput={node.selectedOutput}
+                onSelect={onSetOutput}
+              />
+            </Box>
+          )}
+
+          <Divider spacing="compact" color="subtle" />
+
+          <FlexRow gap={0.5} align="center">
+            <ToolbarIconButton ariaLabel="Move node up" size="small" onClick={onMoveUp} disabled={index === 0} tooltip="Move up" icon={<ArrowUpwardIcon sx={{ fontSize: 18 }} />} />
+            <ToolbarIconButton ariaLabel="Move node down" size="small" onClick={onMoveDown} disabled={index === totalNodes - 1} tooltip="Move down" icon={<ArrowDownwardIcon sx={{ fontSize: 18 }} />} />
+            <Box sx={{ flex: 1 }} />
+            <ToolbarIconButton ariaLabel="Duplicate node" size="small" onClick={onDuplicate} tooltip="Duplicate" icon={<ContentCopyIcon sx={{ fontSize: 18 }} />} />
+            <ToolbarIconButton ariaLabel="Remove node" size="small" onClick={onRemove} tooltip="Remove" icon={<DeleteOutlineIcon sx={{ fontSize: 18 }} />} sx={{ color: theme.vars.palette.error.main }} />
+          </FlexRow>
+        </FlexColumn>
+      </Collapse>
+    </Box>
+  );
+}, (prev, next) => {
+  if (prev.node !== next.node) return false;
+  if (prev.index !== next.index) return false;
+  if (prev.totalNodes !== next.totalNodes) return false;
+  if (prev.workflowId !== next.workflowId) return false;
+  const pn = prev.previousNodes;
+  const nn = next.previousNodes;
+  if (pn.length !== nn.length) return false;
+  for (let i = 0; i < pn.length; i++) {
+    if (pn[i] !== nn[i]) return false;
+  }
+  return true;
+});

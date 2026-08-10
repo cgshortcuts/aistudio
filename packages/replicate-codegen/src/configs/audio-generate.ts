@@ -1,0 +1,87 @@
+import type { ModuleConfig } from "../types.js";
+
+export const audioGenerateConfig: ModuleConfig = {
+  configs: {
+    "zsxkib/realistic-voice-cloning": {
+      className: "RealisticVoiceCloning",
+      returnType: "audio",
+      fieldOverrides: {
+        song_input: { propType: "audio" }
+      }
+    },
+    "afiaka87/tortoise-tts": {
+      className: "TortoiseTTS",
+      returnType: "audio",
+      fieldOverrides: {
+        custom_voice: { propType: "audio" }
+      }
+    },
+    "adirik/styletts2": {
+      className: "StyleTTS2",
+      returnType: "audio",
+      fieldOverrides: {
+        reference: { propType: "audio" }
+      }
+    },
+    "riffusion/riffusion": {
+      className: "Riffusion",
+      returnType: "audio",
+      fieldOverrides: {
+        song_input: { propType: "audio" }
+      }
+    },
+    "meta/musicgen": {
+      className: "MusicGen",
+      returnType: "audio"
+    },
+    "zsxkib/mmaudio": {
+      className: "MMAudio",
+      returnType: "audio"
+    },
+    "google/lyria-2": {
+      className: "Lyria_2",
+      returnType: "audio"
+    },
+    "minimax/speech-2.8-hd": {
+      className: "Speech_2_8_HD",
+      returnType: "audio"
+    },
+    "minimax/music-2.6": {
+      className: "Music_2_6",
+      returnType: "audio"
+    },
+    "minimax/music-cover": {
+      className: "Music_Cover",
+      returnType: "audio",
+      fieldOverrides: { audio: { propType: "audio" } }
+    },
+    "google/lyria-3": {
+      className: "Lyria_3",
+      returnType: "audio",
+      fieldOverrides: { images: { propType: "list[image]" } }
+    },
+    "google/lyria-3-pro": {
+      className: "Lyria_3_Pro",
+      returnType: "audio",
+      fieldOverrides: { images: { propType: "list[image]" } }
+    },
+    "minimax/music-2.5": {
+      className: "Music_2_5",
+      returnType: "audio"
+    },
+    "mirelo/video-to-sfx-v1": {
+      className: "Video_To_Sfx_V1",
+      returnType: "audio",
+      fieldOverrides: { video_path: { propType: "video" } }
+    },
+    "mirelo/video-to-sfx-v1.5": {
+      className: "Video_To_Sfx_V1_5",
+      returnType: "audio",
+      fieldOverrides: { video_path: { propType: "video" } }
+    },
+    "playht/play-dialog": {
+      className: "Play_Dialog",
+      returnType: "audio"
+    }
+  }
+};

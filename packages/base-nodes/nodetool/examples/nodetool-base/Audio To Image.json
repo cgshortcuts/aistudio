@@ -1,0 +1,186 @@
+{
+  "id": "",
+  "access": "private",
+  "created_at": "2026-04-27T10:40:44.797Z",
+  "updated_at": "2026-06-22T12:00:00.000Z",
+  "name": "Audio To Image",
+  "tool_name": null,
+  "description": "Speak an image into existence: no keyboard needed. Whisper transcribes your audio, then FLUX renders the description as an image \u2014 the whole pipeline runs from a single voice note.",
+  "tags": [
+    "huggingface",
+    "multimodal",
+    "start",
+    "example"
+  ],
+  "thumbnail": null,
+  "thumbnail_url": null,
+  "graph": {
+    "edges": [
+      {
+        "id": "485e979e-1aa8-4db7-ba76-de24074df40b",
+        "source": "15",
+        "sourceHandle": "output",
+        "target": "3620653b-0786-4222-9829-3183899984cd",
+        "targetHandle": "audio",
+        "ui_properties": {
+          "className": "audio"
+        },
+        "edge_type": "data"
+      },
+      {
+        "id": "dc68a7d2-4a1e-4743-ae8b-8ef535d711a9",
+        "source": "3620653b-0786-4222-9829-3183899984cd",
+        "sourceHandle": "text",
+        "target": "8b07b1ed-2ce9-4581-993e-efad334ab7a8",
+        "targetHandle": "prompt",
+        "ui_properties": {
+          "className": "str"
+        },
+        "edge_type": "data"
+      },
+      {
+        "id": "edge-output-image",
+        "source": "8b07b1ed-2ce9-4581-993e-efad334ab7a8",
+        "sourceHandle": "output",
+        "target": "output-image",
+        "targetHandle": "value",
+        "ui_properties": null
+      }
+    ],
+    "nodes": [
+      {
+        "id": "comment-intro",
+        "parent_id": null,
+        "type": "nodetool.workflows.base_node.Comment",
+        "data": {
+          "comment": "# \ud83c\udf99\ufe0f Audio To Image\n\nSpeak a description and watch it become an image. Whisper transcribes your audio, then a text-to-image model renders it.\n\n**Pipeline:** Audio \u2192 Whisper \u2192 Text-to-Image\n\n**Try this:** swap the ASR or image model, or change aspect ratio / resolution."
+        },
+        "ui_properties": {
+          "selected": false,
+          "position": {
+            "x": -540,
+            "y": -3
+          },
+          "zIndex": 0,
+          "width": 480,
+          "height": 240,
+          "selectable": true
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "15",
+        "type": "nodetool.input.AudioInput",
+        "data": {
+          "name": "description",
+          "description": "Speak or upload an audio clip describing the image you want.",
+          "value": {
+            "asset_id": "6cba4e9efc884854a3939f62007fd9bf",
+            "uri": "/api/storage/6cba4e9efc884854a3939f62007fd9bf.bin",
+            "type": "audio"
+          }
+        },
+        "ui_properties": {
+          "title": "1\ufe0f\u20e3 Record audio",
+          "selected": false,
+          "position": {
+            "x": 65,
+            "y": 67
+          },
+          "zIndex": 0,
+          "width": 245,
+          "selectable": true,
+          "bypassed": false
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "3620653b-0786-4222-9829-3183899984cd",
+        "type": "nodetool.text.AutomaticSpeechRecognition",
+        "data": {
+          "model": {
+            "type": "asr_model",
+            "provider": "fal_ai",
+            "id": "openai/whisper-large-v3",
+            "name": "Whisper Large v3",
+            "path": null
+          }
+        },
+        "ui_properties": {
+          "title": "2\ufe0f\u20e3 Transcribe",
+          "selected": false,
+          "position": {
+            "x": 340,
+            "y": 146
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "bypassed": false
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "8b07b1ed-2ce9-4581-993e-efad334ab7a8",
+        "type": "nodetool.image.TextToImage",
+        "data": {
+          "model": {
+            "type": "image_model",
+            "provider": "fal_ai",
+            "id": "fal-ai/flux/schnell",
+            "name": "FLUX.1 Schnell",
+            "path": null,
+            "supported_tasks": []
+          },
+          "negative_prompt": "",
+          "aspect_ratio": "1:1",
+          "resolution": "1K",
+          "timeout_seconds": 0
+        },
+        "ui_properties": {
+          "title": "3\ufe0f\u20e3 Generate image",
+          "selected": false,
+          "position": {
+            "x": 650,
+            "y": 86
+          },
+          "zIndex": 0,
+          "width": 384,
+          "selectable": true,
+          "bypassed": false,
+          "height": 400
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "output-image",
+        "type": "nodetool.output.Output",
+        "data": {
+          "name": "image"
+        },
+        "ui_properties": {
+          "position": {
+            "x": 970,
+            "y": 86
+          },
+          "selectable": true
+        }
+      }
+    ]
+  },
+  "input_schema": null,
+  "output_schema": null,
+  "settings": {},
+  "package_name": "nodetool-base",
+  "path": null,
+  "run_mode": "workflow",
+  "workspace_id": null,
+  "required_providers": null,
+  "required_models": null,
+  "html_app": null,
+  "etag": "1df46df6e3b676565bc604b2d9511d56"
+}

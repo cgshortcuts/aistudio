@@ -1,0 +1,1024 @@
+jest.mock("../../components/node_types/PlaceholderNode", () => () => null);
+
+import { Position, Node, Edge, addEdge as xyflowAddEdge } from "@xyflow/react";
+import { createNodeStore } from "../NodeStore";
+import { NodeData } from "../NodeData";
+import useErrorStore from "../ErrorStore";
+import useResultsStore from "../ResultsStore";
+import useMetadataStore from "../MetadataStore";
+import { NodeMetadata } from "../ApiTypes";
+
+const makeNode = (
+  id: string,
+  workflowId: string,
+  type: string = "test"
+): Node<NodeData> => ({
+  id,
+  type,
+  position: { x: 0, y: 0 },
+  targetPosition: Position.Left,
+  data: {
+    properties: {},
+    dynamic_properties: {},
+    selectable: true,
+    workflow_id: workflowId
+  }
+});
+
+const makeEdge = (
+  source: string,
+  target: string,
+  sourceHandle?: string,
+  targetHandle?: string
+): Edge => ({
+  id: `${source}-${target}`,
+  source,
+  target,
+  sourceHandle: sourceHandle || "",
+  targetHandle: targetHandle || ""
+});
+
+const mockMetadata: Record<string, NodeMetadata> = {
+  test: {
+    node_type: "test",
+    title: "Test Node",
+    description: "A test node",
+    namespace: "test",
+    layout: "default",
+    outputs: [
+      {
+        name: "output1",
+        type: {
+          type: "str",
+          optional: false,
+          values: null,
+          type_args: [],
+          type_name: null
+        },
+        stream: false
+      }
+    ],
+    properties: [
+      {
+        name: "input1",
+        type: {
+          type: "str",
+          optional: false,
+          values: null,
+          type_args: [],
+          type_name: null
+        },
+        default: "",
+        title: "Input 1",
+        description: "Test input",
+        required: false
+      }
+    ],
+    supports_dynamic_inputs: false,
+    supports_dynamic_outputs: false,
+    recommended_models: [],
+    is_streaming_output: false,
+            required_settings: []
+  },
+  dynamic_test: {
+    node_type: "dynamic_test",
+    title: "Dynamic Test Node",
+    description: "A dynamic test node",
+    namespace: "test",
+    layout: "default",
+    outputs: [
+      {
+        name: "output1",
+        type: {
+          type: "str",
+          optional: false,
+          values: null,
+          type_args: [],
+          type_name: null
+        },
+        stream: false
+      }
+    ],
+    properties: [],
+    supports_dynamic_inputs: true,
+    supports_dynamic_outputs: true,
+    recommended_models: [],
+    is_streaming_output: false,
+            required_settings: []
+  }
+};
+describe("NodeStore node management", () => {
+  const originalError = useErrorStore.getState();
+  const originalResults = useResultsStore.getState();
+  const originalMetadata = useMetadataStore.getState();
+  let store: ReturnType<typeof createNodeStore>;
+
+  beforeEach(() => {
+    store = createNodeStore();
+    useErrorStore.setState({ ...originalError, clearErrors: jest.fn() }, true);
+    useResultsStore.setState(
+      { ...originalResults, clearResults: jest.fn() },
+      true
+    );
+    useMetadataStore.setState(
+      { ...originalMetadata, metadata: mockMetadata },
+      true
+    );
+  });
+
+  afterEach(() => {
+    useErrorStore.setState(originalError, true);
+    useResultsStore.setState(originalResults, true);
+    useMetadataStore.setState(originalMetadata, true);
+  });
+
+  test("addNode adds a node and sets workflow dirty", () => {
+    const node = makeNode("a", store.getState().workflow.id);
+    store.getState().addNode(node);
+    expect(store.getState().findNode("a")).toBeDefined();
+    expect(store.getState().workflowIsDirty).toBe(true);
+    expect(store.getState().nodes[0].expandParent).toBe(true);
+    expect(store.getState().nodes[0].data.workflow_id).toBe(
+      store.getState().workflow.id
+    );
+  });
+
+  test("addNode ignores duplicate ids", () => {
+    const node = makeNode("a", store.getState().workflow.id);
+    store.getState().addNode(node);
+    store.getState().addNode(node);
+    expect(store.getState().nodes).toHaveLength(1);
+  });
+
+  test("updateNode and updateNodeData", () => {
+    const node = makeNode("a", store.getState().workflow.id);
+    store.getState().addNode(node);
+    store.getState().updateNode("a", { position: { x: 5, y: 5 } });
+    store.getState().updateNodeData("a", { title: "test" });
+    const updated = store.getState().findNode("a")!;
+    expect(updated.position).toEqual({ x: 5, y: 5 });
+    expect(updated.data.title).toBe("test");
+  });
+
+  test("deleteNode removes node and edges", () => {
+    const a = makeNode("a", store.getState().workflow.id);
+    const b = makeNode("b", store.getState().workflow.id);
+    store.getState().addNode(a);
+    store.getState().addNode(b);
+    const edge = makeEdge("a", "b");
+    store.getState().addEdge(edge as Edge);
+    store.getState().deleteNode("a");
+    expect(store.getState().findNode("a")).toBeUndefined();
+    expect(store.getState().edges).toHaveLength(0);
+    // deleteNode now correctly clears errors/results scoped to the
+    // current workflow id with the deleted node IDs as the second arg.
+    const workflowId = store.getState().workflow.id;
+    expect(
+      useErrorStore.getState().clearErrors as jest.Mock
+    ).toHaveBeenCalledWith(workflowId, new Set(["a"]));
+    expect(
+      useResultsStore.getState().clearResults as jest.Mock
+    ).toHaveBeenCalledWith(workflowId, new Set(["a"]));
+  });
+
+  test("undo and redo revert node changes", () => {
+    const node = makeNode("a", store.getState().workflow.id);
+    store.getState().addNode(node);
+    expect(store.getState().nodes).toHaveLength(1);
+    store.temporal.getState().undo();
+    expect(store.getState().nodes).toHaveLength(0);
+    store.temporal.getState().redo();
+    expect(store.getState().nodes).toHaveLength(1);
+  });
+
+  test("selecting nodes should not mark workflow as dirty", () => {
+    // Add some nodes first
+    const nodeA = makeNode("a", store.getState().workflow.id);
+    const nodeB = makeNode("b", store.getState().workflow.id);
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    // Reset dirty state
+    store.getState().setWorkflowDirty(false);
+    expect(store.getState().workflowIsDirty).toBe(false);
+
+    // Select nodes using setSelectedNodes
+    store.getState().setSelectedNodes([nodeA]);
+    expect(store.getState().workflowIsDirty).toBe(false);
+
+    // Select all nodes
+    store.getState().selectAllNodes();
+    expect(store.getState().workflowIsDirty).toBe(false);
+
+    // Verify nodes are actually selected
+    expect(store.getState().getSelectedNodes()).toHaveLength(2);
+  });
+
+  test("onNodesChange with selection changes should not mark workflow as dirty", () => {
+    // Add a node first
+    const node = makeNode("a", store.getState().workflow.id);
+    store.getState().addNode(node);
+
+    // Reset dirty state
+    store.getState().setWorkflowDirty(false);
+    expect(store.getState().workflowIsDirty).toBe(false);
+
+    // Simulate selection change through onNodesChange
+    store.getState().onNodesChange([
+      {
+        type: "select",
+        id: "a",
+        selected: true
+      }
+    ]);
+
+    expect(store.getState().workflowIsDirty).toBe(false);
+  });
+});
+
+describe("Edge Validation", () => {
+  const originalMetadata = useMetadataStore.getState();
+  let store: ReturnType<typeof createNodeStore>;
+
+  beforeEach(() => {
+    store = createNodeStore();
+    useMetadataStore.setState(
+      { ...originalMetadata, metadata: mockMetadata },
+      true
+    );
+  });
+
+  afterEach(() => {
+    useMetadataStore.setState(originalMetadata, true);
+  });
+
+  test("should validate edges with existing nodes and handles", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const validEdge = makeEdge("a", "b", "output1", "input1");
+    store.getState().addEdge(validEdge);
+
+    expect(store.getState().edges).toHaveLength(1);
+    expect(store.getState().edges[0].id).toBe("a-b");
+  });
+
+  test("should reject edges with missing source nodes", () => {
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeB);
+
+    const invalidEdge = makeEdge("nonexistent", "b", "output1", "input1");
+    store.getState().addEdge(invalidEdge);
+
+    expect(store.getState().edges).toHaveLength(0);
+  });
+
+  test("should reject edges with missing target nodes", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeA);
+
+    const invalidEdge = makeEdge("a", "nonexistent", "output1", "input1");
+    store.getState().addEdge(invalidEdge);
+
+    expect(store.getState().edges).toHaveLength(0);
+  });
+
+  test("should handle missing metadata gracefully", () => {
+    // Clear metadata
+    useMetadataStore.setState({ ...originalMetadata, metadata: {} }, true);
+
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const edge = makeEdge("a", "b", "output1", "input1");
+    store.getState().addEdge(edge);
+
+    // Should allow edge when metadata is missing but handles are specified
+    expect(store.getState().edges).toHaveLength(1);
+  });
+
+  test("should support dynamic nodes", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "dynamic_test");
+
+    // Add a dynamic property to the target node
+    nodeB.data.dynamic_properties = { any_handle: "test_value" };
+
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const validEdge = makeEdge("a", "b", "output1", "any_handle");
+    store.getState().addEdge(validEdge);
+
+    expect(store.getState().edges).toHaveLength(1);
+  });
+
+  test("should support dynamic outputs", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "dynamic_test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+
+    // Add a dynamic output to the source node
+    nodeA.data.dynamic_outputs = {
+      dynamic_output: {
+        type: "str",
+        optional: false,
+        values: null,
+        type_args: [],
+        type_name: null
+      }
+    };
+
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const validEdge = makeEdge("a", "b", "dynamic_output", "input1");
+    store.getState().addEdge(validEdge);
+
+    expect(store.getState().edges).toHaveLength(1);
+  });
+
+  test("should reject edges with invalid source handles", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const invalidEdge = makeEdge("a", "b", "invalid_output", "input1");
+    store.getState().addEdge(invalidEdge);
+
+    expect(store.getState().edges).toHaveLength(0);
+  });
+
+  test("should reject edges with invalid target handles on non-dynamic nodes", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const invalidEdge = makeEdge("a", "b", "output1", "invalid_input");
+    store.getState().addEdge(invalidEdge);
+
+    expect(store.getState().edges).toHaveLength(0);
+  });
+
+  // The xyflow mock returns undefined from `addEdge` by default; restore
+  // realistic behavior for the onConnect tests below so the edge actually
+  // lands in state.
+  const restoreAddEdge = () => {
+    (xyflowAddEdge as jest.Mock).mockImplementation(
+      (edge: Edge, edges: Edge[]) => [...edges, edge]
+    );
+  };
+
+  test("onConnect auto-promotes advanced target handles to exposedInputs", () => {
+    restoreAddEdge();
+    // input1 is a property but is NOT in input_fields/inline_fields → advanced.
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    store.getState().onConnect({
+      source: "a",
+      target: "b",
+      sourceHandle: "output1",
+      targetHandle: "input1"
+    });
+
+    expect(store.getState().edges).toHaveLength(1);
+    const target = store.getState().findNode("b");
+    expect(target?.data.exposedInputs).toEqual(["input1"]);
+  });
+
+  test("onConnect allows multiple edges into a list[image] collect handle (fal node)", () => {
+    restoreAddEdge();
+    const imageType = {
+      type: "image",
+      optional: false,
+      values: null,
+      type_args: [],
+      type_name: null
+    };
+    const listImageType = {
+      type: "list",
+      optional: false,
+      values: null,
+      type_args: [imageType],
+      type_name: null
+    };
+    useMetadataStore.setState(
+      {
+        ...useMetadataStore.getState(),
+        metadata: {
+          ...mockMetadata,
+          img_source: {
+            node_type: "img_source",
+            title: "Img",
+            description: "",
+            namespace: "test",
+            layout: "default",
+            outputs: [{ name: "image", type: imageType, stream: false }],
+            properties: [],
+            supports_dynamic_inputs: false,
+            supports_dynamic_outputs: false,
+            recommended_models: [],
+            is_streaming_output: false,
+            required_settings: []
+          } as unknown as NodeMetadata,
+          fal_test: {
+            node_type: "fal_test",
+            title: "Fal",
+            description: "",
+            namespace: "fal",
+            layout: "default",
+            outputs: [{ name: "output", type: imageType, stream: false }],
+            properties: [
+              {
+                name: "images",
+                type: listImageType,
+                default: [],
+                title: "Images",
+                description: "",
+                required: false
+              }
+            ],
+            input_fields: ["images"],
+            supports_dynamic_inputs: false,
+            supports_dynamic_outputs: false,
+            recommended_models: [],
+            is_streaming_output: false,
+            required_settings: []
+          } as unknown as NodeMetadata
+        }
+      },
+      true
+    );
+
+    const src1 = makeNode("s1", store.getState().workflow.id, "img_source");
+    const src2 = makeNode("s2", store.getState().workflow.id, "img_source");
+    const fal = makeNode("f", store.getState().workflow.id, "fal_test");
+    store.getState().addNode(src1);
+    store.getState().addNode(src2);
+    store.getState().addNode(fal);
+
+    store.getState().onConnect({
+      source: "s1",
+      target: "f",
+      sourceHandle: "image",
+      targetHandle: "images"
+    });
+    store.getState().onConnect({
+      source: "s2",
+      target: "f",
+      sourceHandle: "image",
+      targetHandle: "images"
+    });
+
+    const imagesEdges = store
+      .getState()
+      .edges.filter((e) => e.target === "f" && e.targetHandle === "images");
+    expect(imagesEdges).toHaveLength(2);
+  });
+
+  test("onConnect does not promote when target is already a metadata-defined input handle", () => {
+    restoreAddEdge();
+    // Declare input1 in input_fields so its handle is already metadata-driven.
+    useMetadataStore.setState(
+      {
+        ...useMetadataStore.getState(),
+        metadata: {
+          ...mockMetadata,
+          test: { ...mockMetadata.test, input_fields: ["input1"] } as NodeMetadata
+        }
+      },
+      true
+    );
+
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    store.getState().onConnect({
+      source: "a",
+      target: "b",
+      sourceHandle: "output1",
+      targetHandle: "input1"
+    });
+
+    const target = store.getState().findNode("b");
+    expect(target?.data.exposedInputs ?? []).toEqual([]);
+  });
+
+  test("onConnect does not duplicate exposedInputs entries", () => {
+    restoreAddEdge();
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    nodeB.data.exposedInputs = ["input1"];
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    store.getState().onConnect({
+      source: "a",
+      target: "b",
+      sourceHandle: "output1",
+      targetHandle: "input1"
+    });
+
+    const target = store.getState().findNode("b");
+    expect(target?.data.exposedInputs).toEqual(["input1"]);
+  });
+});
+
+describe("Handle Validation with Centralized Functions", () => {
+  const originalMetadata = useMetadataStore.getState();
+  let store: ReturnType<typeof createNodeStore>;
+
+  beforeEach(() => {
+    store = createNodeStore();
+    useMetadataStore.setState(
+      { ...originalMetadata, metadata: mockMetadata },
+      true
+    );
+  });
+
+  afterEach(() => {
+    useMetadataStore.setState(originalMetadata, true);
+  });
+
+  test("validateConnection should use centralized handle functions", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    // Valid connection
+    const validConnection = {
+      source: "a",
+      target: "b",
+      sourceHandle: "output1",
+      targetHandle: "input1"
+    };
+
+    expect(
+      store.getState().validateConnection(validConnection, nodeA, nodeB)
+    ).toBe(true);
+
+    // Invalid source handle
+    const invalidSourceConnection = {
+      source: "a",
+      target: "b",
+      sourceHandle: "invalid_output",
+      targetHandle: "input1"
+    };
+
+    expect(
+      store.getState().validateConnection(invalidSourceConnection, nodeA, nodeB)
+    ).toBe(false);
+
+    // Invalid target handle
+    const invalidTargetConnection = {
+      source: "a",
+      target: "b",
+      sourceHandle: "output1",
+      targetHandle: "invalid_input"
+    };
+
+    expect(
+      store.getState().validateConnection(invalidTargetConnection, nodeA, nodeB)
+    ).toBe(false);
+  });
+
+  test("validateConnection should work with dynamic outputs", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "dynamic_test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+
+    // Add dynamic output
+    nodeA.data.dynamic_outputs = {
+      dynamic_out: {
+        type: "str",
+        optional: false,
+        values: null,
+        type_args: [],
+        type_name: null
+      }
+    };
+
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const connection = {
+      source: "a",
+      target: "b",
+      sourceHandle: "dynamic_out",
+      targetHandle: "input1"
+    };
+
+    expect(store.getState().validateConnection(connection, nodeA, nodeB)).toBe(
+      true
+    );
+  });
+
+  test("validateConnection should work with dynamic properties", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "dynamic_test");
+
+    // Add dynamic property
+    nodeB.data.dynamic_properties = { dynamic_in: "test_value" };
+
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const connection = {
+      source: "a",
+      target: "b",
+      sourceHandle: "output1",
+      targetHandle: "dynamic_in"
+    };
+
+    expect(store.getState().validateConnection(connection, nodeA, nodeB)).toBe(
+      true
+    );
+  });
+
+  test("validateConnection should reject connections to non-existent dynamic properties", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "dynamic_test");
+
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const connection = {
+      source: "a",
+      target: "b",
+      sourceHandle: "output1",
+      targetHandle: "nonexistent_dynamic"
+    };
+
+    expect(store.getState().validateConnection(connection, nodeA, nodeB)).toBe(
+      false
+    );
+  });
+
+  test("should reject duplicate connections", () => {
+    const nodeA = makeNode("a", store.getState().workflow.id, "test");
+    const nodeB = makeNode("b", store.getState().workflow.id, "test");
+    store.getState().addNode(nodeA);
+    store.getState().addNode(nodeB);
+
+    const connection = {
+      source: "a",
+      target: "b",
+      sourceHandle: "output1",
+      targetHandle: "input1",
+      edge_type: "data" as const
+    };
+
+    // First connection should succeed
+    expect(store.getState().validateConnection(connection, nodeA, nodeB)).toBe(
+      true
+    );
+
+    // Add the edge
+    const edge = makeEdge("a", "b", "output1", "input1");
+    store.getState().addEdge(edge);
+
+    // Second identical connection should fail
+    expect(store.getState().validateConnection(connection, nodeA, nodeB)).toBe(
+      false
+    );
+  });
+});
+
+describe("Graph Sanitization", () => {
+  const originalMetadata = useMetadataStore.getState();
+  let store: ReturnType<typeof createNodeStore>;
+
+  beforeEach(() => {
+    useMetadataStore.setState(
+      { ...originalMetadata, metadata: mockMetadata },
+      true
+    );
+  });
+
+  afterEach(() => {
+    useMetadataStore.setState(originalMetadata, true);
+  });
+
+  test("should remove invalid edges and preserve valid ones", () => {
+    const nodeA = makeNode("a", "test-workflow", "test");
+    const nodeB = makeNode("b", "test-workflow", "test");
+    const validEdge = makeEdge("a", "b", "output1", "input1");
+    const invalidEdge = makeEdge("a", "b", "invalid_output", "input1");
+
+    const workflow = {
+      id: "test-workflow",
+      name: "Test Workflow",
+      access: "private" as const,
+      description: "",
+      thumbnail: "",
+      tags: [],
+      settings: {},
+      updated_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      graph: {
+        nodes: [nodeA, nodeB].map((n) => ({
+          id: n.id,
+          type: n.type!,
+          data: n.data.properties,
+          dynamic_properties: {},
+          sync_mode: "automatic",
+          ui_properties: {
+            position: n.position,
+            selected: false,
+            selectable: true
+          }
+        })),
+        edges: [validEdge, invalidEdge].map((e) => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          sourceHandle: e.sourceHandle!,
+          targetHandle: e.targetHandle!,
+          ui_properties: {},
+          edge_type: "data" as const
+        }))
+      }
+    };
+
+    store = createNodeStore(workflow);
+
+    // Should only have the valid edge
+    expect(store.getState().edges).toHaveLength(1);
+    expect(store.getState().edges[0].sourceHandle).toBe("output1");
+    expect(store.getState().edges[0].targetHandle).toBe("input1");
+  });
+
+  test("should report statistics about removed edges", () => {
+    const consoleSpy = jest.spyOn(console, "info").mockImplementation();
+
+    const nodeA = makeNode("a", "test-workflow", "test");
+    const nodeB = makeNode("b", "test-workflow", "test");
+    const invalidEdge1 = makeEdge("a", "b", "invalid_output", "input1");
+    const invalidEdge2 = makeEdge("a", "b", "output1", "invalid_input");
+
+    const workflow = {
+      id: "test-workflow",
+      name: "Test Workflow",
+      access: "private" as const,
+      description: "",
+      thumbnail: "",
+      tags: [],
+      settings: {},
+      updated_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      graph: {
+        nodes: [nodeA, nodeB].map((n) => ({
+          id: n.id,
+          type: n.type!,
+          data: n.data.properties,
+          dynamic_properties: {},
+          sync_mode: "automatic",
+          ui_properties: {
+            position: n.position,
+            selected: false,
+            selectable: true
+          }
+        })),
+        edges: [invalidEdge1, invalidEdge2].map((e) => ({
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          sourceHandle: e.sourceHandle!,
+          targetHandle: e.targetHandle!,
+          ui_properties: {},
+          edge_type: "data" as const
+        }))
+      }
+    };
+
+    store = createNodeStore(workflow);
+
+    expect(store.getState().edges).toHaveLength(0);
+    consoleSpy.mockRestore();
+  });
+});
+
+describe("createNodeStore Type Compatibility", () => {
+  const originalMetadata = useMetadataStore.getState();
+
+  beforeEach(() => {
+    useMetadataStore.setState(
+      { ...originalMetadata, metadata: mockMetadata },
+      true
+    );
+  });
+
+  afterEach(() => {
+    useMetadataStore.setState(originalMetadata, true);
+  });
+
+  test("createNodeStore should work with temporal middleware without type errors", () => {
+    // This test verifies that the temporal middleware types are compatible
+    // with the NodeStore types. Previously, an @ts-expect-error directive was
+    // needed due to type incompatibility between zundo v2 and zustand v4.
+    // This test ensures that the types are now properly compatible.
+    const store = createNodeStore();
+
+    // Verify the store was created successfully
+    expect(store).toBeDefined();
+    expect(store.getState).toBeDefined();
+    expect(store.setState).toBeDefined();
+    expect(store.temporal).toBeDefined();
+  });
+
+  test("createNodeStore with workflow parameter should maintain type safety", () => {
+    const nodeA = makeNode("a", "test-workflow", "test");
+    const nodeB = makeNode("b", "test-workflow", "test");
+
+    const workflow = {
+      id: "test-workflow",
+      name: "Test Workflow",
+      access: "private" as const,
+      description: "",
+      thumbnail: "",
+      tags: [],
+      settings: {},
+      updated_at: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+      graph: {
+        nodes: [nodeA, nodeB].map((n) => ({
+          id: n.id,
+          type: n.type!,
+          data: n.data.properties,
+          dynamic_properties: {},
+          sync_mode: "automatic",
+          ui_properties: {
+            position: n.position,
+            selected: false,
+            selectable: true
+          }
+        })),
+        edges: []
+      }
+    };
+
+    const store = createNodeStore(workflow);
+
+    // Verify the store was created with workflow data
+    expect(store.getState().nodes).toHaveLength(2);
+    expect(store.getState().workflow.id).toBe("test-workflow");
+    expect(store.temporal).toBeDefined();
+  });
+
+  test("temporal middleware should provide undo/redo functionality", () => {
+    const store = createNodeStore();
+
+    // Verify temporal API is available and properly typed
+    expect(store.temporal.getState).toBeDefined();
+    expect(store.temporal.getState().undo).toBeDefined();
+    expect(store.temporal.getState().redo).toBeDefined();
+    expect(store.temporal.getState().clear).toBeDefined();
+  });
+});
+
+describe("Input Node Name Generation", () => {
+  const originalMetadata = useMetadataStore.getState();
+  let store: ReturnType<typeof createNodeStore>;
+
+  const inputNodeMetadata = {
+    node_type: "nodetool.input.StringInput",
+    title: "String Input",
+    description: "A string input node",
+    namespace: "nodetool.input",
+    layout: "default",
+    outputs: [
+      {
+        name: "output",
+        type: {
+          type: "str",
+          optional: false,
+          values: null,
+          type_args: [],
+          type_name: null
+        },
+        stream: false
+      }
+    ],
+    properties: [
+      {
+        name: "name",
+        type: {
+          type: "str",
+          optional: false,
+          values: null,
+          type_args: [],
+          type_name: null
+        },
+        default: "",
+        title: "Name",
+        description: "The name of the input",
+        required: false
+      },
+      {
+        name: "value",
+        type: {
+          type: "str",
+          optional: false,
+          values: null,
+          type_args: [],
+          type_name: null
+        },
+        default: "",
+        title: "Value",
+        description: "The value",
+        required: false
+      }
+    ],
+    supports_dynamic_inputs: false,
+    supports_dynamic_outputs: false,
+    recommended_models: [],
+    is_streaming_output: false,
+            required_settings: []
+  };
+
+  const integerInputMetadata = {
+    ...inputNodeMetadata,
+    node_type: "nodetool.input.IntegerInput",
+    title: "Integer Input"
+  };
+
+  beforeEach(() => {
+    store = createNodeStore();
+    useMetadataStore.setState(
+      {
+        ...originalMetadata,
+        metadata: {
+          ...mockMetadata,
+          "nodetool.input.StringInput": inputNodeMetadata,
+          "nodetool.input.IntegerInput": integerInputMetadata
+        }
+      },
+      true
+    );
+  });
+
+  afterEach(() => {
+    useMetadataStore.setState(originalMetadata, true);
+  });
+
+  test("createNode generates default name for input node with empty name property", () => {
+    const node = store.getState().createNode(
+      inputNodeMetadata as any,
+      { x: 0, y: 0 }
+    );
+
+    expect(node.data.properties.name).toBe("string_input_1");
+  });
+
+  test("createNode respects provided name property for input nodes", () => {
+    const node = store.getState().createNode(
+      inputNodeMetadata as any,
+      { x: 0, y: 0 },
+      { name: "my_custom_name" }
+    );
+
+    expect(node.data.properties.name).toBe("my_custom_name");
+  });
+
+  test("createNode increments name counter for multiple input nodes of same type", () => {
+    const node1 = store.getState().createNode(
+      inputNodeMetadata as any,
+      { x: 0, y: 0 }
+    );
+    store.getState().addNode(node1);
+
+    const node2 = store.getState().createNode(
+      inputNodeMetadata as any,
+      { x: 100, y: 0 }
+    );
+
+    expect(node1.data.properties.name).toBe("string_input_1");
+    expect(node2.data.properties.name).toBe("string_input_2");
+  });
+
+  test("createNode generates different names for different input types", () => {
+    const stringNode = store.getState().createNode(
+      inputNodeMetadata as any,
+      { x: 0, y: 0 }
+    );
+    store.getState().addNode(stringNode);
+
+    const integerNode = store.getState().createNode(
+      integerInputMetadata as any,
+      { x: 100, y: 0 }
+    );
+
+    expect(stringNode.data.properties.name).toBe("string_input_1");
+    expect(integerNode.data.properties.name).toBe("integer_input_1");
+  });
+});

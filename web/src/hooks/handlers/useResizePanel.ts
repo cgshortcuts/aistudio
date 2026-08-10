@@ -1,0 +1,130 @@
+import { useCallback, useEffect, useRef } from "react";
+import { LeftPanelView, usePanelStore } from "../../stores/PanelStore";
+import { useShallow } from "zustand/react/shallow";
+const DEFAULT_PANEL_SIZE = 400;
+const MIN_DRAG_SIZE = 60;
+const MIN_PANEL_SIZE = 160;
+const MAX_PANEL_SIZE = 800;
+
+export const useResizePanel = (panelPosition: "left" | "right" = "left") => {
+  const panel = usePanelStore(useShallow((state) => state.panel));
+  const startDragX = useRef(0);
+  const startDragSize = useRef(0);
+
+  const actions = usePanelStore(
+    useShallow(
+      (state) => ({
+        setSize: state.setSize,
+        setVisibility: state.setVisibility,
+        setIsDragging: state.setIsDragging,
+        setHasDragged: state.setHasDragged,
+        handleViewChange: state.handleViewChange
+      })
+    )
+  );
+
+  const ref = useRef<HTMLDivElement>(null);
+  const lastSizeRef = useRef(
+    Math.max(MIN_PANEL_SIZE, panel.panelSize || DEFAULT_PANEL_SIZE)
+  );
+  const dragHandlersRef = useRef<{
+    handleMouseMove?: ((e: MouseEvent) => void);
+    handleMouseUp?: (() => void);
+  }>({});
+  const dragThreshold = 20;
+
+  const handleMouseDown = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      startDragX.current = event.clientX;
+      startDragSize.current = panel.panelSize || DEFAULT_PANEL_SIZE;
+      actions.setIsDragging(true);
+      actions.setHasDragged(false);
+
+      let hasMoved = false;
+
+      const handleMouseMove = (event: MouseEvent) => {
+        hasMoved = true;
+        const deltaX = event.clientX - startDragX.current;
+        let newSize = startDragSize.current;
+
+        if (panelPosition === "left") {
+          newSize = startDragSize.current + deltaX;
+        } else {
+          newSize = startDragSize.current - deltaX;
+        }
+
+        newSize = Math.max(MIN_PANEL_SIZE, Math.min(newSize, MAX_PANEL_SIZE));
+        actions.setSize(newSize);
+
+        if (Math.abs(deltaX) > dragThreshold) {
+          actions.setHasDragged(true);
+        }
+      };
+
+      const handleMouseUp = () => {
+        const currentSize = usePanelStore.getState().panel.panelSize;
+
+        if (!hasMoved) {
+          // If we didn't move, treat it as a click and toggle the current view
+          actions.handleViewChange(panel.activeView);
+        } else {
+          // Clamp to the minimum width rather than collapsing — resizing small
+          // limits the size; closing is done via the toggle button.
+          const finalSize = Math.max(
+            MIN_PANEL_SIZE,
+            currentSize || DEFAULT_PANEL_SIZE
+          );
+
+          if (finalSize !== currentSize) {
+            actions.setSize(finalSize);
+          }
+          actions.setVisibility(true);
+        }
+
+        actions.setIsDragging(false);
+        // Reset hasDragged flag after drag completes
+        // Using requestAnimationFrame ensures this happens after the current frame
+        requestAnimationFrame(() => actions.setHasDragged(false));
+
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+        dragHandlersRef.current = {};
+      };
+
+      dragHandlersRef.current = { handleMouseMove, handleMouseUp };
+
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+
+      event.preventDefault();
+    },
+    [panelPosition, panel.panelSize, panel.activeView, actions]
+  );
+
+  // Update lastSizeRef when panel is open
+  if (panel.panelSize > MIN_DRAG_SIZE) {
+    lastSizeRef.current = panel.panelSize;
+  }
+
+  // Clean up any remaining drag event listeners on unmount
+  useEffect(() => {
+    return () => {
+      const { handleMouseMove, handleMouseUp } = dragHandlersRef.current;
+      if (handleMouseMove) {
+        document.removeEventListener("mousemove", handleMouseMove);
+      }
+      if (handleMouseUp) {
+        document.removeEventListener("mouseup", handleMouseUp);
+      }
+    };
+  }, []);
+
+  return {
+    ref,
+    size: panel.panelSize,
+    isVisible: panel.isVisible,
+    isDragging: panel.isDragging || false,
+    handleMouseDown,
+    handlePanelToggle: (view: LeftPanelView) => actions.handleViewChange(view)
+  };
+};

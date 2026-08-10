@@ -1,0 +1,125 @@
+{
+  "id": "",
+  "access": "private",
+  "created_at": "2026-07-30T14:00:00.000Z",
+  "updated_at": "2026-07-30T14:00:00.000Z",
+  "name": "Last One Wins",
+  "tool_name": null,
+  "description": "Collapse a stream to its final item. The natural end of a loop that refines a value rather than accumulating one.",
+  "tags": [
+    "example"
+  ],
+  "thumbnail": null,
+  "thumbnail_url": null,
+  "graph": {
+    "nodes": [
+      {
+        "id": "l",
+        "type": "nodetool.constant.List",
+        "data": {
+          "value": [
+            "draft",
+            "revised",
+            "final"
+          ]
+        },
+        "ui_properties": {
+          "position": {
+            "x": 0,
+            "y": 120
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "1  Versions"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "z",
+        "type": "nodetool.control.Last",
+        "data": {},
+        "ui_properties": {
+          "position": {
+            "x": 320,
+            "y": 120
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "2  Last"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "out",
+        "type": "nodetool.output.Output",
+        "data": {
+          "name": "final"
+        },
+        "ui_properties": {
+          "position": {
+            "x": 640,
+            "y": 120
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "3  Final"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "fanout1",
+        "type": "nodetool.control.Collection",
+        "data": {
+          "items": []
+        },
+        "ui_properties": {
+          "position": {
+            "x": 160,
+            "y": 240
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "Fan out"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "source": "l",
+        "sourceHandle": "output",
+        "target": "fanout1",
+        "targetHandle": "items"
+      },
+      {
+        "id": "e2",
+        "source": "z",
+        "sourceHandle": "output",
+        "target": "out",
+        "targetHandle": "value"
+      },
+      {
+        "id": "e3",
+        "source": "fanout1",
+        "sourceHandle": "output",
+        "target": "z",
+        "targetHandle": "input_item"
+      }
+    ]
+  },
+  "input_schema": null,
+  "output_schema": null,
+  "settings": null,
+  "package_name": "nodetool-base",
+  "path": null,
+  "run_mode": null
+}

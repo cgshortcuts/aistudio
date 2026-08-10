@@ -1,0 +1,393 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { memo, useState, useCallback, useRef, useMemo } from "react";
+import { NodeProps, Node } from "@xyflow/react";
+import { debounce } from "../../utils/lodashAlternatives";
+import isEqual from "../../utils/isEqual";
+import { Container, MOTION, BORDER_RADIUS, Z_INDEX } from "../ui_primitives";
+import { NodeData } from "../../stores/NodeData";
+import { hexToRgba } from "../../utils/ColorUtils";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import ColorPicker from "../inputs/ColorPicker";
+import NodeResizeHandle from "./NodeResizeHandle";
+import { useNodes } from "../../contexts/NodeContext";
+import LexicalPlugins from "../textEditor/LexicalEditor";
+import {
+  EditorState,
+  LexicalEditor
+} from "lexical";
+import { LexicalComposer } from "@lexical/react/LexicalComposer";
+import type { InitialConfigType } from "@lexical/react/LexicalComposer";
+import ToolbarPlugin from "../textEditor/ToolbarPlugin";
+import { HeadingNode, QuoteNode } from "@lexical/rich-text";
+import { ListItemNode, ListNode } from "@lexical/list";
+import { CodeHighlightNode, CodeNode } from "@lexical/code";
+import { AutoLinkNode, LinkNode } from "@lexical/link";
+import { HorizontalRuleNode } from "../textEditor/HorizontalRuleNode";
+import { $convertFromMarkdownString, TRANSFORMERS } from "@lexical/markdown";
+import { shallow } from "zustand/shallow";
+
+function getContrastTextColor(hexColor: string): string {
+  if (!hexColor) {
+    return "#000000";
+  } // Default to black if no color
+  let hex = hexColor.replace("#", "");
+
+  if (hex.length === 3) {
+    hex = hex
+      .split("")
+      .map((char) => char + char)
+      .join("");
+  }
+
+  if (hex.length !== 6) {
+    return "#000000";
+  }
+
+  const r = parseInt(hex.substring(0, 2), 16);
+  const g = parseInt(hex.substring(2, 4), 16);
+  const b = parseInt(hex.substring(4, 6), 16);
+
+  if (isNaN(r) || isNaN(g) || isNaN(b)) {
+    return "#000000";
+  }
+
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+
+  return luminance > 0.5 ? "#000000" : "#FFFFFF";
+}
+
+const styles = (theme: Theme) =>
+  css({
+    width: "100%",
+    height: "100%",
+    margin: 0,
+    borderRadius: BORDER_RADIUS.sm,
+    padding: "1em .5em",
+    boxSizing: "border-box",
+    boxShadow: "inset 0 0 5px 1px rgba(0, 0, 0, 0.067)",
+    position: "relative",
+    "&:hover": {
+      boxShadow: "inset 0 0 8px 1px rgba(255, 255, 255, 0.067)"
+    },
+    ".text-editor-container": {
+      width: "100%",
+      height: "100%",
+      maxHeight: "fit-content",
+      overflowX: "hidden",
+      "& .editor-input": {
+        height: "unset",
+        paddingTop: ".5em",
+        lineHeight: "1.1em",
+        caretColor: theme.vars.palette.primary.contrastText
+      },
+      "& .editor-input .font-size-large": {
+        fontSize: "var(--fontSizeBig)"
+      }
+    },
+    ".format-toolbar-container": {
+      display: "none",
+      position: "absolute",
+      top: "-35px",
+      left: "0",
+      width: "100%",
+      justifyContent: "center",
+      alignItems: "center",
+      backgroundColor: theme.vars.palette.c_overlay_strong,
+      borderRadius: BORDER_RADIUS.sm,
+      padding: "0.25em 0.5em",
+      zIndex: Z_INDEX.raised,
+      opacity: 0,
+      transition: `opacity ${MOTION.normal} ${200}ms`
+    },
+    "&:hover .format-toolbar-container": {
+      opacity: 1,
+      display: "flex"
+    },
+    ".format-toolbar-actions": {
+      transition: `opacity ${MOTION.normal} ${100}ms`,
+      opacity: 0
+    },
+    "&.focused .format-toolbar-actions": {
+      opacity: 1
+    },
+    "&:hover .color-picker-container": {
+      opacity: 0.5
+    },
+    ".color-picker-container": {
+      position: "absolute",
+      top: ".5em",
+      right: ".5em",
+      opacity: 0,
+      transition: `opacity ${MOTION.normal}`,
+      "&:hover": {
+        opacity: 1
+      }
+    },
+    // Touch devices have no hover: the color picker would never appear, and
+    // the format toolbar only while the comment is being edited.
+    "@media (pointer: coarse)": {
+      ".color-picker-container": {
+        opacity: 1
+      },
+      "&.focused .format-toolbar-container": {
+        opacity: 1,
+        display: "flex"
+      }
+    },
+    ".node-resize-handle": {
+      opacity: 0.6,
+      transition: `opacity ${MOTION.normal}`,
+      "&:hover": {
+        opacity: 1
+      }
+    }
+  });
+
+const initialConfigTemplate = {
+  namespace: "CommentNodeEditor",
+  onError: (error: Error) => {
+    console.error(error);
+  },
+  nodes: [
+    HeadingNode,
+    QuoteNode,
+    ListNode,
+    ListItemNode,
+    CodeNode,
+    CodeHighlightNode,
+    AutoLinkNode,
+    LinkNode,
+    HorizontalRuleNode
+  ] as InitialConfigType["nodes"],
+  theme: {
+    text: {
+      large: "font-size-large",
+      bold: "editor-text-bold",
+      italic: "editor-text-italic",
+      underline: "editor-text-underline",
+      strikethrough: "editor-text-strikethrough",
+      code: "editor-text-code"
+    },
+    link: "editor-link",
+    code: "editor-code",
+    heading: {
+      h1: "editor-heading-h1",
+      h2: "editor-heading-h2",
+      h3: "editor-heading-h3",
+      h4: "editor-heading-h4",
+      h5: "editor-heading-h5",
+      h6: "editor-heading-h6"
+    },
+    list: {
+      ul: "editor-list-ul",
+      ol: "editor-list-ol",
+      listitem: "editor-listitem"
+    },
+    quote: "editor-quote"
+  }
+};
+
+const CommentNode: React.FC<NodeProps<Node<NodeData>>> = (props) => {
+  const theme = useTheme();
+  const cssStyles = useMemo(() => styles(theme), [theme]);
+  const { updateNodeData, updateNode } = useNodes((state) => ({
+    updateNodeData: state.updateNodeData,
+    updateNode: state.updateNode
+  }), shallow);
+  const [color, setColor] = useState<string>(
+    (props.data.properties.comment_color as string) ||
+      theme.vars.palette.c_bg_comment ||
+      "#ffffff"
+  );
+  const containerRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const contentOnFocusRef = useRef<EditorState | null>(null);
+  const [isEditorFocused, setIsEditorFocused] = useState(false);
+  const propsDataRef = useRef(props.data);
+  propsDataRef.current = props.data;
+
+  const editorConfig = useMemo((): InitialConfigType => {
+    const comment = props.data.properties.comment;
+
+    let editorState: InitialConfigType["editorState"];
+
+    // Handle string comments as markdown
+    if (typeof comment === "string" && comment.length > 0) {
+      editorState = (_editor: LexicalEditor) => {
+        $convertFromMarkdownString(comment, TRANSFORMERS);
+      };
+    }
+    // Handle existing Lexical editor state
+    else if (
+      comment &&
+      typeof comment === "object" &&
+      "root" in (comment as Record<string, unknown>) &&
+      Object.keys(comment as Record<string, unknown>).length > 0
+    ) {
+      editorState = JSON.stringify(comment);
+    }
+
+    return {
+      ...initialConfigTemplate,
+      ...(editorState !== undefined ? { editorState } : {})
+    };
+  }, [props.data.properties.comment]);
+
+  const textColor = useMemo(() => {
+    if (color.trim().startsWith("var(")) {
+      return theme.vars.palette.text?.primary || "#000000";
+    }
+    return getContrastTextColor(color);
+  }, [color, theme]);
+
+  const debouncedUpdate = useMemo(
+    () =>
+      debounce((newEditorState: EditorState) => {
+        const currentData = propsDataRef.current;
+        updateNodeData(props.id, {
+          ...currentData,
+          properties: {
+            ...currentData.properties,
+            comment: newEditorState.toJSON()
+          }
+        });
+      }, 500),
+    [props.id, updateNodeData]
+  );
+
+  const handleEditorChange = useCallback(
+    (editorState: EditorState) => {
+      if (!contentOnFocusRef.current) {
+        contentOnFocusRef.current = editorState;
+      }
+      debouncedUpdate(editorState);
+    },
+    [debouncedUpdate]
+  );
+
+  const handleScaleToFit = useCallback(() => {
+    if (editorRef.current && containerRef.current) {
+      const editorDiv = editorRef.current.querySelector(
+        ".editor-input"
+      );
+      if (!(editorDiv instanceof HTMLDivElement)) {
+        return;
+      }
+
+      const containerDiv = containerRef.current;
+
+      const MIN_WIDTH = 100;
+      const MAX_WIDTH = 600;
+      const bufferX = 20;
+
+      const newWidth = editorDiv.scrollWidth + bufferX;
+      const finalWidth = Math.min(Math.max(newWidth, MIN_WIDTH), MAX_WIDTH);
+
+      const currentDOMWidth = containerDiv.offsetWidth;
+      const widthNeedsUpdate = Math.abs(currentDOMWidth - finalWidth) > 1;
+
+      if (widthNeedsUpdate) {
+        updateNode(props.id, {
+          width: finalWidth,
+          height: containerDiv.offsetHeight
+        });
+      }
+
+      requestAnimationFrame(() => {
+        const contentHeight = editorDiv.scrollHeight;
+        const paddingTop =
+          parseFloat(getComputedStyle(containerDiv).paddingTop) || 0;
+        const paddingBottom =
+          parseFloat(getComputedStyle(containerDiv).paddingBottom) || 0;
+        const bufferY = 2;
+        const newHeight = contentHeight + paddingTop + paddingBottom + bufferY;
+        const MIN_HEIGHT = 40;
+        const finalHeight = Math.max(newHeight, MIN_HEIGHT);
+
+        const currentDOMHeight = containerDiv.offsetHeight;
+        const heightNeedsUpdate = Math.abs(currentDOMHeight - finalHeight) > 1;
+
+        if (heightNeedsUpdate || widthNeedsUpdate) {
+          updateNode(props.id, {
+            width: finalWidth,
+            height: finalHeight,
+            data: {
+              ...props.data,
+              size: { width: finalWidth, height: finalHeight }
+            }
+          });
+        }
+      });
+    }
+  }, [props.id, props.data, updateNode]);
+
+  const handleBlur = useCallback(
+    (latestEditorState: EditorState) => {
+      if (
+        contentOnFocusRef.current &&
+        !isEqual(contentOnFocusRef.current.toJSON(), latestEditorState.toJSON())
+      ) {
+        handleScaleToFit();
+      }
+      contentOnFocusRef.current = null;
+    },
+    [handleScaleToFit]
+  );
+
+  const handleColorChange = useCallback(
+    (newColor: string | null) => {
+      setColor(newColor || "");
+      updateNodeData(props.id, {
+        ...props.data,
+        properties: {
+          ...props.data.properties,
+          comment_color: newColor
+        }
+      });
+    },
+    [props.id, props.data, updateNodeData]
+  );
+
+  const containerStyle = useMemo<React.CSSProperties>(() => ({
+    backgroundColor: hexToRgba(color, 0.5),
+    color: textColor,
+    paddingRight: "2em"
+  }), [color, textColor]);
+
+  return (
+    <LexicalComposer initialConfig={editorConfig}>
+      <Container
+        ref={containerRef}
+        style={containerStyle}
+        className={`node-drag-handle comment-node ${
+          props.selected ? "selected" : ""
+        } ${isEditorFocused ? "focused" : ""}`.trim()}
+        css={cssStyles}
+      >
+        <div className="format-toolbar-container">
+          <ToolbarPlugin />
+        </div>
+        <div ref={editorRef} className="text-editor-container">
+          <LexicalPlugins
+            onChange={handleEditorChange}
+            onBlur={handleBlur}
+            onFocusChange={setIsEditorFocused}
+          />
+        </div>
+        <div className="color-picker-container">
+          <ColorPicker
+            color={color}
+            buttonSize={16}
+            onColorChange={handleColorChange}
+            showCustom={false}
+          />
+        </div>
+        <NodeResizeHandle minWidth={30} minHeight={40} />
+      </Container>
+    </LexicalComposer>
+  );
+};
+
+export default memo(CommentNode, isEqual);

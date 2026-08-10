@@ -1,0 +1,80 @@
+{
+  "graph": {
+    "nodes": [
+      {
+        "id": "system",
+        "type": "nodetool.input.StringInput",
+        "name": "system",
+        "data": {
+          "name": "system"
+        }
+      },
+      {
+        "id": "prompt",
+        "type": "nodetool.input.StringInput",
+        "name": "prompt",
+        "data": {
+          "name": "prompt"
+        }
+      },
+      {
+        "id": "model",
+        "type": "nodetool.input.LanguageModelInput",
+        "name": "model",
+        "data": {
+          "value": {
+            "type": "language_model",
+            "provider": "openai",
+            "id": "gpt-4o",
+            "name": "GPT-4o"
+          },
+          "name": "model"
+        }
+      },
+      {
+        "id": "agent",
+        "type": "nodetool.agents.Agent"
+      },
+      {
+        "id": "sink",
+        "type": "nodetool.control.Reroute",
+        "name": "agent_text"
+      }
+    ],
+    "edges": [
+      {
+        "source": "system",
+        "sourceHandle": "output",
+        "target": "agent",
+        "targetHandle": "system"
+      },
+      {
+        "source": "prompt",
+        "sourceHandle": "output",
+        "target": "agent",
+        "targetHandle": "prompt"
+      },
+      {
+        "source": "model",
+        "sourceHandle": "output",
+        "target": "agent",
+        "targetHandle": "model"
+      },
+      {
+        "source": "agent",
+        "sourceHandle": "text",
+        "target": "sink",
+        "targetHandle": "input_value"
+      }
+    ]
+  },
+  "params": {
+    "system": "You are a concise assistant.",
+    "prompt": "Write one sentence about NodeTool workflows.",
+    "model": {
+      "provider": "openai",
+      "id": "gpt-4o",
+      "name": "GPT-4o"
+    }
+  }
+}

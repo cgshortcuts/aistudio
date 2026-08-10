@@ -1,0 +1,214 @@
+---
+layout: page
+title: "Supported Models"
+description: "Every model NodeTool runs — local engines (llama.cpp, MLX, GGUF) and cloud providers. Generic nodes work across all of them, so swapping a model never changes the graph."
+---
+
+> **The model catalog.** For how to connect a provider, see [Providers](providers.md). For the desktop app's download panel, see [Models Manager](models-manager.md). New here? Start with [Models & Providers](models-and-providers.md).
+
+NodeTool runs models from many providers — proprietary and open. Generic nodes (TextToImage, Agent, RealtimeAgent, ...) work across providers, so swapping a model doesn't change the graph.
+
+## Local inference engines
+
+1,655+ local models across the engines below.
+
+For provider-based local inference (Ollama, vLLM), please refer to the [Providers documentation](providers.md).
+
+### llama.cpp & GGUF Format
+
+**llama.cpp** is a highly optimized C/C++ inference library that enables efficient LLM inference on CPU and GPU hardware using the GGUF format. It supports 1.5-bit through 8-bit integer quantization for significantly reduced memory usage.
+
+**Models**: Supports 300+ GGUF quantized models including Qwen, Llama, Gemma, DeepSeek, and GPT variants.
+
+### MLX Framework (Apple Silicon)
+
+**MLX** is Apple's open-source machine learning framework specifically optimized for Apple Silicon's unified memory architecture. It enables efficient on-device AI for Mac users.
+
+**Capabilities**:
+
+- **LLMs**: Native optimization for Llama, Qwen, Mistral, and others.
+- **Vision**: Multimodal models and FastVLM support.
+- **Image Gen**: FLUX models ported to MLX for faster generation.
+
+### Nunchaku (NVIDIA GPU)
+
+**Nunchaku** is a high-performance inference engine specifically designed for 4-bit diffusion models on NVIDIA GPUs. It implements SVDQuant to maintain visual fidelity while reducing memory usage by 3.6x compared to BF16 models. It is ideal for running large diffusion models (like FLUX.1) on consumer NVIDIA GPUs.
+
+### HuggingFace Transformers
+
+**Transformers** is the standard library for working with ML models across text, vision, audio, and multimodal tasks. It provides access to the HuggingFace Hub with over 500,000 pre-trained models and supports automatic device detection (GPU/Apple Silicon/CPU).
+
+### Comparison Matrix
+
+| Framework        | Throughput | Memory Efficiency | Ease of Use | Best Hardware | Use Case                       |
+| ---------------- | ---------- | ----------------- | ----------- | ------------- | ------------------------------ |
+| **llama.cpp**    | Medium     | Excellent         | Medium      | CPU, GPU      | Quantized models, edge devices |
+| **MLX**          | Good       | Excellent         | Good        | Apple Silicon | Mac, iOS, privacy              |
+| **Nunchaku**     | Excellent  | Excellent         | Medium      | NVIDIA GPU    | High-performance Diffusion     |
+| **Transformers** | Medium     | Good              | Excellent   | Any           | Research, flexibility          |
+
+______________________________________________________________________
+
+## Supported Model Types
+
+NodeTool supports a wide range of model types across different domains. Below is an overview of the supported types and their available execution variants.
+
+### Variants Key
+
+- **Full Precision**: Standard execution using HuggingFace Transformers/Diffusers (supports CUDA, MPS, CPU).
+- **MLX**: Optimized execution for Apple Silicon (M-series chips).
+- **Nunchaku**: High-performance 4-bit quantization for NVIDIA GPUs.
+
+### Image Generation
+
+| Model Type | Description | Variants |
+| :--- | :--- | :--- |
+| **Flux** | Text-to-image generation | ✅ Full Precision<br>✅ MLX<br>✅ Nunchaku |
+| **Flux Fill** | Inpainting/Outpainting for Flux | ✅ Full Precision<br>✅ MLX |
+| **Flux Depth** | Depth-guided generation | ✅ Full Precision<br>✅ MLX |
+| **Flux Redux** | Image variation and mixing | ✅ Full Precision<br>✅ MLX |
+| **Flux Kontext** | Context-aware generation | ✅ Full Precision<br>✅ MLX |
+| **Stable Diffusion XL** | SDXL base and refiner models | ✅ Full Precision<br>✅ Nunchaku |
+| **Stable Diffusion 3** | Latest Stable Diffusion architecture | ✅ Full Precision |
+| **Stable Diffusion** | SD 1.5, 2.1, and variants | ✅ Full Precision |
+| **Qwen Image** | Qwen-based text-to-image | ✅ Full Precision<br>✅ MLX<br>✅ Nunchaku |
+| **Qwen Image Edit** | Instruction-based image editing | ✅ Full Precision<br>✅ MLX |
+| **ControlNet** | Structural guidance (Canny, Depth, etc.) | ✅ Full Precision<br>✅ MLX (Flux) |
+| **Text to Image** | Generic text-to-image models | ✅ Full Precision |
+| **Image to Image** | Image transformation models | ✅ Full Precision |
+| **Inpainting** | Mask-based image editing | ✅ Full Precision |
+
+### Vision & Video
+
+| Model Type | Description | Variants |
+| :--- | :--- | :--- |
+| **Image Text to Text** | Vision-Language Models (VLM) | ✅ Full Precision<br>✅ MLX (Qwen2-VL) |
+| **Visual QA** | Visual Question Answering | ✅ Full Precision |
+| **Document QA** | Document understanding and QA | ✅ Full Precision |
+| **OCR** | Optical Character Recognition (GOT-OCR, etc.) | ✅ Full Precision |
+| **Depth Estimation** | Monocular depth estimation | ✅ Full Precision |
+| **Image Classification** | Categorize images | ✅ Full Precision |
+| **Object Detection** | Detect objects in images | ✅ Full Precision |
+| **Image Segmentation** | Pixel-level segmentation | ✅ Full Precision |
+| **Zero-Shot Detection** | Open-vocabulary detection | ✅ Full Precision |
+| **Mask Generation** | Segment Anything (SAM) variants | ✅ Full Precision |
+| **Video Classification** | Categorize video content | ✅ Full Precision |
+| **Text to Video** | Generate video from text | ✅ Full Precision |
+| **Image to Video** | Animate images | ✅ Full Precision |
+| **Text to 3D** | Generate 3D assets from text | ✅ Full Precision |
+| **Image to 3D** | Generate 3D assets from images | ✅ Full Precision |
+
+### Natural Language Processing
+
+| Model Type | Description | Variants |
+| :--- | :--- | :--- |
+| **Text Generation** | LLMs (Llama, Qwen, Mistral, etc.) | ✅ Full Precision<br>✅ MLX |
+| **Text to Text** | T5, BART, and seq2seq models | ✅ Full Precision |
+| **Summarization** | Text summarization | ✅ Full Precision |
+| **Translation** | Machine translation | ✅ Full Precision |
+| **Question Answering** | Extractive QA | ✅ Full Precision |
+| **Text Classification** | Sentiment analysis, etc. | ✅ Full Precision |
+| **Token Classification** | NER, POS tagging | ✅ Full Precision |
+| **Zero-Shot Class.** | Open-vocabulary classification | ✅ Full Precision |
+| **Sentence Similarity** | Semantic similarity / Embeddings | ✅ Full Precision |
+| **Reranker** | Search result reranking | ✅ Full Precision |
+| **Feature Extraction** | General embeddings | ✅ Full Precision |
+| **Fill Mask** | BERT-style masked modeling | ✅ Full Precision |
+
+### Audio
+
+| Model Type | Description | Variants |
+| :--- | :--- | :--- |
+| **Text to Speech** | Generate speech from text | ✅ Full Precision<br>✅ MLX |
+| **Speech Recognition** | ASR (Whisper, etc.) | ✅ Full Precision<br>✅ MLX |
+| **Audio Classification** | Categorize audio events | ✅ Full Precision |
+| **Voice Activity** | VAD (Silero, etc.) | ✅ Full Precision |
+| **Audio to Audio** | Voice conversion, enhancement | ✅ Full Precision |
+
+### Components & Adapters
+
+| Model Type | Description | Variants |
+| :--- | :--- | :--- |
+| **LoRA** | Low-Rank Adaptation weights | ✅ Full Precision (SD, SDXL, Qwen) |
+| **IP Adapter** | Image Prompt Adapters | ✅ Full Precision |
+| **VAE** | Variational Autoencoders | ✅ Full Precision |
+| **CLIP** | Text/Image Encoders | ✅ Full Precision |
+| **T5 Encoder** | Text Encoders for diffusion | ✅ Full Precision |
+| **RealESRGAN** | Image Upscaling | ✅ Full Precision |
+
+______________________________________________________________________
+
+## Cloud Models
+
+In addition to local models, NodeTool provides access to cloud-based models through provider integrations. These models offer the latest capabilities in video, image, and audio generation.
+
+### Video Generation (Cloud)
+
+| Model | Provider | Key Features | Resolution | Max Duration |
+| :--- | :--- | :--- | :--- | :--- |
+| **Sora 2 Pro** | OpenAI | Realistic motion, refined physics, native audio | 1080p | 15s |
+| **Veo 3.1** | Google | Realistic motion, multi-image refs, synced audio | 1080p | Extended |
+| **Seedance 2.0** | ByteDance | High-quality cinematic video, stable characters | 1080p | Variable |
+| **Runway Gen-3 Alpha** | Runway | Precise motion control, professional fidelity | 1080p | Variable |
+| **Runway Aleph** | Runway | Next-gen Runway video generation | 1080p | Variable |
+| **Luma** | Luma AI | AI-powered video modification and editing | 1080p | Variable |
+| **Grok Imagine** | xAI | Multimodal T2V/I2V with coherent motion | 1080p | Short clips |
+| **Wan 2.6** | Alibaba | Multi-shot, stable characters, affordable | 1080p | Variable |
+| **Hailuo 2.3** | MiniMax | Expressive characters, complex lighting | 1080p+ | Variable |
+| **Kling 3.0** | Kling | Synced speech & effects, audio-visual coherence | 1080p | Variable |
+
+**Access via**: `nodetool.video.TextToVideo`, `nodetool.video.ImageToVideo` nodes
+
+### Image Generation (Cloud)
+
+| Model | Provider | Key Features | Output Quality |
+| :--- | :--- | :--- | :--- |
+| **FLUX.2 Pro** | Black Forest Labs | Photoreal, multi-reference consistency, accurate text | High |
+| **Nano Banana 2.0** | Google | 2K native, 4K scaling, enhanced text & characters | Very High |
+| **GPT Image 2** | OpenAI | Photorealistic generation and instruction-based editing | High |
+| **Ideogram V3** | Ideogram | Exceptional typography, artistic style control | High |
+| **Z-Image Turbo** | Z-AI | Fast generation with strong prompt adherence | High |
+| **Seedream 4.5** | ByteDance | High-fidelity generation and instruction-based editing | High |
+| **Imagen 4** | Google | Ultra-detailed photorealistic images | Very High |
+
+**Access via**: `nodetool.image.TextToImage` node
+
+### Music & Audio Generation (Cloud)
+
+| Model | Provider | Key Features |
+| :--- | :--- | :--- |
+| **Suno** | Suno | Full song creation from text, extend/cover/remix, instrumental support |
+| **ElevenLabs V3 Dialogue** | ElevenLabs | Multi-speaker dialogue with emotional control |
+| **ElevenLabs TTS Turbo 2.5** | ElevenLabs | Ultra-fast, natural text-to-speech |
+| **ElevenLabs Sound Effect** | ElevenLabs | Generate sound effects and ambient audio from text |
+
+**Access via**: `nodetool.audio.TextToSpeech` node; Suno and ElevenLabs advanced features via kie.ai
+
+### Advantages of Cloud Models
+
+- **Latest Technology**: Access to newest architectures and training data
+- **No Local Resources**: Run on any hardware without GPU requirements
+- **Instant Availability**: No download or installation needed
+- **Continuous Updates**: Models improve without local updates
+
+### Considerations
+
+- **API Costs**: Per-generation pricing varies by provider
+- **Internet Required**: Cannot run offline
+- **Data Privacy**: Content is processed on provider servers
+- **Rate Limits**: Subject to provider API quotas
+
+### Cost-Effective Alternative: kie.ai
+
+All the cloud models listed above are available through [kie.ai](https://kie.ai/), an AI provider aggregator that:
+
+- Offers unified access to multiple providers through a single API
+- Often provides competitive or lower pricing than upstream providers
+- Simplifies API key management (one key for all models)
+- Enables easy cost comparison and optimization across providers
+
+**Important**: Many models (ByteDance Seedance, Runway, Luma, xAI Grok Imagine, Alibaba Wan 2.6, Kling 3.0, Ideogram V3, Z-Image Turbo, Suno) currently require kie.ai for access. Models with direct NodeTool API key support include OpenAI Sora 2 Pro, Google Veo 3.1, MiniMax Hailuo 2.3, and OpenAI GPT Image 2.
+
+This can be particularly beneficial for workflows using multiple SOTA models from different providers.
+
+For detailed provider configuration and usage, see the [Providers Guide](providers.md).

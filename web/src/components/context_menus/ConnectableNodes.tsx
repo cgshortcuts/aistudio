@@ -1,0 +1,456 @@
+/** @jsxImportSource @emotion/react */
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { shallow } from "zustand/shallow";
+
+import { css } from "@emotion/react";
+import useConnectableNodesStore, { ConnectableNodesState } from "../../stores/ConnectableNodesStore";
+import { useReactFlow } from "@xyflow/react";
+import { isConnectable, Slugify } from "../../utils/TypeHandler";
+import { NodeMetadata } from "../../stores/ApiTypes";
+import { rankSearchNodes } from "../../utils/nodeSearch";
+
+import ClearIcon from "@mui/icons-material/Clear";
+import SearchIcon from "@mui/icons-material/Search";
+import NodeItem from "../node_menu/NodeItem";
+import {
+  Text,
+  ToolbarIconButton,
+  Box,
+  MOTION,
+  ContextMenu,
+  BORDER_RADIUS,
+  SPACING,
+  getSpacingPx,
+  MenuItem,
+  TextField,
+  InputAdornment
+} from "../ui_primitives";
+import { useNodes } from "../../contexts/NodeContext";
+import { useRecentNodesStore } from "../../stores/RecentNodesStore";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { useAutoFocusEnabled } from "../../hooks/useAutoFocusEnabled";
+
+const NODE_ROW_HEIGHT = 34;
+
+const menuStyles = (theme: Theme) =>
+  css({
+    "& .MuiPaper-root": {
+      height: "70vh",
+      display: "flex",
+      flexDirection: "column",
+      width: "320px",
+      borderRadius: BORDER_RADIUS.xl,
+      backgroundColor: theme.vars.palette.background.paper,
+      border: `1px solid ${theme.vars.palette.divider}`,
+      boxShadow: theme.shadows[8],
+      overflow: "hidden"
+    }
+  });
+
+const scrollableContentStyles = (theme: Theme) =>
+  css({
+    flex: 1,
+    backgroundColor: "transparent",
+    "&.connectable-nodes-content": {
+      minHeight: 0,
+      maxHeight: "calc(70vh - 78px)",
+      padding: "0"
+    },
+    ".node-item-container": {
+      padding: `${getSpacingPx(SPACING.micro)} ${getSpacingPx(SPACING.sm)}`
+    },
+    ".node": {
+      display: "flex",
+      alignItems: "center",
+      margin: 0,
+      padding: `${getSpacingPx(SPACING.xs)} ${getSpacingPx(SPACING.sm)}`,
+      borderRadius: BORDER_RADIUS.md,
+      cursor: "pointer",
+      transition: MOTION.background,
+      ".node-button": {
+        padding: `0 ${getSpacingPx(SPACING.sm)}`,
+        flexGrow: 1,
+        "& .MuiTypography-root": {
+          fontSize: theme.fontSizeSmall,
+          fontWeight: 400
+        }
+      },
+      ".icon-bg": {
+        backgroundColor: `${theme.vars.palette.c_overlay} !important`,
+        borderRadius: BORDER_RADIUS.sm,
+        padding: getSpacingPx(SPACING.micro),
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center"
+      },
+      ".icon-bg svg": {
+        color: theme.vars.palette.grey[400],
+        fontSize: "var(--fontSizeNormal)"
+      }
+    },
+    ".node:hover": {
+      backgroundColor: theme.vars.palette.action.hover
+    },
+    ".node.focused": {
+      color: "var(--palette-primary-main)",
+      backgroundColor: "action.selected",
+      borderRadius: BORDER_RADIUS.md,
+      boxShadow: `inset 0 0 0 1px ${theme.vars.palette.action.selected}`
+    },
+    ".Mui-disabled": {
+      opacity: 1,
+      color: "text.primary"
+    },
+    h4: {
+      padding: "0",
+      textTransform: "uppercase",
+      letterSpacing: "0.5px",
+      fontWeight: 600,
+      opacity: 0.7
+    }
+  });
+
+const fixedHeaderStyles = (theme: Theme) =>
+  css({
+    position: "sticky",
+    top: 0,
+    backgroundColor: theme.vars.palette.background.paper,
+    zIndex: theme.zIndex.modal + 1,
+    borderBottom: `1px solid ${theme.vars.palette.divider}`,
+    "&.connectable-nodes-header": {
+      padding: `${getSpacingPx(SPACING.lg)} ${getSpacingPx(SPACING.xl)}`
+    }
+  });
+
+const searchNodesHelper = (
+  nodes: NodeMetadata[],
+  searchTerm: string,
+  recentNodeTypes: readonly string[]
+): NodeMetadata[] => {
+  return rankSearchNodes(nodes, searchTerm, recentNodeTypes);
+};
+
+const getPreferredConnectableInput = (
+  metadata: NodeMetadata,
+  typeMetadata: NonNullable<ConnectableNodesState["typeMetadata"]>
+) => {
+  const properties = metadata.properties || [];
+  const compatibleProperties = properties.filter((property) =>
+    isConnectable(typeMetadata, property.type, true)
+  );
+
+  if (compatibleProperties.length === 0) {
+    return null;
+  }
+
+  // Prefer a property classified as an input port (the node's "primary"
+  // wired-from-upstream slot); fall back to the first compatible property.
+  const inputFields = metadata.input_fields ?? [];
+  return (
+    compatibleProperties.find((property) =>
+      inputFields.includes(property.name)
+    ) || compatibleProperties[0]
+  );
+};
+
+const ConnectableNodes: React.FC = React.memo(function ConnectableNodes() {
+  const theme = useTheme();
+  const [searchTerm, setSearchTerm] = useState("");
+  const reactFlowInstance = useReactFlow();
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const autoFocusEnabled = useAutoFocusEnabled();
+  const recentNodes = useRecentNodesStore((state) => state.recentNodes);
+  const recentNodeTypes = useMemo(
+    () => recentNodes.map((node) => node.nodeType),
+    [recentNodes]
+  );
+
+  const storeSelector = useCallback(
+    (state: ConnectableNodesState) => ({
+      connectableNodes: state.getConnectableNodes(),
+      typeMetadata: state.typeMetadata,
+      filterType: state.filterType,
+      isVisible: state.isVisible,
+      menuPosition: state.menuPosition,
+      hideMenu: state.hideMenu,
+      sourceHandle: state.sourceHandle,
+      targetHandle: state.targetHandle,
+      nodeId: state.nodeId
+    }),
+    []
+  );
+
+  const {
+    connectableNodes,
+    typeMetadata,
+    filterType,
+    isVisible,
+    menuPosition,
+    hideMenu,
+    sourceHandle,
+    targetHandle,
+    nodeId
+  } = useConnectableNodesStore(storeSelector, shallow);
+
+  const filteredNodes = useMemo(
+    () => searchNodesHelper(connectableNodes, searchTerm, recentNodeTypes),
+    [connectableNodes, recentNodeTypes, searchTerm]
+  );
+
+  const totalCount = filteredNodes.length;
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const virtualizer = useVirtualizer({
+    count: totalCount,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => NODE_ROW_HEIGHT,
+    overscan: theme.virtualScroll.overscan.normal,
+    getItemKey: (index) => filteredNodes[index]?.node_type ?? index
+  });
+
+  const { createNode, addNode, addEdge, generateEdgeId } = useNodes(
+    (state) => ({
+      createNode: state.createNode,
+      addNode: state.addNode,
+      addEdge: state.addEdge,
+      generateEdgeId: state.generateEdgeId
+    }),
+    shallow
+  );
+
+  const createConnectableNode = useCallback(
+    (metadata: NodeMetadata) => {
+      if (!metadata) {return;}
+
+      const newNode = createNode(
+        metadata,
+        reactFlowInstance.screenToFlowPosition({
+          x:
+            filterType === "input"
+              ? (menuPosition?.x || 500) - 50
+              : menuPosition?.x || 0,
+          y: menuPosition?.y || 0
+        })
+      );
+      newNode.width = 200;
+      newNode.height = 200;
+
+      addNode(newNode);
+
+      if (nodeId) {
+        // When filterType is "input", we're looking at nodes with compatible inputs
+        // because we started from an output handle
+        if (filterType === "input" && typeMetadata) {
+          const property = getPreferredConnectableInput(
+            metadata,
+            typeMetadata
+          );
+          if (!property) {return;}
+          const edge = {
+            id: generateEdgeId(),
+            source: nodeId, // FROM existing node
+            target: newNode.id, // TO new node
+            sourceHandle: sourceHandle,
+            targetHandle: property.name,
+            type: "default",
+            className: Slugify(typeMetadata?.type || "")
+          };
+          addEdge(edge);
+        }
+
+        // When filterType is "output", we're looking at nodes with compatible outputs
+        // because we started from an input handle
+        if (filterType === "output" && typeMetadata) {
+          const output =
+            metadata.outputs.length > 0 ? metadata.outputs[0] : null;
+          if (!output) {return;}
+          const edge = {
+            id: generateEdgeId(),
+            source: newNode.id, // FROM new node
+            target: nodeId, // TO existing node
+            sourceHandle: output.name,
+            targetHandle: targetHandle,
+            type: "default",
+            className: Slugify(typeMetadata?.type || "")
+          };
+          addEdge(edge);
+        }
+      }
+    },
+    [
+      reactFlowInstance,
+      nodeId,
+      typeMetadata,
+      filterType,
+      sourceHandle,
+      targetHandle,
+      menuPosition,
+      createNode,
+      addNode,
+      addEdge,
+      generateEdgeId
+    ]
+  );
+
+  const handleSearchChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchTerm(e.target.value);
+  }, []);
+
+  const handleSearchKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      hideMenu();
+    } else {
+      e.stopPropagation();
+    }
+  }, [hideMenu]);
+
+  const handleClearSearch = useCallback(() => {
+    setSearchTerm("");
+  }, []);
+
+  const handleNodeClick = useCallback((nodeMetadata: NodeMetadata) => {
+    createConnectableNode(nodeMetadata);
+    hideMenu();
+  }, [createConnectableNode, hideMenu]);
+
+  const handleDragStart = useCallback(
+    (_node: NodeMetadata, _event: React.DragEvent<HTMLDivElement>) => {},
+    []
+  );
+
+  // Skipped on touch, where the virtual keyboard would cover the menu.
+  useEffect(() => {
+    if (!isVisible || !autoFocusEnabled) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(timeout);
+  }, [isVisible, autoFocusEnabled]);
+
+  if (!menuPosition || !isVisible) {return null;}
+
+  return (
+    <ContextMenu
+      css={menuStyles}
+      open={isVisible}
+      onContextMenu={(event) => event.preventDefault()}
+      position={menuPosition}
+      onClose={hideMenu}
+      transitionDuration={200}
+      slotProps={{
+        paper: {
+            elevation: 0
+        }
+      }}
+    >
+      <Box css={fixedHeaderStyles} className="connectable-nodes-header">
+        <MenuItem sx={{ p: 0, "&:hover": { bgcolor: "transparent" }, cursor: "default" }} disableRipple>
+          <TextField
+            className="connectable-nodes-search"
+            size="small"
+            fullWidth
+            placeholder="Search nodes..."
+            value={searchTerm}
+            onChange={handleSearchChange}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={handleSearchKeyDown}
+            autoFocus={isVisible && autoFocusEnabled}
+            inputRef={searchInputRef}
+            aria-label="Search nodes"
+            sx={{
+                "& .MuiOutlinedInput-root": {
+                    backgroundColor: "action.disabledBackground",
+                    borderRadius: BORDER_RADIUS.lg,
+                    "& .MuiOutlinedInput-notchedOutline": { borderColor: "action.selected" },
+                    "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "action.focus" },
+                    "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: theme.vars.palette.primary.main },
+                }
+            }}
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon
+                      fontSize="small"
+                      sx={{ color: "action.disabled" }}
+                    />
+                  </InputAdornment>
+                ),
+                endAdornment: searchTerm ? (
+                  <InputAdornment position="end">
+                    <ToolbarIconButton
+                      aria-label="clear search"
+                      onClick={handleClearSearch}
+                      size="small"
+                      icon={<ClearIcon sx={{ fontSize: 16 }} />}
+                      nodrag={false}
+                    />
+                  </InputAdornment>
+                ) : null
+              }
+            }}
+          />
+        </MenuItem>
+      </Box>
+
+      <div
+        ref={scrollRef}
+        css={scrollableContentStyles}
+        className="connectable-nodes-content"
+        style={{ overflowY: "auto", overflowX: "hidden" }}
+      >
+        {totalCount === 0 ? (
+          <Box sx={{ p: 3, textAlign: "center", color: "text.secondary" }}>
+            <Text size="small">
+              No nodes match &quot;{searchTerm}&quot;.
+            </Text>
+          </Box>
+        ) : (
+          <div
+            style={{
+              height: virtualizer.getTotalSize(),
+              position: "relative",
+              width: "100%"
+            }}
+          >
+            {virtualizer.getVirtualItems().map((virtualItem) => {
+              const nodeMetadata = filteredNodes[virtualItem.index];
+              if (!nodeMetadata) {
+                return null;
+              }
+
+              return (
+                <div
+                  className="node-item-container"
+                  key={virtualItem.key}
+                  style={{
+                    height: virtualItem.size,
+                    left: 0,
+                    position: "absolute",
+                    top: 0,
+                    transform: `translateY(${virtualItem.start}px)`,
+                    width: "100%"
+                  }}
+                >
+                  <NodeItem
+                    node={nodeMetadata}
+                    onDragStart={handleDragStart}
+                    onClick={handleNodeClick}
+                    showFavoriteButton={false}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </ContextMenu>
+  );
+});
+
+export default ConnectableNodes;

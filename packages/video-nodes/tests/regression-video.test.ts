@@ -1,0 +1,912 @@
+/**
+ * Regression tests for video node implementations.
+ *
+ * These tests verify that video nodes construct correct ffmpeg/ffprobe
+ * commands and use proper filter strings. They mock child_process.execFile
+ * to capture the arguments without requiring ffmpeg to be installed.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { promisify } from "node:util";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+// Capture all execFile calls so we can inspect ffmpeg/ffprobe arguments
+let execFileCalls: Array<{ cmd: string; args: string[] }> = [];
+
+/**
+ * Determine mock response for a given command + args.
+ * Returns {stdout, stderr} for ffprobe, throws for ffmpeg.
+ */
+function mockResponse(
+  cmd: string,
+  args: string[]
+): { stdout: string; stderr: string } {
+  if (cmd === "ffprobe") {
+    const argsStr = args.join(" ");
+    if (
+      argsStr.includes("-show_streams") &&
+      argsStr.includes("-show_format")
+    ) {
+      return {
+        stdout: JSON.stringify({
+          streams: [
+            {
+              codec_type: "video",
+              codec_name: "h264",
+              width: 1920,
+              height: 1080,
+              r_frame_rate: "30000/1001",
+              nb_frames: "300"
+            },
+            { codec_type: "audio" }
+          ],
+          format: { duration: "10.01" }
+        }),
+        stderr: ""
+      };
+    } else if (argsStr.includes("r_frame_rate")) {
+      return { stdout: "30000/1001\n", stderr: "" };
+    } else if (argsStr.includes("format=duration")) {
+      return { stdout: "10.5\n", stderr: "" };
+    }
+    return { stdout: "", stderr: "" };
+  }
+  // ffmpeg — simulate failure (no real temp files)
+  throw new Error("mock ffmpeg: no real execution");
+}
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = (await importOriginal()) as Record<string, unknown>;
+
+  // Build a callback-style execFile that also has a custom promisify symbol.
+  // This matches real Node.js child_process.execFile behavior where
+  // promisify(execFile) returns {stdout, stderr} (not just stdout).
+  const mockExecFile = (
+    cmd: string,
+    args: string[],
+    optionsOrCb: unknown,
+    maybeCb?: unknown
+  ) => {
+    execFileCalls.push({ cmd, args: [...args] });
+    const cb =
+      typeof optionsOrCb === "function"
+        ? (optionsOrCb as (
+            err: Error | null,
+            stdout: string,
+            stderr: string
+          ) => void)
+        : typeof maybeCb === "function"
+          ? (maybeCb as (
+              err: Error | null,
+              stdout: string,
+              stderr: string
+            ) => void)
+          : null;
+    if (cb) {
+      try {
+        const resp = mockResponse(cmd, args);
+        cb(null, resp.stdout, resp.stderr);
+      } catch (err) {
+        cb(err as Error, "", "");
+      }
+    }
+  };
+
+  // Add custom promisify so that promisify(execFile) returns {stdout, stderr}
+  // just like the real Node.js implementation does.
+  (mockExecFile as any)[Symbol.for("nodejs.util.promisify.custom")] = (
+    cmd: string,
+    args: string[],
+    options?: unknown
+  ): Promise<{ stdout: string; stderr: string }> => {
+    execFileCalls.push({ cmd, args: [...args] });
+    try {
+      return Promise.resolve(mockResponse(cmd, args));
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  };
+
+  return {
+    ...original,
+    execFile: mockExecFile
+  };
+});
+
+// We need to import the nodes AFTER mocking child_process
+const {
+  DenoiseVideoNode,
+  StabilizeVideoNode,
+  SharpnessVideoNode,
+  ColorBalanceVideoNode,
+  SetSpeedVideoNode,
+  TransitionVideoNode,
+  FpsNode,
+  GetVideoInfoNode,
+  TrimVideoNode,
+  AddAudioVideoNode,
+  ChromaKeyVideoNode,
+  SaveVideoNode,
+  FrameToVideoNode,
+  ConcatVideoNode
+} = await import("@nodetool-ai/video-nodes");
+
+function videoRef(bytes: number[]) {
+  return {
+    type: "video",
+    uri: "",
+    data: Buffer.from(new Uint8Array(bytes)).toString("base64")
+  };
+}
+
+function audioRef(bytes: number[]) {
+  return {
+    type: "audio",
+    uri: "",
+    data: Buffer.from(new Uint8Array(bytes)).toString("base64")
+  };
+}
+
+/** Find all ffmpeg calls and return their full argument strings */
+function ffmpegCalls(): string[][] {
+  return execFileCalls
+    .filter((c) => c.cmd === "ffmpeg")
+    .map((c) => c.args);
+}
+
+/** Find all ffprobe calls */
+function ffprobeCalls(): string[][] {
+  return execFileCalls
+    .filter((c) => c.cmd === "ffprobe")
+    .map((c) => c.args);
+}
+
+/** Concatenate all args into a single string for easy pattern matching */
+function ffmpegArgString(): string {
+  return ffmpegCalls()
+    .map((a) => a.join(" "))
+    .join("\n");
+}
+
+beforeEach(() => {
+  execFileCalls = [];
+});
+
+// ─── 1. Denoise ────────────────────────────────────────────────────────────────
+
+describe("DenoiseVideoNode — uses nlmeans filter with strength param", () => {
+  it("constructs nlmeans filter, NOT hqdn3d", async () => {
+    const node = new DenoiseVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      strength: 7
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("nlmeans");
+    expect(args).toContain("s=7");
+    expect(args).not.toContain("hqdn3d");
+  });
+
+  it("uses default strength=5 when not specified", async () => {
+    const node = new DenoiseVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4])
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("nlmeans=s=5");
+  });
+});
+
+// ─── 2. Stabilize ──────────────────────────────────────────────────────────────
+
+// `deshake` has no `smooth` option — that belongs to `vidstabtransform`, which
+// needs a libvidstab build we can't assume. The node emitted `deshake=smooth=N`
+// and ffmpeg rejected every invocation with "Option not found". These tests
+// asserted that exact string, so they passed while the node could not run at
+// all: they string-matched the args and never executed ffmpeg. `smoothing` now
+// maps onto deshake's real control, rx/ry, which ffmpeg requires to be a
+// multiple of 16 in 0–64 (0 disables the search, so the floor is 16).
+describe("StabilizeVideoNode — maps smoothing onto deshake rx/ry", () => {
+  it("snaps smoothing to a legal rx/ry step", async () => {
+    const node = new StabilizeVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      smoothing: 15,
+      crop_black: false
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("deshake");
+    expect(args).toContain("rx=16");
+    expect(args).toContain("ry=16");
+    expect(args).not.toContain("smooth=");
+  });
+
+  it("clamps a large smoothing to the 64 ceiling", async () => {
+    const node = new StabilizeVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      smoothing: 200,
+      crop_black: false
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("rx=64");
+    expect(args).toContain("ry=64");
+  });
+
+  it("includes cropdetect and crop when crop_black=true", async () => {
+    const node = new StabilizeVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      smoothing: 10,
+      crop_black: true
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("deshake");
+    expect(args).toContain("rx=16");
+    expect(args).toContain("cropdetect");
+    expect(args).toContain("crop");
+  });
+
+  it("does NOT include cropdetect when crop_black=false", async () => {
+    const node = new StabilizeVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      smoothing: 10,
+      crop_black: false
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("deshake");
+    expect(args).not.toContain("cropdetect");
+  });
+});
+
+// ─── 3. Sharpness ──────────────────────────────────────────────────────────────
+
+describe("SharpnessVideoNode — uses unsharp with both luma and chroma amounts", () => {
+  it("constructs unsharp filter with luma_amount and chroma_amount values", async () => {
+    const node = new SharpnessVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      luma_amount: 1.5,
+      chroma_amount: 0.8
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("unsharp");
+    expect(args).toContain("1.5");
+    expect(args).toContain("0.8");
+    // Must NOT be hardcoded 5:5:1.0
+    expect(args).not.toMatch(/unsharp=5:5:1\.0$/m);
+  });
+
+  it("uses both luma and chroma values, not just luma", async () => {
+    const node = new SharpnessVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      luma_amount: 2.0,
+      chroma_amount: 1.2
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    // Full unsharp format: unsharp=5:5:<luma>:5:5:<chroma>
+    expect(args).toMatch(/unsharp=5:5:2(:.*)?:5:5:1\.2/);
+  });
+});
+
+// ─── 4. ColorBalance ──────────────────────────────────────────────────────────
+
+describe("ColorBalanceVideoNode — uses colorbalance filter with rs/gs/bs", () => {
+  it("constructs colorbalance filter, NOT eq=brightness", async () => {
+    const node = new ColorBalanceVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      red_adjust: 1.5,
+      green_adjust: 0.8,
+      blue_adjust: 1.2
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("colorbalance");
+    expect(args).toContain("rs=");
+    expect(args).toContain("gs=");
+    expect(args).toContain("bs=");
+    expect(args).not.toContain("eq=brightness");
+  });
+
+  it("converts 0-2 range to -1..1 for colorbalance (neutral=0)", async () => {
+    const node = new ColorBalanceVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      red_adjust: 1.0,   // neutral → rs=0
+      green_adjust: 2.0,  // max → gs=1
+      blue_adjust: 0.0    // min → bs=-1
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("rs=0");
+    expect(args).toContain("gs=1");
+    expect(args).toContain("bs=-1");
+  });
+});
+
+// ─── 5. SetSpeed ───────────────────────────────────────────────────────────────
+
+describe("SetSpeedVideoNode — chains atempo for speeds outside 0.5-2.0", () => {
+  it("produces chained atempo filters for speed=4.0 (two stages)", async () => {
+    const node = new SetSpeedVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      speed_factor: 4.0
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    // speed=4 → buildAtempo chains: while remaining>2 push atempo=2.0 and halve,
+    // then push final atempo=<remainder>. For 4.0: atempo=2.0,atempo=2
+    // Must have at least 2 atempo segments
+    const atempoSegments = args.match(/atempo=[0-9.]+/g) || [];
+    expect(atempoSegments.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does NOT use a single clamped atempo for speed=4.0", async () => {
+    const node = new SetSpeedVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      speed_factor: 4.0
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    // Must have multiple chained atempo filters, not just one
+    const atempoSegments = args.match(/atempo=[0-9.]+/g) || [];
+    expect(atempoSegments.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("uses single atempo for speed=1.5 (within 0.5-2.0 range)", async () => {
+    const node = new SetSpeedVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      speed_factor: 1.5
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("atempo=1.5");
+    const atempoSegments = args.match(/atempo=[0-9.]+/g) || [];
+    expect(atempoSegments.length).toBe(1);
+  });
+
+  it("adjusts video PTS inversely to speed", async () => {
+    const node = new SetSpeedVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      speed_factor: 2.0
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    // setpts=0.5*PTS for 2x speed
+    expect(args).toContain("setpts=0.5*PTS");
+  });
+});
+
+// ─── 6. Transition ─────────────────────────────────────────────────────────────
+
+describe("TransitionVideoNode — uses transition_type, not hardcoded fade", () => {
+  it("uses the specified transition_type in xfade filter", async () => {
+    const node = new TransitionVideoNode();
+    node.assign({
+      video_a: videoRef([1, 2, 3, 4]),
+      video_b: videoRef([5, 6, 7, 8]),
+      transition_type: "wipeleft",
+      duration: 1.0
+    });
+    // The mocked ffmpeg always fails, so the node throws — the assertions
+    // below only inspect the captured ffmpeg arguments.
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("transition=wipeleft");
+    // Should NOT hardcode "fade" when wipeleft is specified
+    expect(args).not.toContain("transition=fade");
+  });
+
+  it("computes offset from video_a duration, not hardcoded 0", async () => {
+    const node = new TransitionVideoNode();
+    node.assign({
+      video_a: videoRef([1, 2, 3, 4]),
+      video_b: videoRef([5, 6, 7, 8]),
+      transition_type: "fade",
+      duration: 1.0
+    });
+    await node.process().catch(() => undefined);
+
+    // The mock returns duration=10.5 for ffprobeDuration
+    // offset should be 10.5 - 1.0 = 9.5
+    const args = ffmpegArgString();
+    expect(args).toContain("offset=9.5");
+    expect(args).not.toContain("offset=0");
+  });
+
+  it("probes video_a duration via ffprobe before building filter", async () => {
+    const node = new TransitionVideoNode();
+    node.assign({
+      video_a: videoRef([1, 2, 3, 4]),
+      video_b: videoRef([5, 6, 7, 8]),
+      transition_type: "dissolve",
+      duration: 2.0
+    });
+    await node.process().catch(() => undefined);
+
+    // Should have called ffprobe to get duration
+    const probes = ffprobeCalls();
+    expect(probes.length).toBeGreaterThan(0);
+    const probeArgs = probes.map((a) => a.join(" ")).join("\n");
+    expect(probeArgs).toContain("duration");
+  });
+});
+
+// ─── 7. Fps ────────────────────────────────────────────────────────────────────
+
+describe("FpsNode — does NOT return hardcoded 24", () => {
+  it("calls ffprobe and parses fractional FPS like 30000/1001", async () => {
+    const node = new FpsNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4])
+    });
+    const result = await node.process();
+
+    // Our mock returns "30000/1001" for r_frame_rate queries
+    // 30000/1001 ≈ 29.97
+    const fps = result.output as number;
+    expect(fps).toBeCloseTo(29.97, 1);
+    expect(fps).not.toBe(24);
+  });
+
+  it("invokes ffprobe to determine FPS", async () => {
+    const node = new FpsNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4])
+    });
+    await node.process().catch(() => undefined);
+
+    const probes = ffprobeCalls();
+    expect(probes.length).toBeGreaterThan(0);
+    const probeArgs = probes.map((a) => a.join(" ")).join("\n");
+    expect(probeArgs).toContain("r_frame_rate");
+  });
+
+  it("returns 0 for empty video, not 24", async () => {
+    const node = new FpsNode();
+    node.assign({
+      video: videoRef([])
+    });
+    const result = await node.process();
+    expect(result.output).toBe(0);
+  });
+});
+
+// ─── 8. GetVideoInfo ───────────────────────────────────────────────────────────
+
+describe("GetVideoInfoNode — does NOT return bytes.length / 24000 for duration", () => {
+  it("calls ffprobe and returns parsed metadata", async () => {
+    const node = new GetVideoInfoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4])
+    });
+    const result = await node.process();
+
+    // Our mock returns duration=10.01, width=1920, height=1080, fps=30000/1001
+    expect(result.duration).toBeCloseTo(10.01, 1);
+    expect(result.width).toBe(1920);
+    expect(result.height).toBe(1080);
+    expect(result.codec).toBe("h264");
+    expect(result.has_audio).toBe(true);
+  });
+
+  it("duration does NOT equal bytes.length / 24000", async () => {
+    const bytes = new Array(48000).fill(0);
+    const node = new GetVideoInfoNode();
+    node.assign({
+      video: videoRef(bytes)
+    });
+    const result = await node.process();
+
+    // If duration were bytes.length/24000, it would be 2.0
+    // Our mock returns 10.01 from ffprobe
+    expect(result.duration).not.toBe(bytes.length / 24000);
+    expect(result.duration).toBeCloseTo(10.01, 1);
+  });
+
+  it("parses fractional FPS from r_frame_rate", async () => {
+    const node = new GetVideoInfoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4])
+    });
+    const result = await node.process();
+
+    // 30000/1001 ≈ 29.97
+    const fps = result.fps as number;
+    expect(fps).toBeCloseTo(29.97, 1);
+  });
+
+  it("invokes ffprobe, not manual byte counting", async () => {
+    const node = new GetVideoInfoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4])
+    });
+    await node.process().catch(() => undefined);
+
+    const probes = ffprobeCalls();
+    expect(probes.length).toBeGreaterThan(0);
+    const probeArgs = probes.map((a) => a.join(" ")).join("\n");
+    expect(probeArgs).toContain("show_streams");
+    expect(probeArgs).toContain("show_format");
+  });
+});
+
+// ─── 9. Trim ───────────────────────────────────────────────────────────────────
+
+describe("TrimVideoNode — uses start/end as time values (seconds)", () => {
+  it("passes -ss and -to with time values to ffmpeg", async () => {
+    const node = new TrimVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      start_time: 5.5,
+      end_time: 12.0
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("-ss");
+    expect(args).toContain("5.5");
+    expect(args).toContain("-to");
+    expect(args).toContain("12");
+  });
+
+  it("does NOT use byte offsets for trimming", async () => {
+    const node = new TrimVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4, 5, 6, 7, 8]),
+      start_time: 2,
+      end_time: 5
+    });
+    await node.process().catch(() => undefined);
+
+    const calls = ffmpegCalls();
+    // Should have called ffmpeg (not just sliced bytes)
+    expect(calls.length).toBeGreaterThan(0);
+
+    // The command should use -ss (seek) and -to (end time)
+    const args = ffmpegArgString();
+    expect(args).toContain("-ss");
+    expect(args).toContain("-to");
+  });
+
+  it("omits -to when end_time is -1 (meaning end of video)", async () => {
+    const node = new TrimVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      start_time: 3.0,
+      end_time: -1
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("-ss");
+    expect(args).toContain("3");
+    expect(args).not.toContain("-to");
+  });
+
+  it("uses -c copy for stream copying", async () => {
+    const node = new TrimVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      start_time: 1,
+      end_time: 4
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("-c");
+    expect(args).toContain("copy");
+  });
+});
+
+// ─── 10. AddAudio ──────────────────────────────────────────────────────────────
+
+describe("AddAudioVideoNode — uses volume and mix inputs", () => {
+  it("includes volume in ffmpeg args when mixing", async () => {
+    const node = new AddAudioVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      audio: audioRef([10, 20, 30, 40]),
+      volume: 0.7,
+      mix: true
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    // volume should appear in filter_complex
+    expect(args).toContain("volume=0.7");
+    expect(args).toContain("amix");
+  });
+
+  it("includes volume in ffmpeg args when replacing (non-default volume)", async () => {
+    const node = new AddAudioVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      audio: audioRef([10, 20, 30, 40]),
+      volume: 0.5,
+      mix: false
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    // Volume should be applied even when not mixing
+    expect(args).toContain("volume=0.5");
+  });
+
+  it("maps both video and audio streams", async () => {
+    const node = new AddAudioVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      audio: audioRef([10, 20, 30, 40]),
+      volume: 1.0,
+      mix: false
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("-map");
+    expect(args).toContain("0:v");
+  });
+
+  it("uses amix filter when mix=true", async () => {
+    const node = new AddAudioVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      audio: audioRef([10, 20, 30, 40]),
+      volume: 1.0,
+      mix: true
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("amix");
+    expect(args).toContain("filter_complex");
+  });
+
+  it("does NOT use amix when mix=false (replace mode)", async () => {
+    const node = new AddAudioVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      audio: audioRef([10, 20, 30, 40]),
+      volume: 1.0,
+      mix: false
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).not.toContain("amix");
+  });
+
+  it("loads audio from a file:// URI (async), not just inline data", async () => {
+    // Audio supplied as a URI ref with no inline `data` — the node must load
+    // it via the async loader. With the old synchronous `audioBytes`, the
+    // bytes would be empty and the node would return early WITHOUT calling
+    // ffmpeg. A real temp file backs the URI so audioBytesAsync can read it.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nodetool-aatest-"));
+    const wavPath = path.join(dir, "track.wav");
+    await fs.writeFile(wavPath, Buffer.from([10, 20, 30, 40, 50]));
+    try {
+      const node = new AddAudioVideoNode();
+      node.assign({
+        video: videoRef([1, 2, 3, 4]),
+        audio: { type: "audio", uri: `file://${wavPath}`, data: null },
+        volume: 1.0,
+        mix: false
+      });
+      await node.process().catch(() => undefined);
+
+      // ffmpeg must have been invoked, proving the URI-backed audio loaded.
+      expect(ffmpegCalls().length).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── 11. ChromaKey ───────────────────────────────────────────────────────────
+
+describe("ChromaKeyVideoNode — uses the color ref value, not [object Object]", () => {
+  it("converts key_color.value (#RRGGBB) to ffmpeg's 0x form", async () => {
+    const node = new ChromaKeyVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      key_color: { type: "color", value: "#00FF00" },
+      similarity: 0.3,
+      blend: 0.1
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("colorkey=0x00FF00:0.3:0.1");
+    expect(args).not.toContain("[object Object]");
+  });
+
+  it("honors a non-default key color", async () => {
+    const node = new ChromaKeyVideoNode();
+    node.assign({
+      video: videoRef([1, 2, 3, 4]),
+      key_color: { type: "color", value: "#0000FF" },
+      similarity: 0.2,
+      blend: 0.05
+    });
+    await node.process().catch(() => undefined);
+
+    const args = ffmpegArgString();
+    expect(args).toContain("colorkey=0x0000FF");
+  });
+});
+
+// ─── 12. SaveVideo (folder ref resolution) ───────────────────────────────────
+
+describe("SaveVideoNode — resolves a folder ref object to a path", () => {
+  it("writes under the folder ref's uri, not a [object Object] directory", async () => {
+    const targetDir = await fs.mkdtemp(path.join(os.tmpdir(), "nodetool-savetest-"));
+    const writeSpy = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    const mkdirSpy = vi
+      .spyOn(fs, "mkdir")
+      .mockResolvedValue(undefined as unknown as string);
+    try {
+      const node = new SaveVideoNode();
+      node.assign({
+        video: videoRef([1, 2, 3, 4]),
+        folder: { type: "folder", uri: `file://${targetDir}`, asset_id: null },
+        name: "clip.mp4"
+      });
+      await node.process().catch(() => undefined);
+
+      expect(writeSpy).toHaveBeenCalled();
+      const writtenPath = String(writeSpy.mock.calls[0][0]);
+      expect(writtenPath).not.toContain("[object Object]");
+      expect(writtenPath).toBe(path.join(targetDir, "clip.mp4"));
+    } finally {
+      writeSpy.mockRestore();
+      mkdirSpy.mockRestore();
+      await fs.rm(targetDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ─── 13. FrameToVideo (contiguous numbering) ─────────────────────────────────
+
+describe("FrameToVideoNode — numbers frames contiguously despite gaps", () => {
+  it("skips empty frames without leaving holes in the PNG sequence", async () => {
+    const writeSpy = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    try {
+      const img = (bytes: number[]) => ({
+        type: "image",
+        data: Buffer.from(new Uint8Array(bytes)).toString("base64")
+      });
+      const node = new FrameToVideoNode();
+      // Middle frame is empty (no data) and must be skipped, but the two valid
+      // frames should still be written as frame_000001 and frame_000002.
+      node.assign({
+        frame: [img([1, 2, 3]), { type: "image", data: "" }, img([4, 5, 6])],
+        fps: 24
+      });
+      // The mocked ffmpeg always fails, so the node throws — the assertions
+      // below only inspect the frame files written beforehand.
+      await expect(node.process()).rejects.toThrow(
+        "Combining frames into a video failed"
+      );
+
+      const frameWrites = writeSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((p) => p.includes("frame_"))
+        .map((p) => path.basename(p))
+        .sort();
+      expect(frameWrites).toEqual(["frame_000001.png", "frame_000002.png"]);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  it("feeds in-flight raw-RGBA frames through the rawvideo demuxer, not image2", async () => {
+    const writeSpy = vi.spyOn(fs, "writeFile").mockResolvedValue(undefined);
+    try {
+      // A raw-RGBA ref carries uncompressed pixels — writing them as PNG makes
+      // ffmpeg fail with "Invalid PNG signature". They must go through rawvideo.
+      const rawFrame = (w: number, h: number) => ({
+        type: "image",
+        mimeType: "image/x-raw-rgba",
+        width: w,
+        height: h,
+        data: new Uint8Array(w * h * 4).fill(0x0a)
+      });
+      const node = new FrameToVideoNode();
+      node.assign({ frame: [rawFrame(2, 2), rawFrame(2, 2)], fps: 30 });
+      await expect(node.process()).rejects.toThrow(
+        "Combining frames into a video failed"
+      );
+
+      const args = ffmpegArgString();
+      expect(args).toContain("rawvideo");
+      expect(args).toContain("rgba");
+      expect(args).toContain("2x2");
+      // Must NOT route raw pixels through the PNG image2 demuxer.
+      expect(args).not.toContain("frame_%06d.png");
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+});
+
+// ─── Concat — accepts dynamic single inputs AND list<video> inputs ───────────
+
+describe("ConcatVideoNode — flattens list inputs", () => {
+  function outputBytes(result: Record<string, unknown>): Uint8Array {
+    const out = result.output as { data?: string };
+    return new Uint8Array(Buffer.from(out.data ?? "", "base64"));
+  }
+
+  it("unpacks a single dynamic input holding a list of one video", async () => {
+    const node = new ConcatVideoNode();
+    // One dynamic input wired to a list<video> with a single element. Without
+    // flattening this is treated as one non-video object → empty output.
+    node.setDynamic("videos", [videoRef([1, 2, 3, 4])]);
+
+    const result = await node.process();
+
+    expect(Array.from(outputBytes(result))).toEqual([1, 2, 3, 4]);
+    // Single resolved part → fast path, no ffmpeg invocation.
+    expect(ffmpegCalls()).toHaveLength(0);
+  });
+
+  it("concatenates a list of multiple videos from one input", async () => {
+    const node = new ConcatVideoNode();
+    node.setDynamic("videos", [videoRef([1, 2]), videoRef([3, 4])]);
+
+    // ffmpeg is mocked to throw, but the concat demuxer must be invoked,
+    // proving the list was flattened into multiple parts.
+    await expect(node.process()).rejects.toThrow(/Concatenating videos failed/);
+    expect(ffmpegArgString()).toContain("concat");
+  });
+
+  it("mixes a single-video input with a list input", async () => {
+    const node = new ConcatVideoNode();
+    node.setDynamic("intro", videoRef([1]));
+    node.setDynamic("clips", [videoRef([2]), videoRef([3])]);
+
+    await expect(node.process()).rejects.toThrow(/Concatenating videos failed/);
+    expect(ffmpegArgString()).toContain("concat");
+  });
+
+  it("still concatenates separate single-video inputs (back-compat)", async () => {
+    const node = new ConcatVideoNode();
+    node.setDynamic("a", videoRef([1]));
+    node.setDynamic("b", videoRef([2]));
+
+    await expect(node.process()).rejects.toThrow(/Concatenating videos failed/);
+    expect(ffmpegArgString()).toContain("concat");
+  });
+});

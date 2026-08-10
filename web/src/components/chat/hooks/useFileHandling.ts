@@ -1,0 +1,157 @@
+import { useState, useCallback } from "react";
+import { MessageContent } from "../../../stores/ApiTypes";
+import { DroppedFile, DOC_TYPES_REGEX } from "../types/chat.types";
+import { useNotificationStore } from "../../../stores/NotificationStore";
+
+const generateFileId = () => `file_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+/** Infer MIME type from file extension when the browser doesn't provide one */
+function resolveFileType(file: File): string {
+  if (file.type) return file.type;
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  const mimeMap: Record<string, string> = {
+    jpg: "image/jpeg",
+    jpeg: "image/jpeg",
+    png: "image/png",
+    gif: "image/gif",
+    webp: "image/webp",
+    svg: "image/svg+xml",
+    bmp: "image/bmp",
+    mp4: "video/mp4",
+    webm: "video/webm",
+    mp3: "audio/mpeg",
+    wav: "audio/wav",
+    ogg: "audio/ogg",
+    pdf: "application/pdf"
+  };
+  return ext ? (mimeMap[ext] ?? "application/octet-stream") : "application/octet-stream";
+}
+
+export const useFileHandling = () => {
+  const [droppedFiles, setDroppedFiles] = useState<DroppedFile[]>([]);
+  const addNotification = useNotificationStore((state) => state.addNotification);
+
+  const makeMessageContent = (file: DroppedFile): MessageContent => {
+    // For asset-library drops, send the `asset://<id>.<ext>` reference instead
+    // of the inline bytes — the server resolves it before the provider call.
+    // Local-file drops still ride as a `data:` URI in `dataUri`.
+    const uri = file.assetUri ?? file.dataUri;
+    if (file.type.startsWith("image/")) {
+      return {
+        type: "image_url",
+        image: {
+          type: "image",
+          uri
+        }
+      };
+    } else if (file.type.startsWith("audio/")) {
+      return {
+        type: "audio",
+        audio: {
+          type: "audio",
+          uri
+        }
+      };
+    } else if (file.type.startsWith("video/")) {
+      return {
+        type: "video",
+        video: {
+          type: "video",
+          uri
+        }
+      };
+    } else if (file.type.match(DOC_TYPES_REGEX)) {
+      return {
+        type: "document",
+        document: {
+          type: "document",
+          uri
+        }
+      };
+    } else {
+      return {
+        type: "text",
+        text: file.name
+      };
+    }
+  };
+
+  const addFiles = useCallback(
+    (files: File[]) => {
+      const filePromises = files.map((file) => {
+        const mimeType = resolveFileType(file);
+        return new Promise<DroppedFile>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result !== "string") {
+              reject(new Error(`Unexpected result type for: ${file.name}`));
+              return;
+            }
+            resolve({
+              id: generateFileId(),
+              dataUri: reader.result,
+              type: mimeType,
+              name: file.name
+            });
+          };
+          reader.onerror = () => {
+            reject(new Error(`Failed to read file: ${file.name}`));
+          };
+          reader.readAsDataURL(file);
+        });
+      });
+
+      Promise.allSettled(filePromises).then((results) => {
+        const successfulFiles: DroppedFile[] = [];
+        const failedFiles: string[] = [];
+
+        results.forEach((result, index) => {
+          if (result.status === "fulfilled") {
+            successfulFiles.push(result.value);
+          } else {
+            failedFiles.push(files[index].name);
+          }
+        });
+
+        if (successfulFiles.length > 0) {
+          setDroppedFiles((prev) => [...prev, ...successfulFiles]);
+        }
+
+        if (failedFiles.length > 0) {
+          addNotification({
+            type: "error",
+            content: `Failed to load ${
+              failedFiles.length
+            } file(s): ${failedFiles.join(", ")}`,
+            alert: true
+          });
+        }
+      });
+    },
+    [addNotification]
+  );
+
+  const removeFile = useCallback((id: string) => {
+    setDroppedFiles((files) => files.filter((f) => f.id !== id));
+  }, []);
+
+  const clearFiles = useCallback(() => {
+    setDroppedFiles([]);
+  }, []);
+
+  const getFileContents = useCallback((): MessageContent[] => {
+    return droppedFiles.map(makeMessageContent);
+  }, [droppedFiles]);
+
+  return {
+    droppedFiles,
+    addFiles,
+    removeFile,
+    clearFiles,
+    getFileContents,
+    addDroppedFiles: useCallback((files: DroppedFile[]) => {
+      const filesWithIds = files.map((file) => ({ ...file, id: generateFileId() }));
+      setDroppedFiles((prev) => [...prev, ...filesWithIds]);
+    }, [])
+  };
+};

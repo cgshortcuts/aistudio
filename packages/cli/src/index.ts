@@ -1,0 +1,320 @@
+#!/usr/bin/env node
+/**
+ * nodetool-chat — Entry point.
+ *
+ * Usage:
+ *   nodetool-chat                           # use saved/auto-detected settings
+ *   nodetool-chat --provider anthropic      # override provider
+ *   nodetool-chat --model claude-opus-4-6   # override model
+ *   nodetool-chat --agent                   # start in agent mode
+ *   nodetool-chat --workspace /path/to/dir  # set workspace directory
+ */
+
+import { initTelemetry, shutdownTelemetry } from "@nodetool-ai/runtime";
+import { program } from "commander";
+import { render } from "ink";
+import React from "react";
+import { App } from "./app.js";
+import { loadSettings } from "./settings.js";
+import { runStdinMode } from "./stdin.js";
+import { buildConfiguredProviders, KNOWN_PROVIDERS } from "./providers.js";
+import { initDb, getSecret } from "@nodetool-ai/models";
+import { initMasterKey } from "@nodetool-ai/security";
+import { getDefaultDbPath, configureLogging } from "@nodetool-ai/config";
+import { NodeRegistry } from "@nodetool-ai/node-sdk";
+import { registerBaseNodes } from "@nodetool-ai/base-nodes";
+import {
+  DockerSandboxProvider,
+  SessionStore,
+  type Sandbox
+} from "@nodetool-ai/sandbox";
+import { createSandboxTools } from "@nodetool-ai/sandbox-tools";
+import { randomUUID } from "node:crypto";
+import type { Tool } from "@nodetool-ai/agents";
+
+// Configure logging: in interactive mode, suppress non-error logs to a file
+// so they don't interfere with the Ink TUI. Env vars can still override.
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { mkdirSync } from "node:fs";
+
+if (!process.env["NODETOOL_LOG_LEVEL"]) {
+  process.env["NODETOOL_LOG_LEVEL"] = "error";
+}
+if (!process.env["NODETOOL_LOG_FILE"]) {
+  const logDir = join(homedir(), ".nodetool");
+  mkdirSync(logDir, { recursive: true });
+  process.env["NODETOOL_LOG_FILE"] = join(logDir, "chat.log");
+}
+configureLogging();
+
+program
+  .name("nodetool-chat")
+  .description(
+    "NodeTool interactive chat CLI with multi-provider LLM support and agent mode"
+  )
+  .option(
+    "-p, --provider <provider>",
+    `LLM provider (${KNOWN_PROVIDERS.join(", ")})`
+  )
+  .option("-m, --model <model>", "Model ID")
+  .option(
+    "-a, --agent [mode]",
+    "[deprecated] No-op — every chat session runs the unified loop"
+  )
+  .option("--no-agent", "[deprecated] No-op")
+  .option(
+    "-w, --workspace <path>",
+    "Workspace directory (default: current directory)"
+  )
+  .option("--tools <tools>", "Comma-separated list of enabled tools")
+  .option(
+    "-u, --url <url>",
+    "NodeTool server WebSocket URL (e.g. ws://localhost:7777/ws)"
+  )
+  .option(
+    "--sandbox",
+    "Provision an isolated Docker sandbox and expose its tools (file, shell, browser, desktop, search, messaging) to the agent"
+  )
+  .option(
+    "--no-read-only-search",
+    "Disable the read-only run_search fan-out primitive (on by default)"
+  )
+  .option(
+    "--sandbox-image <image>",
+    "Override the sandbox Docker image (default: ghcr.io/nodetool-ai/nodetool:latest)"
+  )
+  .option(
+    "--trace-file <path>",
+    "Append every LLM/agent/workflow span as JSONL to <path> (analyzer-friendly)"
+  )
+  .option(
+    "--trace-stdout [format]",
+    "Stream spans to stdout: 'pretty' (default, human-readable) or 'json' (JSONL)"
+  )
+  .option(
+    "--no-trace-stdout",
+    "Disable stdout span output (overrides NODETOOL_TRACE_STDOUT)"
+  )
+  .helpOption("-h, --help", "Show help")
+  .version("0.1.0")
+  .parse();
+
+const opts = program.opts<{
+  provider?: string;
+  model?: string;
+  agent?: boolean | string;
+  workspace?: string;
+  tools?: string;
+  url?: string;
+  sandbox?: boolean;
+  sandboxImage?: string;
+  readOnlySearch?: boolean;
+  traceFile?: string;
+  traceStdout?: string | boolean;
+}>();
+
+// Initialize OpenLLMetry before any LLM SDK calls are made. Honors CLI flags
+// and env vars (TRACELOOP_API_KEY, OTEL_EXPORTER_OTLP_ENDPOINT,
+// NODETOOL_TRACE_FILE, NODETOOL_TRACE_STDOUT). No-op if nothing is configured.
+await initTelemetry({
+  ...(opts.traceFile && { traceFile: opts.traceFile }),
+  ...(opts.traceStdout !== undefined && {
+    stdout: parseTraceStdout(opts.traceStdout)
+  })
+});
+
+function parseTraceStdout(v: string | boolean): "pretty" | "json" | false {
+  if (v === false) return false;
+  if (v === true) return "pretty";
+  if (typeof v === "string") {
+    const lower = v.toLowerCase();
+    if (lower === "false" || lower === "0" || lower === "no") return false;
+    if (lower === "json") return "json";
+    if (lower === "pretty" || lower === "true" || lower === "1") return "pretty";
+  }
+  throw new Error(
+    `--trace-stdout must be 'pretty' or 'json' (got ${JSON.stringify(v)})`
+  );
+}
+
+try {
+  initDb(getDefaultDbPath());
+} catch {
+  // DB unavailable — secret lookups will fall back to env vars
+}
+
+// Resolve the master encryption key NOW (before Ink takes over the terminal)
+// so any first-time keychain prompt is visible to the user, and so that the
+// first secret lookup during a chat message doesn't race against keychain
+// initialization. Failures are surfaced clearly to stderr — silently falling
+// back to env-only would mask DB-stored secrets and produce confusing
+// "API_KEY is not configured" errors deep in provider construction.
+try {
+  await initMasterKey();
+} catch (err) {
+  const msg = err instanceof Error ? err.message : String(err);
+  process.stderr.write(
+    `[chat-cli] Could not unlock the secret store: ${msg}\n` +
+      `[chat-cli] Falling back to environment variables for API keys.\n` +
+      `[chat-cli] Tip: set SECRETS_MASTER_KEY or grant keychain access to enable DB-stored secrets.\n`
+  );
+}
+
+// Load persisted settings and merge with CLI flags
+const settings = await loadSettings();
+
+const provider = opts.provider ?? settings.provider;
+const model = opts.model ?? settings.model;
+
+// `--agent` and the persisted `agentMode` setting are deprecated no-ops —
+// every chat session now runs the unified LLM-with-tools loop, and the
+// agent decides for itself whether to decompose via `run_subtask`. The flag
+// is still accepted for backwards compatibility; a warning is emitted when
+// it is used.
+if (opts.agent !== undefined) {
+  // eslint-disable-next-line no-console
+  console.error(
+    "Warning: --agent is deprecated and has no effect — the unified chat agent always runs."
+  );
+}
+
+const workspace = opts.workspace ?? process.cwd();
+const enabledTools = opts.tools
+  ? opts.tools.split(",").map((t) => t.trim())
+  : settings.enabledTools;
+
+// Always-on tools (no credentials needed)
+for (const tool of [
+  "extract_pdf_text",
+  "convert_pdf_to_markdown",
+  "convert_document"
+]) {
+  if (!enabledTools.includes(tool)) enabledTools.push(tool);
+}
+
+// Auto-enable based on available secrets (env or encrypted DB)
+async function autoEnable(key: string, tools: string[]): Promise<void> {
+  const val = process.env[key] ?? (await getSecret(key, "1"));
+  if (val) {
+    for (const tool of tools) {
+      if (!enabledTools.includes(tool)) enabledTools.push(tool);
+    }
+  }
+}
+
+await Promise.all([
+  autoEnable("SERPAPI_API_KEY", [
+    "google_search",
+    "google_news",
+    "google_images"
+  ]),
+  autoEnable("OPENAI_API_KEY", [
+    "openai_web_search",
+    "openai_image_generation",
+    "openai_text_to_speech"
+  ]),
+  autoEnable("DATA_FOR_SEO_LOGIN", ["dataforseo_search", "dataforseo_news"]),
+  autoEnable("IMAP_USERNAME", ["search_email", "archive_email"])
+]);
+
+// --- Sandbox provisioning (optional) ---------------------------------------
+//
+// When `--sandbox` is set we bring up a DockerSandbox for this CLI process,
+// wrap its ToolClient with the agent adapter, and pass the resulting Tool
+// array into the App as `extraTools`. The sandbox is released on exit.
+
+let sandboxStore: SessionStore | null = null;
+let sandboxHandle: Sandbox | null = null;
+let sandboxExtraTools: Tool[] | undefined;
+
+if (opts.sandbox) {
+  const provider_ = new DockerSandboxProvider(
+    opts.sandboxImage ? { defaultImage: opts.sandboxImage } : {}
+  );
+  sandboxStore = new SessionStore({ provider: provider_ });
+  const sessionId = `cli-${randomUUID().slice(0, 8)}`;
+  try {
+    sandboxHandle = await sandboxStore.acquire(sessionId, {
+      workspaceDir: workspace
+    });
+    sandboxExtraTools = createSandboxTools(sandboxHandle.client);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `Failed to provision sandbox: ${err instanceof Error ? err.message : String(err)}`
+    );
+    process.exit(1);
+  }
+
+  const cleanup = async (): Promise<void> => {
+    try {
+      if (sandboxStore) await sandboxStore.close();
+    } catch {
+      // ignore
+    }
+    // Flush buffered OTLP/Traceloop spans before exit.
+    await shutdownTelemetry();
+  };
+  process.on("SIGINT", () => void cleanup().finally(() => process.exit(130)));
+  process.on("SIGTERM", () => void cleanup().finally(() => process.exit(143)));
+  process.on("exit", () => {
+    // Best-effort synchronous cleanup; `release` is async so we just
+    // kick it off and trust Docker to reap containers on daemon shutdown.
+    if (sandboxHandle) void sandboxHandle.release();
+  });
+}
+
+// Build a NodeRegistry once per session for the graph-native agent. Only
+// when running locally (no --url): the WebSocket server has its own
+// registry and doesn't need the CLI to provide one.
+let cliRegistry: NodeRegistry | undefined;
+if (!opts.url) {
+  cliRegistry = new NodeRegistry();
+  registerBaseNodes(cliRegistry);
+}
+
+// Build configured providers unconditionally so `find_model` and the
+// media-generation tools (generate_image, generate_speech, etc.) are
+// available to ANY agent loop — multi-task or graph — even without a
+// registry.
+const cliAgentProviders = await buildConfiguredProviders();
+
+// Stdin mode: activated when stdin is piped (not a TTY)
+if (!process.stdin.isTTY) {
+  try {
+    await runStdinMode({
+      provider,
+      model,
+      workspaceDir: workspace,
+      wsUrl: opts.url,
+      extraTools: sandboxExtraTools,
+      registry: cliRegistry,
+      agentProviders: cliAgentProviders,
+      enableReadOnlySearch: opts.readOnlySearch !== false
+    });
+  } finally {
+    if (sandboxStore) await sandboxStore.close();
+    await shutdownTelemetry();
+  }
+  process.exit(0);
+}
+
+const { waitUntilExit } = render(
+  React.createElement(App, {
+    initialProvider: provider,
+    initialModel: model,
+    enabledTools,
+    workspaceDir: workspace,
+    wsUrl: opts.url,
+    extraTools: sandboxExtraTools,
+    registry: cliRegistry,
+    agentProviders: cliAgentProviders
+  }),
+  { exitOnCtrlC: false }
+);
+
+await waitUntilExit();
+if (sandboxStore) await sandboxStore.close();
+await shutdownTelemetry();
+process.exit(0);

@@ -1,0 +1,232 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import React, { useState, useEffect, useRef, MouseEventHandler, useCallback, memo, useMemo } from "react";
+import { Text, Z_INDEX } from "../ui_primitives";
+import { Asset } from "../../stores/ApiTypes";
+import { getAlphaSurfaceBg } from "../../styles/AlphaSurface";
+
+interface ImageViewerProps {
+  asset?: Asset;
+  url?: string;
+}
+
+const styles = (theme: Theme) =>
+  css({
+    "&": {
+      width: "100%",
+      height: "calc(100% - 120px)",
+      overflow: "hidden",
+      margin: "0",
+      position: "relative",
+      zIndex: Z_INDEX.base,
+      pointerEvents: "auto"
+    },
+    ".image-info": {
+      position: "absolute",
+      bottom: "0",
+      right: theme.spacing(2),
+      zIndex: Z_INDEX.overlay,
+      color: theme.vars.palette.text.primary,
+      textShadow: `${theme.spacing(0, 0, 0.5)} ${theme.vars.palette.background.default}`,
+      textAlign: "right"
+    }
+  });
+
+/**
+ * ImageViewer component, used to display an image viewer for a given asset.
+ *
+ * The viewer supports zooming and panning.
+ */
+const ImageViewer: React.FC<ImageViewerProps> = ({ asset, url }) => {
+  const theme = useTheme();
+  const viewerStyles = styles(theme);
+
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [zoom, setZoom] = useState(1);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [translate, setTranslate] = useState({ x: 0, y: 0 });
+  const [imageWidth, setImageWidth] = useState<number>(0);
+  const [imageHeight, setImageHeight] = useState<number>(0);
+  const maxZoom = 16;
+
+  useEffect(() => {
+    if (imageRef.current) {
+      const img = imageRef.current;
+      img.style.transformOrigin = "center center";
+      img.style.transform = `translate(${translate.x}px, ${translate.y}px) scale(${zoom})`;
+    }
+  }, [zoom, translate]);
+
+  useEffect(() => {
+    if (imageRef.current) {
+      setZoom(1);
+      imageRef.current.style.transform = "translate(0, 0) scale(1)";
+    }
+  }, []);
+
+  const handleWheel = useCallback((event: React.WheelEvent<HTMLDivElement>) => {
+    // event.preventDefault(); // > Unable to preventDefault inside passive event listener invocation.
+    const scaleChange = event.deltaY * -0.003;
+    const rect = imageRef.current?.getBoundingClientRect();
+    if (rect) {
+      const mouseX = event.clientX;
+      const mouseY = event.clientY;
+      const imgCenterX = rect.left + rect.width / 2;
+      const imgCenterY = rect.top + rect.height / 2;
+      const offsetX = mouseX - imgCenterX;
+      const offsetY = mouseY - imgCenterY;
+      const newZoom = Math.min(maxZoom, Math.max(1.0, zoom + scaleChange));
+      const zoomRatio = newZoom / zoom;
+      const translateX = translate.x + offsetX * (1 - zoomRatio);
+      const translateY = translate.y + offsetY * (1 - zoomRatio);
+      setZoom(newZoom);
+      setTranslate({ x: translateX, y: translateY });
+    }
+  }, [zoom, translate]);
+
+  const handleMouseDown = useCallback((event: React.MouseEvent<HTMLImageElement>) => {
+    event.preventDefault();
+    imageRef.current?.style.setProperty("cursor", "grabbing");
+    const { clientX, clientY } = event;
+    setPosition({ x: clientX, y: clientY });
+  }, []);
+
+  const handleMouseMove = useCallback((event: React.MouseEvent<HTMLImageElement>) => {
+    if (event.buttons !== 1) {return;}
+    const { clientX, clientY } = event;
+    const deltaX = clientX - position.x;
+    const deltaY = clientY - position.y;
+
+    setTranslate((prevTranslate) => {
+      const img = imageRef.current;
+      if (img) {
+        const marginX = window.innerWidth * 0.5;
+        const marginY = window.innerHeight * 0.5;
+
+        const bounds = {
+          minX: window.innerWidth / 2 - (img.naturalWidth * zoom) / 2 - marginX,
+          maxX: (img.naturalWidth * zoom) / 2 - window.innerWidth / 2 + marginX,
+          minY:
+            window.innerHeight / 2 - (img.naturalHeight * zoom) / 2 - marginY,
+          maxY:
+            (img.naturalHeight * zoom) / 2 - window.innerHeight / 2 + marginY
+        };
+
+        const newTranslateX = Math.max(
+          Math.min(prevTranslate.x + deltaX, bounds.maxX),
+          bounds.minX
+        );
+        const newTranslateY = Math.max(
+          Math.min(prevTranslate.y + deltaY, bounds.maxY),
+          bounds.minY
+        );
+
+        return {
+          x: newTranslateX,
+          y: newTranslateY
+        };
+      } else {
+        return prevTranslate;
+      }
+    });
+
+    setPosition({ x: clientX, y: clientY });
+  }, [position, zoom]);
+
+  const handleMouseUp = useCallback(() => {
+    imageRef.current?.style.setProperty("cursor", "grab");
+  }, []);
+
+  const handleDoubleClick: React.MouseEventHandler<HTMLImageElement> = useCallback(
+    (event) => {
+      event.preventDefault();
+
+      const rect = imageRef.current?.getBoundingClientRect();
+      if (rect) {
+        const mouseX = event.clientX;
+        const mouseY = event.clientY;
+        const imgCenterX = rect.left + rect.width / 2;
+        const imgCenterY = rect.top + rect.height / 2;
+        const offsetX = mouseX - imgCenterX;
+        const offsetY = mouseY - imgCenterY;
+        const newZoom = Math.min(maxZoom, zoom * 2);
+        const zoomRatio = newZoom / zoom;
+        const translateX = translate.x + offsetX * (1 - zoomRatio);
+        const translateY = translate.y + offsetY * (1 - zoomRatio);
+
+        setZoom(newZoom);
+        setTranslate({ x: translateX, y: translateY });
+      }
+    },
+    [zoom, translate]
+  );
+
+  const handleRightClick: MouseEventHandler<HTMLImageElement> = useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setPosition({ x: 0, y: 0 });
+    setTranslate({ x: 0, y: 0 });
+    setZoom(1);
+  }, []);
+
+  const containerStyle = useMemo(() => ({
+    margin: "0",
+    height: "100%",
+    width: "100%",
+    top: "0",
+    display: "block" as const,
+    ...getAlphaSurfaceBg(theme)
+  }), [theme]);
+
+  const imageStyle = useMemo(() => ({
+    position: "absolute" as const,
+    transform: `translate(0px, 0px)`,
+    cursor: "grab" as const,
+    objectFit: "contain" as const,
+    width: "100%",
+    height: "100%"
+  }), []);
+
+  return (
+    <div css={viewerStyles} className="image-viewer">
+      <div className="image-info">
+        <Text
+          size="small"
+          sx={{
+            color: "inherit",
+            textAlign: "inherit",
+            textShadow: "inherit"
+          }}
+        >
+          {`${imageWidth} x ${imageHeight}`}
+        </Text>
+      </div>
+      <div
+        style={containerStyle}
+        onMouseMove={handleMouseMove}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        onDoubleClick={handleDoubleClick}
+        onContextMenu={handleRightClick}
+      >
+        <img
+          ref={imageRef}
+          src={asset?.get_url || url}
+          alt=""
+          onLoad={() => {
+            if (imageRef.current) {
+              setImageWidth(imageRef.current.naturalWidth);
+              setImageHeight(imageRef.current.naturalHeight);
+            }
+          }}
+          style={imageStyle}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default memo(ImageViewer);

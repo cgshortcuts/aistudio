@@ -1,0 +1,540 @@
+---
+layout: page
+title: "NodeTool CLI"
+description: "The `nodetool` command-line interface — manage servers, workflows, jobs, assets, and secrets from your terminal."
+---
+
+
+
+The `nodetool` CLI is the TypeScript command-line interface for the NodeTool platform. It manages servers, workflows, jobs, assets, and secrets. Run `nodetool --help` to see the top-level command list. Every sub-command exposes its own `--help` flag with detailed usage.
+
+## Installation
+
+Install globally from npm to get the `nodetool` and `nodetool-chat` commands:
+
+```bash
+npm install -g @nodetool-ai/cli
+```
+
+Or run a single command without installing:
+
+```bash
+npx --package=@nodetool-ai/cli nodetool --help
+npx --package=@nodetool-ai/cli nodetool-chat
+```
+
+**Requires Node.js 22.x.** Check with `node --version`; install via [nvm](https://github.com/nvm-sh/nvm) if needed.
+
+## Getting Help
+
+- `nodetool --help` — list all top-level commands.
+- `nodetool <command> --help` — show command-specific options (e.g. `nodetool serve --help`).
+- `nodetool <group> --help` — list sub-commands for grouped tooling (e.g. `nodetool workflows --help`).
+
+## Global Options
+
+These flags work on any `nodetool` command and control [OpenTelemetry tracing](https://github.com/nodetool-ai/nodetool/blob/main/docs/AGENTS.md):
+
+- `--trace-file <path>` — append every LLM/agent/workflow span to `<path>` as JSONL (analyzer-friendly).
+- `--trace-stdout [format]` — stream spans to stdout: `pretty` (default) or `json`.
+- `--no-trace-stdout` — disable stdout span output (overrides `NODETOOL_TRACE_STDOUT`).
+
+```bash
+nodetool --trace-file trace.jsonl run workflow.ts
+nodetool --trace-stdout pretty workflows run <id>
+```
+
+## Core Commands
+
+### `nodetool info`
+
+Display system and environment information including Node.js version, platform, and API key configuration.
+
+**Options:**
+
+- `--json` — output as JSON.
+
+**Example:**
+
+```bash
+nodetool info
+nodetool info --json
+```
+
+### `nodetool serve`
+
+Starts the TypeScript WebSocket + HTTP backend server. This serves the REST API, WebSocket endpoints, and static assets.
+
+**Options:**
+
+- `--host` (default `127.0.0.1`) — bind address (use `0.0.0.0` for all interfaces).
+- `--port` (default `7777`) — listen port.
+
+**Examples:**
+
+```bash
+# Start the server on the default port
+nodetool serve
+
+# Bind to all interfaces on a custom port
+nodetool serve --host 0.0.0.0 --port 8080
+```
+
+`serve` passes the two flags to the server as `HOST` and `PORT`, overwriting whatever those variables already held — use the flags, not the environment, to move the server.
+
+### `nodetool workflows run <workflow_id_or_file>`
+
+Executes a workflow by ID (from the local database), JSON file, or TypeScript DSL file.
+
+**Arguments:**
+
+- `<workflow_id_or_file>` — workflow ID, path to a `.json` workflow file, or path to a `.ts` DSL file.
+
+**Options:**
+
+- `--params <json>` — JSON string of workflow parameters.
+- `--json` — output result as JSON.
+- `--supervise` and its bounds — see [Supervised runs](#supervised-runs).
+
+**Examples:**
+
+```bash
+# Run workflow by ID
+nodetool workflows run workflow_abc123
+
+# Run workflow from JSON file
+nodetool workflows run ./my_workflow.json
+
+# Run workflow from TypeScript DSL
+nodetool workflows run ./my_workflow.ts
+
+# Run with parameters as JSON
+nodetool workflows run workflow_abc123 --params '{"input": "hello"}'
+
+# JSON output for automation
+nodetool workflows run ./my_workflow.json --json
+```
+
+### `nodetool workflows export-dsl <workflow_id_or_file>`
+
+Exports a workflow as a TypeScript DSL file.
+
+**Arguments:**
+
+- `<workflow_id_or_file>` — workflow ID or path to a `.json` workflow file.
+
+**Options:**
+
+- `-o, --output <file>` — write to file instead of stdout.
+
+**Examples:**
+
+```bash
+# Print DSL to stdout
+nodetool workflows export-dsl workflow_abc123
+
+# Write to file
+nodetool workflows export-dsl workflow_abc123 -o workflow.ts
+
+# Export from JSON file
+nodetool workflows export-dsl ./my_workflow.json
+```
+
+### `nodetool run <dsl-file>`
+
+Shorthand for running a TypeScript DSL workflow file directly.
+
+**Options:**
+
+- `--json` — output results as JSON.
+- `--supervise` and its bounds — see [Supervised runs](#supervised-runs).
+
+**Examples:**
+
+```bash
+nodetool run workflow.ts
+nodetool run workflow.ts --json
+```
+
+## Supervised runs
+
+`--supervise` puts an agent on the failure path: when a node invocation throws
+after its own error handling is exhausted, the agent sees the failure and
+answers with one verdict — retry, repair the output, skip the item, or fail.
+Without the flag nothing changes: no escalation is constructed and the run is
+the run it was before.
+
+Available on `nodetool run`, `nodetool workflows run`, and `nodetool debug`
+(server surface).
+
+**Options:**
+
+- `--supervise` — supervise this run. Off unless passed.
+- `--max-decisions <n>` — decisions allowed in the run (default 10).
+- `--max-retries <n>` — retries per node invocation (default 2).
+- `--supervisor-cost-cap <usd>` — ceiling on supervisor spend (default 0.50),
+  enforced by reservation before each model turn, not after.
+- `--supervisor-model <provider/model>` — who supervises (default
+  `anthropic/claude-sonnet-4-6`, or `NODETOOL_SUPERVISOR_MODEL`). The leading
+  segment must be a registered provider; the rest is the model id, slashes and
+  all (`openrouter/openai/gpt-5.4-mini`).
+
+Passing a bound without `--supervise` is an error rather than a silent
+unsupervised run.
+
+**Output.** Each decision prints a `⛨` line as it happens, and the run ends
+with a supervised summary:
+
+```
+⛨ fetch-item [3] skipped — HTTP 404 (agent, $0.0041)
+⛨ supervised: 2 skipped, 1 retried, 3 decisions, +$0.0200
+```
+
+With `--json`, the decisions are in `interventions` — alongside the outputs in
+`workflows run`, and under `{results, interventions}` in `nodetool run`, whose
+bare results shape is left alone for unsupervised runs. `nodetool debug` puts
+them in `server.summary.interventions` with a `server.supervised` rollup. Each
+record carries the
+escalation the agent saw (node, item lineage, redacted inputs, allowed
+actions), the verdict, who decided it (`agent`, `sticky`, `bounds`, `default`,
+`kernel`), and its cost.
+
+**Cost.** Supervisor spend lands in the same ledger `nodetool costs` reads, one
+row per billable decision, attributed to the run and tagged `supervisor` in
+`node_type` — so supervision is separable from the workflow's own spend:
+
+```bash
+nodetool costs list --limit 20        # supervisor rows show node_type=supervisor
+```
+
+**Bounds are the guarantee.** Every supervisor failure (timeout, an unparseable
+verdict, an exhausted budget, a cancelled run) resolves as `fail`, which is
+what would have happened without it. What each verdict means and why
+retry is opt-in per node: [workflow-supervisor-design.md](workflow-supervisor-design.md).
+
+## Database Migrations
+
+### `nodetool db migrate`
+
+Applies NodeTool migrations to a PostgreSQL/Supabase database. For Supabase, use the **direct connection URL** from Settings → Database (port `5432`), not the transaction pooler URL.
+
+**Options:**
+
+- `--direct-url <url>` — Supabase/PostgreSQL direct connection URL.
+- `--database-url <url>` — connection URL; defaults to `DIRECT_URL` or `DATABASE_URL`.
+- `--target <version>` — stop after a specific migration version.
+- `--dry-run` — show pending migrations without applying them.
+- `--skip-checksums` — skip checksum validation.
+- `--json` — output as JSON.
+
+**Examples:**
+
+```bash
+DIRECT_URL="postgresql://postgres:[password]@db.[project].supabase.co:5432/postgres" \
+  nodetool db migrate
+
+nodetool db status --direct-url "$DIRECT_URL"
+nodetool db migrate --direct-url "$DIRECT_URL" --dry-run
+```
+
+Other migration commands:
+
+```bash
+nodetool db status   --direct-url "$DIRECT_URL"
+nodetool db baseline --direct-url "$DIRECT_URL"   # for existing DBs
+nodetool db rollback --direct-url "$DIRECT_URL" --steps 1
+```
+
+## Chat
+
+### `nodetool chat`
+
+Starts an interactive TUI chat session.
+
+**Options:**
+
+- `-p, --provider <provider>` — LLM provider (e.g., `anthropic`, `openai`, `ollama`).
+- `-m, --model <model>` — model ID.
+- `-a, --agent` — **deprecated, no-op.** Every chat session runs the unified agent loop; this flag has no effect.
+- `-u, --url <url>` — WebSocket server URL (default: uses a local provider).
+- `-w, --workspace <path>` — workspace directory for file operations (default: current directory).
+- `--tools <tools>` — comma-separated list of enabled tools.
+
+**Examples:**
+
+```bash
+# Start interactive chat
+nodetool chat
+
+# Chat with a specific provider and model
+nodetool chat --provider anthropic --model claude-sonnet-5
+
+# Connect to a running server
+nodetool chat --url ws://localhost:7777/ws
+```
+
+## Workflow Management
+
+### `nodetool workflows`
+
+Manage workflows. Reads the local database by default; `--api-url` targets a remote server.
+
+**Subcommands:** `list`, `get`, `run`, `export-dsl`, `export-example`, `export-bundle`, `import-bundle`
+
+```bash
+# List all workflows
+nodetool workflows list
+nodetool workflows list --api-url http://localhost:7777 --json
+
+# Get a workflow by ID
+nodetool workflows get <workflow_id>
+
+# Run a workflow (see above for full options)
+nodetool workflows run <workflow_id_or_file>
+
+# Export as a TypeScript DSL file (see above)
+nodetool workflows export-dsl <workflow_id_or_file>
+```
+
+#### `nodetool workflows export-example <workflow_id_or_file>`
+
+Export a workflow as a shipped template: materialize its referenced assets into the package's constant asset directory
+(rewriting refs to `package://<pkg>/<file>`) and write the example JSON.
+
+**Options:**
+
+- `--package <name>` — owning package (default `nodetool-base`).
+- `-o, --output <file>` — write the example JSON to this exact path.
+- `--include-remote` — also materialize http(s) and local-file refs.
+
+```bash
+nodetool workflows export-example <workflow_id>
+nodetool workflows export-example <id> --package nodetool-base
+nodetool workflows export-example workflow.json -o example.json
+```
+
+#### `nodetool workflows export-bundle <workflow_id_or_file...>`
+
+Export one or more workflows as a portable `.nodetool` bundle (a zip containing the graphs plus the bytes of every asset
+they reference), sharable as a single file.
+
+**Options:**
+
+- `-o, --output <file>` — output path (default `<name>.nodetool`).
+- `--include-remote` — also embed http(s) and local-file refs.
+
+```bash
+nodetool workflows export-bundle <id> [<id2> ...] -o my-pack.nodetool
+```
+
+#### `nodetool workflows import-bundle <bundle_file>`
+
+Import a `.nodetool` bundle into the local library: store its assets and create the workflows with refs rewritten to the
+imported assets.
+
+```bash
+nodetool workflows import-bundle my-pack.nodetool
+```
+
+## Job Management
+
+### `nodetool jobs`
+
+Query job status and results. Reads the local database by default.
+
+**Subcommands:** `list`, `get`
+
+**Options:**
+
+- `--api-url <url>` — query a remote server instead of the local database.
+- `--workflow-id <id>` — filter by workflow ID (for `list`).
+- `--limit <n>` — max results (default: `100`).
+- `--json` — output as JSON.
+
+**Examples:**
+
+```bash
+# List all jobs
+nodetool jobs list
+
+# Filter by workflow
+nodetool jobs list --workflow-id workflow_abc123
+
+# Get a specific job
+nodetool jobs get <job_id>
+```
+
+## Asset Management
+
+### `nodetool assets`
+
+Manage uploaded files and workflow assets. Reads the local database by default.
+
+**Subcommands:** `list`, `get`
+
+**Options:**
+
+- `--api-url <url>` — query a remote server instead of the local database.
+- `--query <q>` — search query (for `list`).
+- `--content-type <type>` — filter by content type (for `list`).
+- `--limit <n>` — max results (default: `100`).
+- `--json` — output as JSON.
+
+**Examples:**
+
+```bash
+# List assets
+nodetool assets list
+
+# Search assets
+nodetool assets list --query "landscape"
+
+# Get a specific asset
+nodetool assets get <asset_id>
+```
+
+## Secrets Management
+
+### `nodetool secrets`
+
+Manage encrypted secrets stored in the local database with per-user encryption.
+
+**Subcommands:** `list`, `store`, `get`
+
+**Examples:**
+
+```bash
+# List stored secret keys
+nodetool secrets list
+
+# Store a secret (prompts for value)
+nodetool secrets store OPENAI_API_KEY
+
+# Retrieve a secret value
+nodetool secrets get OPENAI_API_KEY
+```
+
+## Settings
+
+### `nodetool settings show`
+
+Display current settings from environment variables.
+
+**Options:**
+
+- `--json` — output as JSON.
+
+**Example:**
+
+```bash
+nodetool settings show
+nodetool settings show --json
+```
+
+## Model Management
+
+### `nodetool models`
+
+List models and providers. Queries local providers and caches by default; `--api-url` targets a remote server.
+
+**Subcommands:**
+
+- `list` — list all models (recommended + provider + HuggingFace cached).
+- `providers` — list configured providers and their capabilities.
+- `recommended` — list recommended models.
+- `ollama` — list Ollama models.
+- `huggingface` — list HuggingFace cached models (`--query`, `--type` to filter).
+- `by-provider <provider>` — list models for a provider; `--kind` one of `llm`, `image`, `tts`, `asr`, `video`, `embedding` (default `llm`).
+
+**Examples:**
+
+```bash
+nodetool models list
+nodetool models providers
+nodetool models ollama
+nodetool models by-provider openai --kind image
+```
+
+## MCP Integration
+
+### `nodetool mcp`
+
+Install, remove, or inspect the NodeTool MCP server configuration for AI coding assistants (Claude Code, Codex,
+OpenCode).
+
+**Subcommands:** `install`, `uninstall`, `status`
+
+**Examples:**
+
+```bash
+# Install for all detected assistants (default URL http://127.0.0.1:7777/mcp)
+nodetool mcp install
+
+# Install for Claude Code only, with a custom URL
+nodetool mcp install --claude --url http://127.0.0.1:7777/mcp
+
+# Show installation status
+nodetool mcp status
+
+# Remove from all assistants
+nodetool mcp uninstall
+```
+
+The NodeTool server must be running (`nodetool serve`) for MCP to work.
+
+### What the MCP server exposes
+
+Two layers of tools land on `/mcp`:
+
+- **Native tools** — the read and render surface (`list_workflows`, `get_workflow`, `list_assets`,
+  `get_asset`, `list_jobs`, `get_job`, `list_nodes`, `search_nodes`, `get_node_info`,
+  `run_workflow`, `list_collections`, `query_collection`), which return thumbnails and MCP Apps
+  alongside their JSON.
+- **The agent toolbelt** — the same tools the in-app chat agent runs on, bridged from
+  `@nodetool-ai/agents`: workflow building and debugging (`create_workflow`, `validate_workflow`,
+  `debug_workflow`, `build_app`, `debug_app`, the `ui_*` graph editing tools), media generation
+  (`generate_image`, `generate_video`, `generate_speech`, `transcribe_audio`, …), files
+  (`read_file`, `write_file`, `edit_file`, `glob`, `grep`), web (`web_search`, `browser`,
+  `http_request`), documents, math, code execution, image critique, and thread memory. Google
+  Workspace tools appear only on deployments with a Google login.
+
+The bridged half needs a user to run as — its tools touch that user's secrets, assets, and files —
+so it is registered only on a session bound to one (`nodetool mcp serve`, the local `/mcp` mount, or
+an authenticated session). Where a name exists on both layers the native tool wins. File tools read
+and write under a per-user workspace at `<data-dir>/mcp-workspaces/<user-id>`, not the host
+filesystem.
+
+## Agents
+
+### `nodetool agent`
+
+Run YAML-defined autonomous agents from the command line.
+
+**Subcommands:** `run`, `test`, `list`, `diagnose`
+
+```bash
+# Run an agent with an objective
+nodetool agent run agent.yaml --objective "Research AI trends"
+
+# Validate a config
+nodetool agent test agent.yaml
+
+# List configs in a directory
+nodetool agent list examples/agents/
+
+# Aggregate a failed run into one report
+nodetool agent diagnose <job_id>
+```
+
+See the [Agent CLI](agent-cli.md) reference for full details.
+
+> The `nodetool db` group (`migrate`, `status`, `baseline`, `rollback`) is documented under
+> [Database Migrations](#database-migrations) above.
+
+## Tips
+
+- Use `--json` flags for machine-readable output suitable for scripting.
+- Set `NODETOOL_API_URL` environment variable to avoid specifying `--api-url` on every command.
+- Use `nodetool serve` to start the local backend server before running API commands.
+- See [Environment Variables](configuration.md#environment-variables-index) for a complete list of configurable variables.
+

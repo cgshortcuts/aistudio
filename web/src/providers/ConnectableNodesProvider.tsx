@@ -1,0 +1,98 @@
+/**
+ * Provider component that manages the state and logic for connecting nodes in the flow editor.
+ * Handles node filtering, menu visibility, and connection metadata for the node connection interface.
+ */
+
+import { createContext, useState, useCallback, useMemo, ReactNode } from "react";
+import { NodeMetadata, TypeMetadata } from "../stores/ApiTypes";
+import {
+  filterTypesByInputType,
+  filterTypesByOutputType
+} from "../components/node_menu/typeFilterUtils";
+import useMetadataStore from "../stores/MetadataStore";
+import { ConnectableNodesState } from "../stores/ConnectableNodesStore";
+
+export const ConnectableNodesContext =
+  createContext<ConnectableNodesState | null>(null);
+
+export function ConnectableNodesProvider({
+  children,
+  active = true
+}: {
+  children: ReactNode;
+  active?: boolean;
+}) {
+  const [nodeMetadata] = useState<NodeMetadata[]>([]);
+  const [filterType, setFilterType] = useState<"input" | "output" | null>(null);
+  const [typeMetadata, setTypeMetadata] = useState<TypeMetadata | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
+  const [menuPosition, setMenuPosition] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [sourceHandle, setSourceHandle] = useState<string | null>(null);
+  const [targetHandle, setTargetHandle] = useState<string | null>(null);
+  const [nodeId, setNodeId] = useState<string | null>(null);
+
+  const cachedConnectableNodes = useMemo(() => {
+    const metadata = useMetadataStore.getState().metadata;
+    if (!typeMetadata || !filterType) return [];
+    const allNodes = Object.values(metadata);
+    if (filterType === "input") {
+      return filterTypesByInputType(allNodes, typeMetadata);
+    }
+    return filterTypesByOutputType(allNodes, typeMetadata);
+  }, [typeMetadata, filterType]);
+
+  const getConnectableNodes = useCallback(
+    () => cachedConnectableNodes,
+    [cachedConnectableNodes]
+  );
+
+  const showMenu = useCallback(
+    (position: { x: number; y: number }) => {
+      if (!active) {return;}
+      setIsVisible(true);
+      setMenuPosition(position);
+    },
+    [active]
+  );
+
+  const hideMenu = useCallback(() => {
+    setIsVisible(false);
+    setMenuPosition(null);
+  }, []);
+
+  const value = useMemo<ConnectableNodesState>(
+    () => ({
+      nodeMetadata,
+      filterType,
+      typeMetadata,
+      isVisible,
+      menuPosition,
+      sourceHandle,
+      targetHandle,
+      nodeId,
+      setSourceHandle,
+      setTargetHandle,
+      setNodeId,
+      setFilterType,
+      setTypeMetadata,
+      getConnectableNodes,
+      showMenu,
+      hideMenu
+    }),
+    [
+      nodeMetadata, filterType, typeMetadata, isVisible, menuPosition,
+      sourceHandle, targetHandle, nodeId, setSourceHandle, setTargetHandle,
+      setNodeId, setFilterType, setTypeMetadata, getConnectableNodes,
+      showMenu, hideMenu
+    ]
+  );
+
+  return (
+    <ConnectableNodesContext.Provider value={value}>
+      {children}
+    </ConnectableNodesContext.Provider>
+  );
+}

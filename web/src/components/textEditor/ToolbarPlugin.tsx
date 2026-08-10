@@ -1,0 +1,231 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { useLexicalComposerContext } from "@lexical/react/LexicalComposerContext";
+import {
+  $getSelection,
+  $isRangeSelection,
+  FORMAT_TEXT_COMMAND
+} from "lexical";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import FormatSizeIcon from "@mui/icons-material/FormatSize";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import {
+  addClassNamesToElement,
+  removeClassNamesFromElement
+} from "@lexical/utils";
+import { $patchStyleText } from "@lexical/selection";
+import { BORDER_RADIUS, getSpacingPx, SPACING } from "../ui_primitives";
+import { copyAsMarkdown } from "./exportMarkdown";
+import { INSERT_HORIZONTAL_RULE_COMMAND } from "./horizontalRuleCommand";
+
+const toolbarStyles = css`
+  display: flex;
+  gap: ${getSpacingPx(SPACING.xs)};
+  background-color: var(--palette-c_overlay_strong);
+  padding: ${getSpacingPx(SPACING.xs)} ${getSpacingPx(SPACING.md)};
+  border-radius: ${BORDER_RADIUS.sm};
+  button {
+    padding: ${getSpacingPx(SPACING.micro)} ${getSpacingPx(SPACING.sm)};
+    min-width: 20px;
+    font-size: var(--fontSizeSmall);
+    border: none;
+    line-height: 1.2em;
+    background-color: transparent;
+    border-radius: ${BORDER_RADIUS.sm};
+    color: black;
+    cursor: pointer;
+
+    &.active {
+      background-color: var(--palette-c_scrim_soft);
+    }
+    &:hover {
+      background-color: var(--palette-c_scrim_soft);
+    }
+  }
+`;
+
+const ToolbarPlugin = () => {
+  const [editor] = useLexicalComposerContext();
+  const [isBold, setIsBold] = useState(false);
+  const [isItalic, setIsItalic] = useState(false);
+  const [isLargeFont, setIsLargeFont] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copiedTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const fontToggleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const updateToolbar = useCallback(() => {
+    const selection = $getSelection();
+    if ($isRangeSelection(selection)) {
+      setIsBold(selection.hasFormat("bold"));
+      setIsItalic(selection.hasFormat("italic"));
+
+      // Check for large font by examining the actual DOM elements
+      const nodes = selection.getNodes();
+      const hasLargeFont = nodes.some((node) => {
+        if (node.getType() === "text") {
+          const dom = editor.getElementByKey(node.getKey());
+          return dom?.getAttribute("data-large-font") === "true";
+        }
+        return false;
+      });
+      setIsLargeFont(hasLargeFont);
+    }
+  }, [editor]);
+
+  useEffect(() => {
+    return editor.registerUpdateListener(({ editorState }) => {
+      editorState.read(() => {
+        updateToolbar();
+      });
+    });
+  }, [editor, updateToolbar]);
+
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      if (copiedTimeoutRef.current) {
+        clearTimeout(copiedTimeoutRef.current);
+      }
+      if (fontToggleTimeoutRef.current) {
+        clearTimeout(fontToggleTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const toggleFontSize = useCallback(() => {
+    editor.update(() => {
+      const selection = $getSelection();
+      if ($isRangeSelection(selection)) {
+        const nodes = selection.getNodes();
+        const hasAnyLargeFont = nodes.some((node) => {
+          if (node.getType() === "text") {
+            const dom = editor.getElementByKey(node.getKey());
+            return dom?.getAttribute("data-large-font") === "true";
+          }
+          return false;
+        });
+
+        const shouldApplyLarge = !hasAnyLargeFont;
+
+        // Use $patchStyleText with a marker property to trigger text node splitting
+        // but don't use font-size since we want only CSS classes for styling
+        $patchStyleText(selection, {
+          "data-large-font-marker": shouldApplyLarge ? "true" : ""
+        });
+
+        if (fontToggleTimeoutRef.current) {
+          clearTimeout(fontToggleTimeoutRef.current);
+        }
+        fontToggleTimeoutRef.current = setTimeout(() => {
+          editor.getEditorState().read(() => {
+            const newSelection = $getSelection();
+            if ($isRangeSelection(newSelection)) {
+              const nodes = newSelection.getNodes();
+              nodes.forEach((node) => {
+                if (node.getType() === "text") {
+                  const dom = editor.getElementByKey(node.getKey());
+                  if (dom) {
+                    if (shouldApplyLarge) {
+                      dom.removeAttribute("data-large-font-marker");
+                      dom.setAttribute("data-large-font", "true");
+                      addClassNamesToElement(dom, "font-size-large");
+
+                      // Clean up empty style attribute if it exists
+                      if (dom.getAttribute("style") === "") {
+                        dom.removeAttribute("style");
+                      }
+                    } else {
+                      dom.removeAttribute("data-large-font-marker");
+                      dom.removeAttribute("data-large-font");
+                      removeClassNamesFromElement(dom, "font-size-large");
+
+                      // Clean up empty style attribute if it exists
+                      if (dom.getAttribute("style") === "") {
+                        dom.removeAttribute("style");
+                      }
+                    }
+                  }
+                }
+              });
+            }
+          });
+        }, 0);
+      }
+    });
+  }, [editor]);
+
+  const handleCopyAsMarkdown = useCallback(async () => {
+    const success = await copyAsMarkdown(editor);
+    if (success) {
+      setCopied(true);
+      if (copiedTimeoutRef.current) {
+        clearTimeout(copiedTimeoutRef.current);
+      }
+      copiedTimeoutRef.current = setTimeout(() => setCopied(false), 2000);
+    }
+  }, [editor]);
+
+  const handleInsertHR = useCallback(() => {
+    editor.dispatchCommand(INSERT_HORIZONTAL_RULE_COMMAND, undefined);
+  }, [editor]);
+
+  const handleFormatBold = useCallback(() => {
+    editor.dispatchCommand(FORMAT_TEXT_COMMAND, "bold");
+  }, [editor]);
+
+  const handleFormatItalic = useCallback(() => {
+    editor.dispatchCommand(FORMAT_TEXT_COMMAND, "italic");
+  }, [editor]);
+
+  return (
+    <div className="format-toolbar-actions" css={toolbarStyles}>
+      <button
+        type="button"
+        onClick={handleFormatBold}
+        className={isBold ? "active" : ""}
+        aria-label="Format Bold"
+        title="Bold (Ctrl+B / ⌘+B)"
+      >
+        <b>B</b>
+      </button>
+      <button
+        type="button"
+        onClick={handleFormatItalic}
+        className={isItalic ? "active" : ""}
+        aria-label="Format Italic"
+        title="Italic (Ctrl+I / ⌘+I)"
+      >
+        <i>I</i>
+      </button>
+      <button
+        type="button"
+        onClick={toggleFontSize}
+        className={isLargeFont ? "active" : ""}
+        aria-label="Toggle Large Font Size"
+        title="Toggle Large Font Size"
+      >
+        <FormatSizeIcon sx={{ fontSize: "1em" }} />
+      </button>
+      <button
+        type="button"
+        onClick={handleInsertHR}
+        aria-label="Insert Horizontal Rule"
+        title="Insert Horizontal Rule"
+        style={{ fontSize: "var(--fontSizeNormal)", fontWeight: 600 }}
+      >
+        ─
+      </button>
+      <button
+        type="button"
+        onClick={handleCopyAsMarkdown}
+        aria-label="Copy as Markdown"
+        title="Copy as Markdown"
+        className={copied ? "active" : ""}
+      >
+        <ContentCopyIcon sx={{ fontSize: "1em" }} />
+      </button>
+    </div>
+  );
+};
+
+export default memo(ToolbarPlugin);

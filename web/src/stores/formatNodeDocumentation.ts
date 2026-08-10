@@ -1,0 +1,69 @@
+import {
+  highlightText as highlightTextUtil,
+  formatBulletList,
+  escapeHtml
+} from "../utils/highlightText";
+import { SplitNodeDescription } from "./NodeMenuStore";
+import type { NodeMetadata } from "./ApiTypes";
+
+export const formatNodeDocumentation = (
+  fullDocumentation: string,
+  searchTerm?: string,
+  searchInfo?: NodeMetadata["searchInfo"]
+): SplitNodeDescription => {
+  const safeDocumentation = (fullDocumentation ?? "").toString();
+  const lines = safeDocumentation.split("\n").map((line) => line.trim());
+  const description = lines[0] || "";
+  const tags =
+    lines[1]
+      ?.split(",")
+      .map((t) => t.trim())
+      .filter(Boolean) || [];
+
+  const useCasesIndex = lines.findIndex((line) =>
+    line.startsWith("Use cases:")
+  );
+
+  let useCasesRaw = "";
+  let useCasesHtml = "";
+  if (useCasesIndex !== -1) {
+    const endIndex = lines.length;
+    const useCaseLines = lines
+      .slice(useCasesIndex + 1, endIndex)
+      .filter((line) => line.trim());
+
+    const hasBullets = useCaseLines.some((line) => line.startsWith("-"));
+
+    if (hasBullets) {
+      useCasesRaw = useCaseLines
+        .filter((line) => line.startsWith("-"))
+        .map((line) => line.replace(/^-\s*/, "").trim())
+        .join("\n");
+    } else {
+      useCasesRaw = useCaseLines.join(" ");
+    }
+
+    if (searchTerm && searchInfo) {
+      const highlighted = highlightTextUtil(
+        useCasesRaw,
+        "use_cases",
+        searchTerm,
+        searchInfo,
+        hasBullets
+      );
+      useCasesHtml = highlighted.html;
+    } else {
+      // Escape HTML before formatting as bullet list (useCasesRaw could contain untrusted content)
+      useCasesHtml = formatBulletList(escapeHtml(useCasesRaw));
+    }
+  }
+
+  return {
+    description,
+    tags,
+    useCases: {
+      raw: useCasesRaw,
+      html: useCasesHtml
+    }
+  };
+};

@@ -1,0 +1,73 @@
+# NodeTool
+
+> NodeTool is the open-source, agent-first creative workspace: every editor — a node-based canvas, sketch pad, storyboard, video timeline, script editor, 3D scene, and app builder — is exposed to agents as tools. An agent builds workflows that wire image, video, audio, and text models from every major provider, runs them, and repairs what fails. Bring your own API keys. Runs as a free desktop app (Studio) or in the browser (Cloud). Licensed AGPL-3.0.
+
+## What NodeTool is
+
+- An agent-first workspace: every action in every editor is also an agent tool — anything you can click, an agent can do — and the full toolbelt speaks MCP for outside agents such as Claude Desktop and Claude Code.
+- A visual, node-based editor for building AI workflows: connect models and tools as nodes on a canvas instead of writing glue code.
+- Two editions of one open-source codebase: **Studio**, a free desktop app for macOS, Windows, and Linux, and **Cloud**, the same app hosted in a browser (currently in alpha).
+- Planning agents: give an agent a goal and it plans the steps, picks a model or tool, and executes multi-step tasks on the canvas.
+- Native nodes for image, video, audio, and text generation and editing — masks, inpaint, outpaint, relight, upscale, compositing — plus RAG/vector search and custom code nodes.
+- Model access is bring-your-own-key (BYOK): OpenAI, Anthropic, Gemini, Replicate, FAL, KIE, Mistral, Groq, Together, OpenRouter, HuggingFace, and more, plus local inference via Ollama, MLX, llama.cpp, vLLM, and LM Studio.
+
+## License and pricing
+
+- Source license: AGPL-3.0. Self-hostable. Repository: https://github.com/nodetool-ai/nodetool
+- Studio is free. Cloud is a subscription for managed hosting (currently alpha; pricing is finalized at general availability).
+- In both editions you bring your own provider API keys and pay providers directly at their list prices. NodeTool does not run inference on its own servers, does not issue credits, and does not mark up model calls.
+
+## Key pages
+
+- [Home](https://nodetool.ai/index.md): what NodeTool is, the agent-first model, Studio vs Cloud.
+- [Studio](https://nodetool.ai/studio.md): the free, open-source desktop app; the agent and models run locally.
+- [Cloud](https://nodetool.ai/cloud.md): the hosted, browser-based edition (alpha).
+- [Pricing](https://nodetool.ai/pricing.md): edition comparison and how BYOK pricing works.
+- [Agents](https://nodetool.ai/agents.md): the agent-first model: every editor exposed to agents as tools.
+- [For creatives](https://nodetool.ai/creatives.md): artists, motion designers, AI-native illustrators.
+- [For developers](https://nodetool.ai/developers.md): TypeScript SDK, REST API, MCP server, custom nodes in TypeScript or Python.
+- [For marketing teams](https://nodetool.ai/marketing.md): hand a brief to an agent; campaign assets at volume.
+- [Documentation](https://docs.nodetool.ai/llms.txt): install guides, key concepts, node reference, API reference, CLI.
+
+## Comparisons
+
+
+
+## Use cases
+
+- [Product Video](https://nodetool.ai/use-cases/product-video): Make product videos with AI workflows.
+- [Movie Poster](https://nodetool.ai/use-cases/movie-poster): Generate movie posters with AI workflows.
+- [Movie Trailer](https://nodetool.ai/use-cases/movie-trailer): Cut movie trailers with AI workflows.
+
+## FAQ
+
+- [FAQ hub](https://nodetool.ai/faq): all questions, grouped by category.
+- [What is NodeTool?](https://nodetool.ai/faq/what-is-nodetool)
+- [Is NodeTool open source?](https://nodetool.ai/faq/is-nodetool-open-source)
+- [Is NodeTool local-first and private?](https://nodetool.ai/faq/is-nodetool-local-first)
+- [What does it mean that NodeTool is agent-first?](https://nodetool.ai/faq/what-does-agent-first-mean)
+- [What does "bring your own keys" mean for me?](https://nodetool.ai/faq/what-is-byok)
+- [How much does NodeTool cost?](https://nodetool.ai/faq/how-much-does-nodetool-cost)
+- [Does NodeTool mark up model pricing?](https://nodetool.ai/faq/does-nodetool-mark-up-model-pricing)
+- [Studio or Cloud — which should I use?](https://nodetool.ai/faq/studio-or-cloud)
+- [Which models are supported?](https://nodetool.ai/faq/which-models-are-supported)
+- [Can I run models locally?](https://nodetool.ai/faq/can-i-run-models-locally)
+- [Do I need a GPU to run NodeTool?](https://nodetool.ai/faq/do-i-need-a-gpu)
+- [How is NodeTool different from ComfyUI?](https://nodetool.ai/faq/how-is-nodetool-different-from-comfyui)
+- [How is NodeTool different from Weavy (now Figma Weave) and other closed canvases?](https://nodetool.ai/faq/how-is-nodetool-different-from-closed-canvases)
+- [How is NodeTool different from n8n or Flowise?](https://nodetool.ai/faq/how-is-nodetool-different-from-n8n-and-flowise)
+- [Is there an open source alternative to Figma Weave?](https://nodetool.ai/faq/open-source-figma-weave-alternative)
+- [What is a node-based workflow?](https://nodetool.ai/faq/what-is-a-node-based-workflow)
+- [What is a diffusion model?](https://nodetool.ai/faq/what-is-a-diffusion-model)
+- [How can a model answer from my own documents?](https://nodetool.ai/faq/what-is-rag)
+- [What is a planning agent?](https://nodetool.ai/faq/what-is-a-planning-agent)
+
+## Ideas
+
+- [Ideas hub](https://nodetool.ai/ideas): workflow ideas grouped by category.
+- [Image Generation ideas](https://nodetool.ai/ideas/image-generation): Generate and edit images on the canvas — concept art, product shots, posters, and batch pipelines.
+- [Video Generation ideas](https://nodetool.ai/ideas/video-generation): Turn prompts, images, and briefs into video — trailers, product spots, animations, and music visuals.
+- [Audio & Voice ideas](https://nodetool.ai/ideas/audio-and-voice): Transcribe, summarize, and generate audio — podcasts, voiceovers, and music-driven pipelines.
+- [Agents & Research ideas](https://nodetool.ai/ideas/agents-and-research): Planning agents that search, gather, and synthesize — news, papers, and web research on the canvas.
+- [Marketing & Content ideas](https://nodetool.ai/ideas/marketing-and-content): Campaign assets and content at scale — ad creative, social calendars, SEO copy, and outreach.
+- [Learning & Data ideas](https://nodetool.ai/ideas/learning-and-data): Study aids and data workflows — flashcards, learning paths, summaries, and structured generation.

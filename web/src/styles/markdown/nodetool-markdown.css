@@ -1,0 +1,44 @@
+/* markdown overrides */
+
+/* selection */
+.markdown-body *::selection,
+.markdown-body p::selection,
+.markdown-body input::selection,
+.markdown-body code::selection,
+.markdown-body textarea::selection,
+.markdown-body h1::selection,
+.markdown-body h2::selection,
+.markdown-body h3::selection,
+.markdown-body h4::selection,
+.markdown-body h5::selection,
+.markdown-body h6::selection,
+.markdown-body label::selection,
+.markdown-body img::selection {
+  background-color: var(--c_selection) ;
+}
+
+/* code */
+.markdown-body pre,
+.markdown-body code,
+.markdown-body pre>div,
+.markdown-body pre>div code,
+.markdown-body pre>div span {
+  font-family: "JetBrains Mono !important", monospace !important;
+}
+
+.markdown-body .highlight pre,
+.markdown-body pre {
+  padding: 0;
+}
+
+/* tables – prevent wide tables from pushing the chat view wider */
+.markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* list */
+ol > li {
+  list-style-type: auto !important;
+}

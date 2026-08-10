@@ -1,0 +1,283 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import {
+  CloseButton,
+  Text,
+  Tooltip,
+  Box,
+  MOTION,
+  BORDER_RADIUS,
+  SPACING,
+  getSpacingPx,
+  Tabs,
+  Tab
+} from "../../ui_primitives";
+import { useAppHeaderStore } from "../../../stores/AppHeaderStore";
+import DataTypesList from "./DataTypesList";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import React, { useState } from "react";
+import { DATA_TYPES } from "../../../config/data_types";
+import KeyboardShortcutsView from "./KeyboardShortcutsView";
+import { NODE_EDITOR_SHORTCUTS } from "../../../config/shortcuts";
+import ControlsShortcutsTab from "./ControlsShortcutsTab";
+import { TOOLTIP_ENTER_DELAY } from "../../../config/constants";
+import { Dialog } from "../../ui_primitives";
+
+interface TabPanelProps {
+  children: React.ReactNode;
+  index: number;
+  value: number;
+}
+
+const helpStyles = (theme: Theme) =>
+  css({
+    height: "100%",
+    ".help": {
+      height: "100%",
+      display: "flex",
+      flexDirection: "column",
+      gap: ".1em",
+      overflow: "hidden"
+    },
+
+    ".top": {
+      display: "flex",
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: "0.5em",
+      padding: "0em 1em",
+      borderBottom: `1px solid ${theme.vars.palette.grey[600]}`
+    },
+    ".content": {
+      height: "calc(100% - 40px)",
+      padding: "0 1em 2em 1em"
+    },
+    ".tabs-row": {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      margin: "0 1em 1em 1em"
+    },
+    ".help-tabs": {
+      paddingTop: "0",
+      lineHeight: "1.5",
+      flex: 1,
+      "& .MuiTabs-indicator": {
+        backgroundColor: "var(--palette-primary-main)",
+        height: "3px",
+        borderRadius: BORDER_RADIUS.xs
+      },
+      "& .MuiTab-root": {
+        color: theme.vars.palette.grey[200],
+        transition: `color ${MOTION.fast}`,
+        paddingBottom: "0em",
+        "&.Mui-selected": {
+          color: theme.vars.palette.grey[0]
+        },
+        "&:hover": {
+          color: theme.vars.palette.grey[0]
+        }
+      },
+      button: {
+        alignItems: "flex-start",
+        textAlign: "left",
+        paddingLeft: "0",
+        marginRight: "0.5em",
+        minWidth: "unset"
+      }
+    },
+    ".docs-button": {
+      display: "flex",
+      alignItems: "center",
+      gap: getSpacingPx(SPACING.lg), // was 10px
+      color: theme.vars.palette.secondary.contrastText,
+      backgroundColor: theme.vars.palette.secondary.main,
+      textDecoration: "none",
+      fontSize: "var(--fontSizeNormal)",
+      fontWeight: 500,
+      padding: `${getSpacingPx(SPACING.md)} ${getSpacingPx(SPACING.xl)}`, // was 8px 14px
+      borderRadius: BORDER_RADIUS.lg,
+      transition: MOTION.all,
+      flexShrink: 0,
+      "&:hover": {
+        backgroundColor: theme.vars.palette.secondary.light,
+        borderColor: theme.vars.palette.primary.main,
+        textDecoration: "none"
+      },
+      ".docs-button-text": {
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-start",
+        textTransform: "uppercase",
+        fontSize: "var(--fontSizeSmall)",
+        fontFamily: theme.vars.fontFamily2,
+        lineHeight: 1.0,
+        fontWeight: 600
+      },
+      "& svg": {
+        fontSize: "var(--fontSizeBig)"
+      }
+    },
+    ".tabpanel": {
+      height: "calc(100% - 40px)",
+      padding: "1em 0",
+      fontSize: "var(--fontSizeBig)"
+    },
+    ".tabpanel-content": {
+      height: "100%",
+      overflowY: "auto",
+      "&::-webkit-scrollbar": {
+        width: "8px"
+      },
+      "&::-webkit-scrollbar-track": {
+        background: theme.vars.palette.grey[800]
+      },
+      "&::-webkit-scrollbar-thumb": {
+        background: theme.vars.palette.grey[500],
+        borderRadius: BORDER_RADIUS.sm
+      },
+      "&::-webkit-scrollbar-thumb:hover": {
+        background: theme.vars.palette.grey[400]
+      }
+    },
+    ".help-item": {
+      marginBottom: "0.25em",
+      paddingBottom: "0.5em",
+      display: "flex",
+      alignItems: "center",
+      gap: "1rem",
+      p: {
+        minWidth: "240px"
+      },
+      button: {
+        marginTop: getSpacingPx(SPACING.micro),
+        color: theme.vars.palette.grey[200],
+        border: `1px solid ${theme.vars.palette.grey[600]}`,
+        padding: `${getSpacingPx(SPACING.micro)} ${getSpacingPx(SPACING.sm)}`, // was 1px 6px
+
+        textAlign: "left",
+        lineHeight: "1.3em",
+        minWidth: "unset",
+        fontSize: "0.85em",
+        height: "auto",
+        "&.no-border": {
+          border: "0"
+        }
+      }
+    },
+    ".explanation": {
+      marginBottom: "1em",
+      fontSize: "var(--fontSizeNormal)",
+      color: theme.vars.palette.grey[200]
+    }
+  });
+
+const TabPanel = React.memo(function TabPanel(props: TabPanelProps) {
+  const { children, value, index } = props;
+  return (
+    <div
+      role="tabpanel"
+      className="tabpanel"
+      hidden={value !== index}
+      id={`help-tabpanel-${index}`}
+      aria-labelledby={`help-tab-${index}`}
+    >
+      {value === index && <Box className="tabpanel-content">{children}</Box>}
+    </div>
+  );
+});
+
+const Help = ({
+  open,
+  handleClose
+}: {
+  open: boolean;
+  handleClose: () => void;
+}) => {
+  const helpIndex = useAppHeaderStore((state) => state.helpIndex);
+  const setHelpIndex = useAppHeaderStore((state) => state.setHelpIndex);
+  const handleChange = (event: React.SyntheticEvent, newValue: number) => {
+    setHelpIndex(newValue);
+  };
+  const [expandedNodetool, setExpandedNodetool] = useState(true);
+
+  const theme = useTheme();
+
+  const nodetoolTypes = DATA_TYPES;
+
+  const handleAccordionChange =
+    (panel: string) => (event: React.SyntheticEvent, isExpanded: boolean) => {
+      if (panel === "nodetool") {
+        setExpandedNodetool(isExpanded);
+      }
+    };
+
+  return (
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      fullWidth
+      maxWidth="lg"
+      aria-label="Help"
+    >
+        <div css={helpStyles(theme)}>
+          <div className="help">
+            <div className="top">
+              <Text size="big" >Help</Text>
+              <CloseButton onClick={handleClose} />
+            </div>
+            <div className="tabs-row">
+              <Tabs
+                className="help-tabs"
+                value={helpIndex}
+                onChange={handleChange}
+                aria-label="help tabs"
+              >
+                <Tab label="Shortcuts" id="help-tab-0" />
+                <Tab label="Keyboard" id="help-tab-1" />
+                <Tab label="DataTypes" id="help-tab-2" />
+              </Tabs>
+              <Tooltip title="Open Nodetool Documentation Website" placement="bottom"
+                delay={TOOLTIP_ENTER_DELAY}
+              >
+                <a
+                  href="https://docs.nodetool.ai"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="docs-button"
+                >
+                  <div className="docs-button-text">
+                    <span>Nodetool</span>
+                    <span>Docs</span>
+                  </div>
+                  <OpenInNewIcon />
+                </a>
+              </Tooltip>
+            </div>
+            <div className="content">
+              <TabPanel value={helpIndex} index={0}>
+                <ControlsShortcutsTab />
+              </TabPanel>
+              <TabPanel value={helpIndex} index={1}>
+                <KeyboardShortcutsView shortcuts={NODE_EDITOR_SHORTCUTS} />
+              </TabPanel>
+              <TabPanel value={helpIndex} index={2}>
+                <DataTypesList
+                  title="Nodetool Data Types"
+                  dataTypes={nodetoolTypes}
+                  expanded={expandedNodetool}
+                  onChange={handleAccordionChange("nodetool")}
+                />
+              </TabPanel>
+            </div>
+          </div>
+        </div>
+    </Dialog>
+  );
+};
+
+export default Help;

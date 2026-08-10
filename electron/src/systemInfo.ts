@@ -1,0 +1,187 @@
+/**
+ * System Information gathering module.
+ *
+ * Collects system information for display in the About dialog,
+ * including OS details, installation paths, and tool versions.
+ */
+
+import * as os from "os";
+import { app } from "electron";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+import {
+  getCondaEnvPath,
+  getPythonPath,
+  getSystemDataPath,
+  getOptionalNodeModulesPath,
+} from "./config";
+import { logMessage, LOG_FILE } from "./logger";
+import { SystemInfo } from "./types.d";
+
+const execAsync = promisify(exec);
+
+/**
+ * Execute a command and return its output, or null if it fails
+ */
+async function execCommand(command: string): Promise<string | null> {
+  try {
+    const { stdout } = await execAsync(command, { timeout: 10000 });
+    return stdout.trim();
+  } catch (error) {
+    logMessage(`Command failed: ${command} - ${error}`, "warn");
+    return null;
+  }
+}
+
+/**
+ * Get Python version from the conda environment
+ */
+async function getPythonVersion(): Promise<string | null> {
+  try {
+    const pythonPath = getPythonPath();
+    const output = await execCommand(`"${pythonPath}" --version`);
+    // Output is like "Python 3.11.0"
+    if (output) {
+      return output.replace("Python ", "").trim();
+    }
+    return null;
+  } catch (error) {
+    logMessage(`Failed to get Python version: ${error}`, "warn");
+    return null;
+  }
+}
+
+/**
+ * Get CUDA version and availability in a single call.
+ * This consolidates detection to ensure consistent results.
+ */
+async function getCudaInfo(): Promise<{ available: boolean; version: string | null }> {
+  try {
+    // Try nvidia-smi to get full GPU info (most comprehensive check)
+    const fullOutput = await execCommand("nvidia-smi");
+    if (fullOutput && fullOutput.trim().length > 0) {
+      // GPU is available - now try to extract CUDA version
+      const cudaMatch = fullOutput.match(/CUDA Version:\s+(\d+\.\d+)/);
+      if (cudaMatch) {
+        return { available: true, version: cudaMatch[1] };
+      }
+
+      // Try to get driver version as fallback
+      const driverOutput = await execCommand(
+        "nvidia-smi --query-gpu=driver_version --format=csv,noheader"
+      );
+      if (driverOutput && driverOutput.trim().length > 0) {
+        return { available: true, version: `Driver ${driverOutput.trim()}` };
+      }
+
+      // nvidia-smi works but we couldn't parse version - GPU is still available
+      return { available: true, version: "Available" };
+    }
+
+    // nvidia-smi failed, try alternative detection methods
+    // Try lspci to detect NVIDIA GPU on Linux
+    if (process.platform === "linux") {
+      const lspciOutput = await execCommand("lspci | grep -i nvidia");
+      if (lspciOutput && lspciOutput.toLowerCase().includes("nvidia")) {
+        return { available: true, version: "NVIDIA GPU detected (driver not installed)" };
+      }
+    }
+
+    // Try spctl (macOS) for GPU detection
+    if (process.platform === "darwin") {
+      const systemProfilerOutput = await execCommand(
+        "system_profiler SPDisplaysDataType | grep -i nvidia"
+      );
+      if (systemProfilerOutput && systemProfilerOutput.toLowerCase().includes("nvidia")) {
+        return { available: true, version: "NVIDIA GPU detected" };
+      }
+    }
+
+    return { available: false, version: null };
+  } catch (error) {
+    logMessage(`CUDA detection error: ${error}`, "warn");
+    return { available: false, version: null };
+  }
+}
+
+/**
+ * Get OS version string
+ */
+function getOsVersion(): string {
+  const platform = process.platform;
+  const release = os.release();
+
+  switch (platform) {
+    case "darwin": {
+      // macOS version mapping
+      const macVersionMap: Record<string, string> = {
+        "24": "Sequoia",
+        "23": "Sonoma",
+        "22": "Ventura",
+        "21": "Monterey",
+        "20": "Big Sur",
+        "19": "Catalina",
+      };
+      const majorVersion = release.split(".")[0];
+      const macName = macVersionMap[majorVersion] || "";
+      return `${release}${macName ? ` (${macName})` : ""}`;
+    }
+    case "win32":
+      return release;
+    case "linux":
+      return release;
+    default:
+      return release;
+  }
+}
+
+/**
+ * Get OS name
+ */
+function getOsName(): string {
+  switch (process.platform) {
+    case "darwin":
+      return "macOS";
+    case "win32":
+      return "Windows";
+    case "linux":
+      return "Linux";
+    default:
+      return process.platform;
+  }
+}
+
+/**
+ * Gather all system information
+ */
+export async function getSystemInfo(): Promise<SystemInfo> {
+  logMessage("Gathering system information...");
+
+  // Run independent checks in parallel
+  const [pythonVersion, cudaInfo] = await Promise.all([
+    getPythonVersion(),
+    getCudaInfo(),
+  ]);
+
+  const systemInfo: SystemInfo = {
+    appVersion: app.getVersion(),
+    electronVersion: process.versions.electron,
+    chromeVersion: process.versions.chrome,
+    nodeVersion: process.versions.node,
+    os: getOsName(),
+    osVersion: getOsVersion(),
+    arch: process.arch,
+    installPath: app.getPath("exe"),
+    condaEnvPath: getCondaEnvPath(),
+    dataPath: getSystemDataPath(""),
+    logsPath: LOG_FILE,
+    optionalNodePath: getOptionalNodeModulesPath(),
+    pythonVersion,
+    cudaAvailable: cudaInfo.available,
+    cudaVersion: cudaInfo.version,
+  };
+
+  logMessage(`System info gathered: ${JSON.stringify(systemInfo)}`);
+  return systemInfo;
+}

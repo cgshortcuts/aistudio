@@ -1,0 +1,370 @@
+/**
+ * Asset model – digital asset storage with folder hierarchy.
+ *
+ * Port of Python's `nodetool.models.asset`.
+ */
+
+import { eq, and, like, desc, isNull, lt, inArray } from "drizzle-orm";
+import { DBModel, createTimeOrderedUuid } from "./base-model.js";
+import { getDb } from "./db.js";
+import { assets } from "./schema/assets.js";
+
+export class Asset extends DBModel {
+  static override table = assets;
+
+  declare id: string;
+  declare user_id: string;
+  declare parent_id: string | null;
+  declare file_id: string | null;
+  declare name: string;
+  declare content_type: string;
+  declare size: number | null;
+  declare duration: number | null;
+  declare metadata: Record<string, unknown> | null;
+  /** Sketch document that backs this image asset, if any (1:1 link). */
+  declare sketch_document_id: string | null;
+  declare workflow_id: string | null;
+  declare node_id: string | null;
+  declare job_id: string | null;
+  declare timeline_id: string | null;
+  declare created_at: string;
+  declare updated_at: string;
+
+  constructor(data: Record<string, unknown>) {
+    super(data);
+    const now = new Date().toISOString();
+    this.id ??= createTimeOrderedUuid();
+    this.name ??= "";
+    this.content_type ??= "application/octet-stream";
+    this.parent_id ??= null;
+    this.file_id ??= null;
+    this.size ??= null;
+    this.duration ??= null;
+    this.metadata ??= null;
+    this.sketch_document_id ??= null;
+    this.workflow_id ??= null;
+    this.node_id ??= null;
+    this.job_id ??= null;
+    this.timeline_id ??= null;
+    this.created_at ??= now;
+    this.updated_at ??= now;
+  }
+
+  override beforeSave(): void {
+    this.updated_at = new Date().toISOString();
+  }
+
+  // ── Computed properties ──────────────────────────────────────────
+
+  get isFolder(): boolean {
+    return this.content_type === "folder";
+  }
+
+  get fileExtension(): string {
+    const dot = this.name.lastIndexOf(".");
+    return dot >= 0 ? this.name.slice(dot + 1).toLowerCase() : "";
+  }
+
+  get hasThumbnail(): boolean {
+    const type = this.content_type;
+    return type.startsWith("image/") || type.startsWith("video/");
+  }
+
+  // ── Static queries ───────────────────────────────────────────────
+
+  /** Find an asset by id, scoped to the user. */
+  static async find(userId: string, assetId: string): Promise<Asset | null> {
+    const asset = await Asset.get<Asset>(assetId);
+    if (!asset || asset.user_id !== userId) return null;
+    return asset;
+  }
+
+  /**
+   * Every asset across all users, oldest first — for offline maintenance
+   * (the storage key backfill). Deliberately not user-scoped, so it must
+   * never back a request handler; pass `userId` to narrow it.
+   */
+  static async allForMigration(userId?: string): Promise<Asset[]> {
+    const db = getDb();
+    const query = db.select().from(assets);
+    const rows = await (userId
+      ? query.where(eq(assets.user_id, userId))
+      : query);
+    return rows.map((row) => new Asset(row as Partial<Asset>));
+  }
+
+  /** List assets in a folder. */
+  static async paginate(
+    userId: string,
+    opts: {
+      parentId?: string | null;
+      contentType?: string;
+      workflowId?: string;
+      nodeId?: string;
+      jobId?: string;
+      timelineId?: string;
+      limit?: number;
+      startKey?: string;
+    } = {}
+  ): Promise<[Asset[], string]> {
+    const {
+      parentId,
+      contentType,
+      workflowId,
+      nodeId,
+      jobId,
+      timelineId,
+      limit = 50,
+      startKey
+    } = opts;
+    const db = getDb();
+
+    const conditions = [eq(assets.user_id, userId)];
+    if (parentId !== undefined) {
+      if (parentId === null) {
+        conditions.push(isNull(assets.parent_id));
+      } else {
+        conditions.push(eq(assets.parent_id, parentId));
+      }
+    }
+    if (contentType) {
+      // Prefix match, like searchAssetsGlobal: a "image" filter must find
+      // "image/png". Exact equality only matched legacy bare-type rows.
+      const sanitizedType = contentType.replace(/[%_\\]/g, "\\$&");
+      conditions.push(like(assets.content_type, `${sanitizedType}%`));
+    }
+    if (workflowId) {
+      conditions.push(eq(assets.workflow_id, workflowId));
+    }
+    if (nodeId) {
+      conditions.push(eq(assets.node_id, nodeId));
+    }
+    if (jobId) {
+      conditions.push(eq(assets.job_id, jobId));
+    }
+    if (startKey) {
+      const cursor = await Asset.get<Asset>(startKey);
+      if (cursor && cursor.user_id === userId) {
+        conditions.push(lt(assets.created_at, cursor.created_at));
+      }
+    }
+    if (timelineId) {
+      conditions.push(eq(assets.timeline_id, timelineId));
+    }
+
+    const rows = await db
+      .select()
+      .from(assets)
+      .where(and(...conditions))
+      .orderBy(desc(assets.created_at))
+      .limit(limit + 1)
+
+    const items = rows.map((r: Record<string, unknown>) => new Asset(r as Record<string, unknown>));
+    if (items.length <= limit) return [items, ""];
+    items.pop();
+    const cursor = items[items.length - 1]?.id ?? "";
+    return [items, cursor];
+  }
+
+  /** Get children of a folder. */
+  static async getChildren(
+    userId: string,
+    parentId: string,
+    limit = 100
+  ): Promise<Asset[]> {
+    const [assetList] = await Asset.paginate(userId, { parentId, limit });
+    return assetList;
+  }
+
+  /**
+   * Search assets globally across all folders for a user.
+   * Uses LIKE on name field for substring matching.
+   */
+  static async searchAssetsGlobal(
+    userId: string,
+    query: string,
+    opts: {
+      contentType?: string;
+      limit?: number;
+      cursor?: string;
+    } = {}
+  ): Promise<[Asset[], string, Array<Record<string, string>>]> {
+    const { contentType, limit = 100, cursor: startKey } = opts;
+    // Escape LIKE special characters to prevent pattern injection
+    const sanitized = query.trim().replace(/[%_\\]/g, "\\$&");
+    const db = getDb();
+
+    const conditions = [
+      eq(assets.user_id, userId),
+      like(assets.name, `%${sanitized}%`)
+    ];
+    if (contentType) {
+      const sanitizedType = contentType.replace(/[%_\\]/g, "\\$&");
+      conditions.push(like(assets.content_type, `${sanitizedType}%`));
+    }
+    if (startKey) {
+      const cursorAsset = await Asset.get<Asset>(startKey);
+      if (cursorAsset && cursorAsset.user_id === userId) {
+        conditions.push(lt(assets.created_at, cursorAsset.created_at));
+      }
+    }
+
+    const rows = await db
+      .select()
+      .from(assets)
+      .where(and(...conditions))
+      .orderBy(desc(assets.created_at))
+      .limit(limit + 1)
+
+    const items = rows.map((r: Record<string, unknown>) => new Asset(r as Record<string, unknown>));
+    let cursor = "";
+    if (items.length > limit) {
+      items.pop();
+      cursor = items[items.length - 1]?.id ?? "";
+    }
+
+    const pathInfo = await Asset.getAssetPathInfo(
+      userId,
+      items.map((a: Record<string, unknown>) => a.id as string)
+    );
+
+    const folderPaths: Array<Record<string, string>> = [];
+    for (const asset of items) {
+      if (pathInfo[asset.id]) {
+        folderPaths.push(pathInfo[asset.id]);
+      } else {
+        folderPaths.push({
+          folder_name: "Unknown",
+          folder_path: "Unknown",
+          folder_id: asset.parent_id ?? ""
+        });
+      }
+    }
+
+    return [items, cursor, folderPaths];
+  }
+
+  /**
+   * Get folder path information for given asset IDs.
+   */
+  static async getAssetPathInfo(
+    userId: string,
+    assetIds: string[]
+  ): Promise<Record<string, Record<string, string>>> {
+    if (assetIds.length === 0) return {};
+
+    const result: Record<string, Record<string, string>> = {};
+
+    const assetMap = new Map<string, Asset>();
+
+    // Chunk ids to avoid sqlite limitations on max parameters if array is huge
+    const chunkSize = 900;
+    for (let i = 0; i < assetIds.length; i += chunkSize) {
+      const chunk = assetIds.slice(i, i + chunkSize);
+      const db = getDb();
+      const rows = await db
+        .select()
+        .from(assets)
+        .where(and(eq(assets.user_id, userId), inArray(assets.id, chunk)));
+
+      for (const r of rows) {
+        assetMap.set(r.id as string, new Asset(r as Record<string, unknown>));
+      }
+    }
+
+    const parentCache = new Map<string, Asset>();
+
+    for (const assetId of assetIds) {
+      const asset = assetMap.get(assetId);
+      if (!asset) continue;
+
+      if (!asset.parent_id || asset.parent_id === userId) {
+        result[assetId] = {
+          folder_name: "Home",
+          folder_path: "Home",
+          folder_id: userId
+        };
+        continue;
+      }
+
+      const pathParts: string[] = [];
+      const pathIds: string[] = [];
+      let currentId: string | null = asset.parent_id;
+      // A cyclic parent chain would loop here forever. better-sqlite3 is
+      // synchronous, so the awaits never yield to the macrotask queue and the
+      // whole process wedges rather than just this request.
+      const seenAncestors = new Set<string>();
+
+      while (currentId && currentId !== userId) {
+        if (seenAncestors.has(currentId)) break;
+        seenAncestors.add(currentId);
+        let parent = parentCache.get(currentId);
+        if (!parent) {
+          parent = (await Asset.find(userId, currentId)) ?? undefined;
+          if (parent) parentCache.set(currentId, parent);
+        }
+        if (!parent) break;
+        pathParts.push(parent.name);
+        pathIds.push(parent.id);
+        currentId = parent.parent_id;
+      }
+
+      pathParts.push("Home");
+      pathIds.push(userId);
+      pathParts.reverse();
+      pathIds.reverse();
+
+      const immediateName = pathParts[pathParts.length - 1];
+      const immediateId = pathIds[pathIds.length - 1];
+
+      result[assetId] = {
+        folder_name: immediateName,
+        folder_path: pathParts.join(" / "),
+        folder_id: immediateId
+      };
+    }
+
+    return result;
+  }
+
+  /**
+   * Recursively fetch all assets within a folder.
+   */
+  static async getAssetsRecursive(
+    userId: string,
+    folderId: string
+  ): Promise<{ assets: Record<string, unknown>[] }> {
+    const folder = await Asset.find(userId, folderId);
+    if (!folder) return { assets: [] };
+
+    // Guards against cyclic parent links: without it the descent never
+    // terminates, and since better-sqlite3 is synchronous it starves the
+    // event loop instead of overflowing the stack.
+    const visited = new Set<string>();
+
+    async function recursiveFetch(
+      currentFolderId: string
+    ): Promise<Record<string, unknown>[]> {
+      if (visited.has(currentFolderId)) return [];
+      visited.add(currentFolderId);
+      const [assetList] = await Asset.paginate(userId, {
+        parentId: currentFolderId,
+        limit: 10000
+      });
+      const result: Record<string, unknown>[] = [];
+      for (const asset of assetList) {
+        const dict = asset.toRow();
+        if (asset.content_type === "folder") {
+          dict.children = await recursiveFetch(asset.id);
+        }
+        result.push(dict);
+      }
+      return result;
+    }
+
+    const folderDict = folder.toRow();
+    folderDict.children = await recursiveFetch(folderId);
+
+    return { assets: [folderDict] };
+  }
+}

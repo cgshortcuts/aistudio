@@ -1,0 +1,444 @@
+import { WorkflowRunner, withExplicitNodeFlags } from "@nodetool-ai/kernel";
+import { NodeRegistry } from "@nodetool-ai/node-sdk";
+import {
+  ProcessingContext,
+  connectPythonBridgeForGraph,
+  resolvePythonNodeExecutor,
+  type PythonBridgeOptions
+} from "@nodetool-ai/runtime";
+import type {
+  NodeDescriptor as GraphNodeDescriptor,
+  Edge,
+  NodeUpdate
+} from "@nodetool-ai/protocol";
+
+export interface OutputHandle<T> {
+  readonly __brand: "OutputHandle";
+  readonly nodeId: string;
+  readonly slot: string;
+  readonly __phantom?: T;
+}
+
+export function isOutputHandle(value: unknown): value is OutputHandle<unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as any).__brand === "OutputHandle"
+  );
+}
+
+export type Connectable<T> = T | OutputHandle<T>;
+
+export type SingleOutput<T, TSlot extends string = "output"> = {
+  readonly [K in TSlot]: T;
+};
+
+export type OutputSlot<TOutputs extends object> = Extract<
+  keyof TOutputs,
+  string
+>;
+
+export interface OutputAccessor<
+  TOutputs extends object,
+  TDefault extends OutputSlot<TOutputs> | undefined = undefined
+> {
+  (): TDefault extends OutputSlot<TOutputs>
+    ? OutputHandle<TOutputs[TDefault]>
+    : never;
+  <K extends OutputSlot<TOutputs>>(slot: K): OutputHandle<TOutputs[K]>;
+}
+
+export interface DslNode<
+  TOutputs extends object,
+  TDefault extends OutputSlot<TOutputs> | undefined =
+    TOutputs extends SingleOutput<infer _TValue, infer TSlot>
+      ? Extract<TSlot, OutputSlot<TOutputs>>
+      : undefined
+> {
+  readonly nodeId: string;
+  readonly nodeType: string;
+  readonly inputs: Record<string, unknown>;
+  readonly output: OutputAccessor<TOutputs, TDefault>;
+}
+
+export interface WorkflowNode {
+  readonly id: string;
+  readonly type: string;
+  readonly data: Record<string, unknown>;
+  readonly streaming: boolean;
+  readonly streamingInput: boolean;
+}
+
+export interface WorkflowEdge {
+  readonly source: string;
+  readonly sourceHandle: string;
+  readonly target: string;
+  readonly targetHandle: string;
+}
+
+export interface Workflow {
+  readonly nodes: WorkflowNode[];
+  readonly edges: WorkflowEdge[];
+}
+
+interface RegisteredNodeDescriptor {
+  nodeId: string;
+  nodeType: string;
+  inputs: Record<string, unknown>;
+  streaming: boolean;
+  streamingInput: boolean;
+}
+
+const nodeRegistry = new Map<string, RegisteredNodeDescriptor>();
+
+function createOutputHandle<T>(nodeId: string, slot: string): OutputHandle<T> {
+  return Object.freeze({
+    __brand: "OutputHandle" as const,
+    nodeId,
+    slot
+  });
+}
+
+export type CreateNodeOptions<
+  TOutputs extends object,
+  TDefault extends OutputSlot<TOutputs> | undefined = undefined
+> = {
+  streaming?: boolean;
+  streamingInput?: boolean;
+  outputNames?: readonly OutputSlot<TOutputs>[];
+  defaultOutput?: TDefault;
+  multiOutput?: boolean;
+};
+
+export function createNode<
+  TOutputs extends object,
+  TDefault extends OutputSlot<TOutputs> | undefined =
+    TOutputs extends SingleOutput<infer _TValue, infer TSlot>
+      ? Extract<TSlot, OutputSlot<TOutputs>>
+      : undefined
+>(
+  nodeType: string,
+  inputs: Record<string, unknown>,
+  opts?: CreateNodeOptions<TOutputs, TDefault>
+): DslNode<TOutputs, TDefault> {
+  const nodeId = crypto.randomUUID();
+  const streaming = opts?.streaming ?? false;
+  const streamingInput = opts?.streamingInput ?? false;
+  const outputNames = opts?.outputNames
+    ? [...opts.outputNames]
+    : opts?.multiOutput
+      ? []
+      : [opts?.defaultOutput ?? "output"];
+  const defaultOutput =
+    opts?.defaultOutput ??
+    (outputNames.length === 1 && !opts?.multiOutput
+      ? outputNames[0]
+      : undefined);
+
+  const descriptor: RegisteredNodeDescriptor = {
+    nodeId,
+    nodeType,
+    inputs,
+    streaming,
+    streamingInput
+  };
+  nodeRegistry.set(nodeId, descriptor);
+
+  const knownOutputs = new Set<string>(outputNames);
+  const output = Object.freeze(((slot?: string) => {
+    const resolvedSlot = slot ?? defaultOutput;
+    if (!resolvedSlot) {
+      throw new Error(`Node ${nodeType} requires an explicit output slot`);
+    }
+    if (knownOutputs.size > 0 && !knownOutputs.has(resolvedSlot)) {
+      throw new Error(
+        `Unknown output slot '${resolvedSlot}' for node type ${nodeType}`
+      );
+    }
+    return createOutputHandle(nodeId, resolvedSlot);
+  }) as OutputAccessor<TOutputs, TDefault>);
+
+  const node = Object.freeze({
+    nodeId,
+    nodeType,
+    inputs,
+    output
+  }) as DslNode<TOutputs, TDefault>;
+
+  return node;
+}
+
+export function workflow(...terminals: DslNode<any>[]): Workflow {
+  if (terminals.length === 0) {
+    throw new Error("workflow() requires at least one terminal node");
+  }
+
+  const visited = new Map<string, RegisteredNodeDescriptor>();
+  const edges: WorkflowEdge[] = [];
+  const queue: string[] = [];
+
+  for (const terminal of terminals) {
+    const desc = nodeRegistry.get(terminal.nodeId);
+    if (!desc) {
+      throw new Error(
+        `Node not found: ${terminal.nodeId} — this handle may belong to a previous workflow() build`
+      );
+    }
+    if (!visited.has(terminal.nodeId)) {
+      visited.set(terminal.nodeId, desc);
+      queue.push(terminal.nodeId);
+    }
+  }
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    const desc = visited.get(currentId)!;
+
+    for (const [inputName, value] of Object.entries(desc.inputs)) {
+      if (isOutputHandle(value)) {
+        edges.push({
+          source: value.nodeId,
+          sourceHandle: value.slot,
+          target: currentId,
+          targetHandle: inputName
+        });
+
+        if (!visited.has(value.nodeId)) {
+          const sourceDesc = nodeRegistry.get(value.nodeId);
+          if (!sourceDesc) {
+            throw new Error(
+              `Node not found: ${value.nodeId} — this handle may belong to a previous workflow() build`
+            );
+          }
+          visited.set(value.nodeId, sourceDesc);
+          queue.push(value.nodeId);
+        }
+      }
+    }
+  }
+
+  // Topological sort + cycle detection (Kahn's algorithm)
+  const inDegree = new Map<string, number>();
+  const adjList = new Map<string, string[]>();
+  for (const id of visited.keys()) {
+    inDegree.set(id, 0);
+    adjList.set(id, []);
+  }
+  for (const edge of edges) {
+    adjList.get(edge.source)!.push(edge.target);
+    inDegree.set(edge.target, (inDegree.get(edge.target) ?? 0) + 1);
+  }
+
+  const topoQueue: string[] = [];
+  for (const [id, deg] of inDegree) {
+    if (deg === 0) topoQueue.push(id);
+  }
+  const sorted: string[] = [];
+  while (topoQueue.length > 0) {
+    const id = topoQueue.shift()!;
+    sorted.push(id);
+    for (const neighbor of adjList.get(id)!) {
+      const newDeg = inDegree.get(neighbor)! - 1;
+      inDegree.set(neighbor, newDeg);
+      if (newDeg === 0) topoQueue.push(neighbor);
+    }
+  }
+  if (sorted.length !== visited.size) {
+    throw new Error("Workflow contains a cycle");
+  }
+
+  // Build WorkflowNodes — strip OutputHandle values from data
+  const nodes: WorkflowNode[] = sorted.map((id) => {
+    const desc = visited.get(id)!;
+    const data: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(desc.inputs)) {
+      if (!isOutputHandle(val)) {
+        data[key] = val;
+      }
+    }
+    return {
+      id: desc.nodeId,
+      type: desc.nodeType,
+      data,
+      streaming: desc.streaming,
+      streamingInput: desc.streamingInput
+    };
+  });
+
+  nodeRegistry.clear();
+
+  return Object.freeze({ nodes, edges });
+}
+
+export type SecretResolver = (
+  key: string,
+  userId: string
+) => Promise<string | null | undefined> | string | null | undefined;
+
+export type RunOptions = {
+  userId?: string;
+  authToken?: string;
+  /** Custom node registry; defaults to NodeRegistry.global. */
+  registry?: NodeRegistry;
+  /**
+   * Resolve a credential by name for the running job. Bind your storage
+   * backend here — typically `(key, userId) => getSecret(key, userId)` from
+   * `@nodetool-ai/models`. Without it the context falls back to env vars
+   * only, and any node declaring `requiredSettings` will warn that its
+   * secret is missing.
+   */
+  secretResolver?: SecretResolver;
+  /**
+   * Python worker bridge options forwarded to {@link createPythonBridge} when
+   * the graph contains Python nodes. Omit to rely on the environment
+   * (`NODETOOL_WORKER_URL` / `NODETOOL_WORKER_TOKEN`); set `wsUrl`/`workerToken`
+   * here to target a specific remote worker programmatically.
+   */
+  bridgeOptions?: PythonBridgeOptions;
+};
+
+export type WorkflowResult = Record<string, unknown>;
+
+export async function run(
+  wf: Workflow,
+  opts?: RunOptions
+): Promise<WorkflowResult> {
+  const jobId = crypto.randomUUID();
+  const nodes: GraphNodeDescriptor[] = wf.nodes.map((n) => ({
+    id: n.id,
+    type: n.type,
+    properties: n.data,
+    is_streaming_output: n.streaming,
+    is_streaming_input: n.streamingInput
+  }));
+
+  const edges = wf.edges.map((e) => ({
+    source: e.source,
+    sourceHandle: e.sourceHandle,
+    target: e.target,
+    targetHandle: e.targetHandle
+  })) as Edge[];
+
+  const context = new ProcessingContext({
+    jobId,
+    // Default to user "1" — matches the CLI's default user-id, so secrets
+    // stored via `nodetool secrets store <KEY>` resolve out of the box.
+    userId: opts?.userId ?? "1",
+    secretResolver: opts?.secretResolver
+  });
+
+  const builtinRegistry = new NodeRegistry();
+  const { registerBaseNodes } = await import("@nodetool-ai/base-nodes");
+  registerBaseNodes(builtinRegistry);
+  try {
+    const { registerElevenLabsNodes } =
+      await import("@nodetool-ai/elevenlabs-nodes");
+    registerElevenLabsNodes(builtinRegistry);
+  } catch {
+    // Some environments do not have the ElevenLabs node package in a runnable state.
+  }
+  try {
+    const { registerMinimaxNodes } = await import("@nodetool-ai/minimax-nodes");
+    registerMinimaxNodes(builtinRegistry);
+  } catch {
+    // Some environments do not have the MiniMax node package in a runnable state.
+  }
+  try {
+    const { registerTransformersJsNodes } = await import(
+      "@nodetool-ai/transformers-js-nodes"
+    );
+    registerTransformersJsNodes(builtinRegistry);
+  } catch {
+    // Some environments do not have the Transformers.js node package in a runnable state.
+  }
+  try {
+    const { registerHuggingFaceNodes } = await import(
+      "@nodetool-ai/huggingface-nodes"
+    );
+    registerHuggingFaceNodes(builtinRegistry);
+  } catch {
+    // Some environments do not have the Hugging Face node package in a runnable state.
+  }
+  try {
+    const { registerReveNodes } = await import("@nodetool-ai/reve-nodes");
+    registerReveNodes(builtinRegistry);
+  } catch {
+    // Some environments do not have the Reve node package in a runnable state.
+  }
+
+  const hasTsExecutor = (type: string): boolean =>
+    Boolean(opts?.registry?.has(type)) ||
+    NodeRegistry.global.has(type) ||
+    builtinRegistry.has(type);
+
+  // Connect a Python worker bridge only when the graph has a node type no TS
+  // registry can resolve (a candidate Python node). Transport is chosen by
+  // NODETOOL_WORKER_URL (remote) vs unset (local stdio); see the helper. The
+  // bridge is closed in the finally below.
+  const pythonBridge = await connectPythonBridgeForGraph(
+    wf.nodes,
+    hasTsExecutor,
+    opts?.bridgeOptions
+  );
+
+  const resolveExecutor = (node: { id: string; type: string }) => {
+    if (opts?.registry?.has(node.type)) {
+      return opts.registry.resolve(node);
+    }
+    if (NodeRegistry.global.has(node.type)) {
+      return NodeRegistry.global.resolve(node);
+    }
+    if (builtinRegistry.has(node.type)) {
+      return builtinRegistry.resolve(node);
+    }
+    const py = resolvePythonNodeExecutor(pythonBridge, node);
+    if (py) return py;
+    throw new Error(`Unknown node type: ${node.type}`);
+  };
+
+  const runner = new WorkflowRunner(jobId, {
+    resolveExecutor,
+    executionContext: context
+  });
+
+  const result = await (async () => {
+    try {
+      // DSL nodes carry their streaming flags from generated metadata
+      // (`n.streaming` / `n.streamingInput` above); the rest default off.
+      return await runner.run(
+        { job_id: jobId },
+        withExplicitNodeFlags({ nodes, edges })
+      );
+    } finally {
+      pythonBridge?.close();
+    }
+  })();
+
+  if (result.status === "failed") {
+    throw new Error(result.error ?? "Workflow execution failed");
+  }
+
+  // Surface node-level errors: actors catch exceptions and return them as
+  // node_update messages with status "error" without failing the whole run.
+  const nodeErrors = (result.messages ?? []).filter(
+    (m): m is NodeUpdate =>
+      m.type === "node_update" && (m as NodeUpdate).status === "error"
+  );
+  if (nodeErrors.length > 0) {
+    throw new Error(nodeErrors[0].error ?? "A node failed during execution");
+  }
+
+  const outputs: WorkflowResult = {};
+  for (const [name, values] of Object.entries(result.outputs)) {
+    if (values.length > 0) {
+      outputs[name] = values[values.length - 1];
+    }
+  }
+  return outputs;
+}
+
+export async function runGraph(
+  ...terminals: DslNode<any>[]
+): Promise<WorkflowResult> {
+  return run(workflow(...terminals));
+}

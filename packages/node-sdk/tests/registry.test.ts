@@ -1,0 +1,151 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { NodeRegistry } from "../src/registry.js";
+import { BaseNode } from "../src/base-node.js";
+import { prop } from "../src/decorators.js";
+
+class NodeA extends BaseNode {
+  static readonly nodeType = "test.NodeA";
+  static readonly title = "Node A";
+  static readonly description = "";
+
+  @prop({ type: "any", default: null })
+  declare in: any;
+
+  async process() {
+    return { out: this.in };
+  }
+}
+
+class NodeB extends BaseNode {
+  static readonly nodeType = "test.NodeB";
+  static readonly title = "Node B";
+  static readonly description = "";
+
+  @prop({ type: "int", default: 2 })
+  declare factor: number;
+
+  @prop({ type: "any", default: null })
+  declare value: any;
+
+  async process() {
+    return { result: (this.value as number) * this.factor };
+  }
+}
+
+describe("NodeRegistry", () => {
+  let registry: NodeRegistry;
+
+  beforeEach(() => {
+    registry = new NodeRegistry();
+  });
+
+  it("register() adds a node class", () => {
+    registry.register(NodeA);
+    expect(registry.has("test.NodeA")).toBe(true);
+  });
+
+  it("records only explicit package identities", () => {
+    registry.register(NodeA);
+    expect(registry.getNodePackageId("test.NodeA")).toBeUndefined();
+
+    registry.registerPackage("base", (target) => target.register(NodeB));
+    expect(registry.getNodePackageId("test.NodeB")).toBe("base");
+    expect(registry.listNodePackageIds()).toEqual(["base"]);
+  });
+
+  it("clears package registration context after registrar failure", () => {
+    expect(() =>
+      registry.registerPackage("broken", () => {
+        throw new Error("registration failed");
+      })
+    ).toThrow("registration failed");
+
+    registry.register(NodeA);
+    expect(registry.getNodePackageId("test.NodeA")).toBeUndefined();
+  });
+
+  it("increments its revision whenever registry metadata changes", () => {
+    const initialRevision = registry.revision;
+    registry.register(NodeA);
+    expect(registry.revision).toBe(initialRevision + 1);
+    registry.loadMetadata("python.Node", {
+      title: "Python Node",
+      description: "",
+      namespace: "python",
+      node_type: "python.Node",
+      properties: [],
+      outputs: []
+    });
+    expect(registry.revision).toBe(initialRevision + 2);
+  });
+
+  it("tracks the authoritative metadata source", () => {
+    registry.register(NodeA);
+    registry.loadMetadata(
+      "python.BridgeNode",
+      {
+        title: "Bridge Node",
+        description: "",
+        namespace: "python",
+        node_type: "python.BridgeNode",
+        properties: [],
+        outputs: []
+      },
+      { source: "python-bridge" }
+    );
+
+    expect(registry.getMetadataSource("test.NodeA")).toBe("typescript");
+    expect(registry.getMetadataSource("python.BridgeNode")).toBe(
+      "python-bridge"
+    );
+    expect(registry.getMetadataSource("missing.Node")).toBeUndefined();
+  });
+
+  it("has() returns false for unregistered types", () => {
+    expect(registry.has("test.Unknown")).toBe(false);
+  });
+
+  it("list() returns all registered types", () => {
+    registry.register(NodeA);
+    registry.register(NodeB);
+    expect(registry.list()).toContain("test.NodeA");
+    expect(registry.list()).toContain("test.NodeB");
+    expect(registry.list()).toHaveLength(2);
+  });
+
+  it("resolve() returns a NodeExecutor that works", async () => {
+    registry.register(NodeA);
+    const executor = registry.resolve({ id: "a1", type: "test.NodeA" });
+    const result = await executor.process({ in: 42 });
+    expect(result.out).toBe(42);
+  });
+
+  it("resolve() throws for unknown type", () => {
+    expect(() => registry.resolve({ id: "x", type: "test.Unknown" })).toThrow(
+      "Unknown node type: test.Unknown"
+    );
+  });
+
+  it("resolve() passes properties to instance", async () => {
+    registry.register(NodeB);
+    const executor = registry.resolve({
+      id: "b1",
+      type: "test.NodeB",
+      properties: { factor: 5 }
+    });
+    const result = await executor.process({ value: 3 });
+    expect(result.result).toBe(15);
+  });
+
+  it("register() throws for node without nodeType", () => {
+    class BadNode extends BaseNode {
+      static readonly nodeType = "";
+      async process() {
+        return {};
+      }
+    }
+    expect(() => registry.register(BadNode)).toThrow(
+      "Cannot register node class without nodeType"
+    );
+  });
+});

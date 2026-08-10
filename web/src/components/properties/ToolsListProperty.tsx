@@ -1,0 +1,254 @@
+import React, { memo, useCallback, useMemo, useState } from "react";
+
+import {
+  ToolbarIconButton,
+  FlexRow,
+  Checkbox,
+  EditorMenu,
+  EditorMenuItem,
+  MOTION,
+  SPACING,
+  getSpacingPx,
+  ListItemIcon,
+  ListItemText
+} from "../ui_primitives";
+import PropertyLabel from "../node/PropertyLabel";
+import { PropertyProps } from "../node/PropertyInput";
+import isEqual from "../../utils/isEqual";
+
+interface Tool {
+  type: string;
+  name: string;
+}
+import Search from "@mui/icons-material/Search";
+import Language from "@mui/icons-material/Language";
+import Add from "@mui/icons-material/Add";
+import Description from "@mui/icons-material/Description";
+import EditNote from "@mui/icons-material/EditNote";
+import Folder from "@mui/icons-material/Folder";
+import Lock from "@mui/icons-material/Lock";
+
+const BROWSER_TOOL_IDS = [
+  "browser_view",
+  "browser_navigate",
+  "browser_restart",
+  "browser_click",
+  "browser_input_text",
+  "browser_move_mouse",
+  "browser_press_key",
+  "browser_select_option",
+  "browser_scroll",
+  "browser_console_exec",
+  "browser_console_view"
+];
+
+const SANDBOX_TOOL_IDS = [
+  // Shell
+  "sandbox_shell_exec",
+  "sandbox_shell_wait",
+  "sandbox_shell_view",
+  "sandbox_shell_write",
+  "sandbox_shell_kill",
+  // Files
+  "sandbox_file_read",
+  "sandbox_file_write",
+  "sandbox_file_str_replace",
+  "sandbox_file_find_in_content",
+  "sandbox_file_find_by_name",
+  // Browser
+  "sandbox_browser_view",
+  "sandbox_browser_navigate",
+  "sandbox_browser_restart",
+  "sandbox_browser_click",
+  "sandbox_browser_input_text",
+  "sandbox_browser_move_mouse",
+  "sandbox_browser_press_key",
+  "sandbox_browser_select_option",
+  "sandbox_browser_scroll",
+  "sandbox_browser_console_exec",
+  "sandbox_browser_console_view"
+];
+
+interface ToolEntry {
+  /** Synthetic id for the menu row. */
+  id: string;
+  description: string;
+  icon: React.JSX.Element;
+  /** Underlying tool names this entry expands to. */
+  toolIds: string[];
+}
+
+const AVAILABLE_TOOLS: ToolEntry[] = [
+  {
+    id: "read_file",
+    description: "Read file in workspace",
+    icon: <Description fontSize="small" sx={{ mr: 0.5 }} />,
+    toolIds: ["read_file"]
+  },
+  {
+    id: "write_file",
+    description: "Write file in workspace",
+    icon: <EditNote fontSize="small" sx={{ mr: 0.5 }} />,
+    toolIds: ["write_file"]
+  },
+  {
+    id: "list_directory",
+    description: "List files in workspace",
+    icon: <Folder fontSize="small" sx={{ mr: 0.5 }} />,
+    toolIds: ["list_directory"]
+  },
+  {
+    id: "google_search",
+    description: "Search the web",
+    icon: <Search fontSize="small" sx={{ mr: 0.5 }} />,
+    toolIds: ["google_search"]
+  },
+  {
+    id: "browser",
+    description: "Browse the web",
+    icon: <Language fontSize="small" sx={{ mr: 0.5 }} />,
+    toolIds: BROWSER_TOOL_IDS
+  },
+  {
+    id: "sandbox",
+    description: "Sandbox shell, files, and browser",
+    icon: <Lock fontSize="small" sx={{ mr: 0.5 }} />,
+    toolIds: SANDBOX_TOOL_IDS
+  }
+];
+
+const ToolsListProperty = (props: PropertyProps) => {
+  const id = `tools-list-${props.property.name}-${props.propertyIndex}`;
+  const toolNames: string[] = useMemo(
+    () => props.value?.map((tool: Tool) => tool.name) || [],
+    [props.value]
+  );
+  const toolNameSet = useMemo(() => new Set(toolNames), [toolNames]);
+
+  const selectedEntries = useMemo(
+    () =>
+      AVAILABLE_TOOLS.filter((entry) =>
+        entry.toolIds.every((tid) => toolNameSet.has(tid))
+      ),
+    [toolNameSet]
+  );
+
+  const [menuAnchor, setMenuAnchor] = useState<null | HTMLElement>(null);
+  const openMenu = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    setMenuAnchor(event.currentTarget);
+  }, []);
+
+  const onChange = useCallback(
+    (selectedToolNames: string[]) => {
+      props.onChange(
+        selectedToolNames.map((name) => ({ type: "tool_name", name }))
+      );
+    },
+    [props]
+  );
+
+  const handleToolClick = useCallback(
+    (event: React.MouseEvent<HTMLElement>) => {
+      const entryId = event.currentTarget.dataset.tool;
+      if (!entryId) return;
+      const entry = AVAILABLE_TOOLS.find((t) => t.id === entryId);
+      if (!entry) return;
+      const isSelected = entry.toolIds.every((tid) => toolNameSet.has(tid));
+      const memberSet = new Set(entry.toolIds);
+      const next = isSelected
+        ? toolNames.filter((n) => !memberSet.has(n))
+        : [...toolNames.filter((n) => !memberSet.has(n)), ...entry.toolIds];
+      onChange(next);
+    },
+    [toolNames, toolNameSet, onChange]
+  );
+
+  return (
+    <>
+      <PropertyLabel
+        name={props.property.name}
+        description={props.property.description}
+        id={id}
+      />
+
+      <FlexRow
+        className="tools-list-items"
+        gap={1}
+        sx={{ mt: 1, flexWrap: "wrap" }}
+      >
+        {selectedEntries.map((entry) => (
+          <ToolbarIconButton
+            key={entry.id}
+            tooltip={entry.description}
+            tooltipPlacement="top"
+            icon={entry.icon}
+            size="small"
+            onClick={handleToolClick}
+            data-tool={entry.id}
+            sx={{
+              padding: getSpacingPx(SPACING.micro), // was 1px
+              marginLeft: "0 !important",
+              transition: `color ${MOTION.normal}`,
+              color: "c_hl1",
+              "&:hover": {
+                color: "c_hl1"
+              },
+              "& svg": {
+                fontSize: "var(--fontSizeNormal)"
+              }
+            }}
+          />
+        ))}
+
+        <ToolbarIconButton
+          tooltip="Add / Remove Tools"
+          tooltipPlacement="top"
+          icon={<Add fontSize="small" />}
+          size="small"
+          onClick={openMenu}
+          sx={{
+            padding: getSpacingPx(SPACING.micro), // was 1px
+            marginLeft: "0 !important",
+            color: "palette-grey-400",
+            "&:hover": {
+              color: "palette-grey-100"
+            },
+            "& svg": {
+              fontSize: "var(--fontSizeNormal)"
+            }
+          }}
+        />
+      </FlexRow>
+
+      <EditorMenu
+        anchorEl={menuAnchor}
+        open={Boolean(menuAnchor)}
+        onClose={() => setMenuAnchor(null)}
+      >
+        {AVAILABLE_TOOLS.map((entry) => {
+          const selected = entry.toolIds.every((tid) =>
+            toolNameSet.has(tid)
+          );
+          return (
+            <EditorMenuItem
+              key={entry.id}
+              onClick={handleToolClick}
+              data-tool={entry.id}
+            >
+              <ListItemIcon sx={{ minWidth: 24 }}>{entry.icon}</ListItemIcon>
+              <ListItemText>{entry.description}</ListItemText>
+              <Checkbox
+                checked={selected}
+                size="small"
+                sx={{ p: 0, ml: 1 }}
+                disableRipple
+              />
+            </EditorMenuItem>
+          );
+        })}
+      </EditorMenu>
+    </>
+  );
+};
+
+export default memo(ToolsListProperty, isEqual);

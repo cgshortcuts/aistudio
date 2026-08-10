@@ -1,0 +1,33 @@
+---
+layout: page
+title: "Slice Audio"
+node_type: "nodetool.audio.SliceAudio"
+namespace: "nodetool.audio"
+---
+
+**Type:** `nodetool.audio.SliceAudio`
+
+**Namespace:** `nodetool.audio`
+
+## Description
+
+Extracts a section of an audio file.
+    audio, edit, trim
+
+## Properties
+
+| Property | Type | Description | Default |
+|----------|------|-------------|---------|
+| audio | `audio` | The audio file. | `{"type":"audio","uri":"","asset_id":null,"data"...` |
+| start | `float` | The start time in seconds. | `0` |
+| end | `float` | The end time in seconds. 0 or less slices to the end. | `1` |
+
+## Outputs
+
+| Output | Type | Description |
+|--------|------|-------------|
+| output | `audio` |  |
+
+## Related Nodes
+
+Browse other nodes in the [nodetool.audio](./) namespace.

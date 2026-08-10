@@ -1,0 +1,426 @@
+import { act } from "@testing-library/react";
+import {
+  useNotificationStore,
+  NotificationType
+} from "../NotificationStore";
+
+describe("NotificationStore", () => {
+  beforeEach(() => {
+    // Reset store to initial state
+    useNotificationStore.setState({
+      notifications: [],
+      lastDisplayedTimestamp: null
+    });
+    jest.clearAllMocks();
+  });
+
+  describe("initial state", () => {
+    it("has empty notifications array", () => {
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toEqual([]);
+    });
+
+    it("has null lastDisplayedTimestamp", () => {
+      const { lastDisplayedTimestamp } = useNotificationStore.getState();
+      expect(lastDisplayedTimestamp).toBeNull();
+    });
+  });
+
+  describe("addNotification", () => {
+    it("adds a notification with generated id and timestamp", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Test notification"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].content).toBe("Test notification");
+      expect(notifications[0].type).toBe("info");
+      expect(notifications[0].id).toBeDefined();
+      expect(notifications[0].timestamp).toBeInstanceOf(Date);
+    });
+
+    it("adds multiple notifications in order", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "First"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Second"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toHaveLength(2);
+      expect(notifications[0].content).toBe("First");
+      expect(notifications[1].content).toBe("Second");
+    });
+
+    it("preserves optional properties", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "warning",
+          content: "Warning message",
+          timeout: 5000,
+          dismissable: true,
+          alert: true
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications[0].timeout).toBe(5000);
+      expect(notifications[0].dismissable).toBe(true);
+      expect(notifications[0].alert).toBe(true);
+    });
+
+    it("handles all notification types", () => {
+      const types: NotificationType[] = [
+        "info",
+        "debug",
+        "error",
+        "warning",
+        "progress",
+        "node",
+        "job",
+        "success"
+      ];
+
+      act(() => {
+        types.forEach((type) => {
+          useNotificationStore.getState().addNotification({
+            type,
+            content: `${type} notification`
+          });
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toHaveLength(types.length);
+      types.forEach((type, index) => {
+        expect(notifications[index].type).toBe(type);
+      });
+    });
+
+    it("generates unique IDs for each notification", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "First"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Second"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications[0].id).not.toBe(notifications[1].id);
+    });
+
+    it("suppresses duplicate notifications with same type and content", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Workflow autosaved"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Workflow autosaved"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Workflow autosaved"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].content).toBe("Workflow autosaved");
+    });
+
+    it("allows notifications with different content", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "First message"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Second message"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toHaveLength(2);
+    });
+
+    it("allows notifications with same content but different type", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Same message"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "warning",
+          content: "Same message"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toHaveLength(2);
+    });
+
+    it("allows same notification after the dedupe window expires", () => {
+      // Add first notification with a timestamp in the past (>5s ago)
+      const oldTimestamp = new Date(Date.now() - 6000);
+      useNotificationStore.setState({
+        notifications: [
+          {
+            id: "old-id",
+            type: "info",
+            content: "Workflow autosaved",
+            timestamp: oldTimestamp
+          }
+        ]
+      });
+
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Workflow autosaved"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toHaveLength(2);
+    });
+
+    it("deduplicates using custom dedupeKey when provided", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Version 1 available",
+          dedupeKey: "autosave-versions"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Version 2 available",
+          dedupeKey: "autosave-versions"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      // Same dedupeKey, so second one is suppressed even though content differs
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].content).toBe("Version 1 available");
+    });
+
+    it("allows notifications with different dedupeKeys", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Message",
+          dedupeKey: "key-a"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Message",
+          dedupeKey: "key-b"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toHaveLength(2);
+    });
+
+    it("replaceExisting bypasses dedup check and replaces existing notification", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Version 1",
+          dedupeKey: "autosave",
+          replaceExisting: true
+        });
+      });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+      expect(useNotificationStore.getState().notifications[0].content).toBe(
+        "Version 1"
+      );
+
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Version 2",
+          dedupeKey: "autosave",
+          replaceExisting: true
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      // Should have replaced the old one, not suppressed
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0].content).toBe("Version 2");
+    });
+
+    it("replaceExisting without dedupeKey still replaces by type:content key", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Same message",
+          replaceExisting: true
+        });
+      });
+
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Same message",
+          replaceExisting: true
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      expect(notifications).toHaveLength(1);
+    });
+  });
+
+  describe("removeNotification", () => {
+    it("removes a notification by id", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "To be removed"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      const idToRemove = notifications[0].id;
+
+      act(() => {
+        useNotificationStore.getState().removeNotification(idToRemove);
+      });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+
+    it("only removes the specified notification", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Keep this"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Remove this"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Keep this too"
+        });
+      });
+
+      const { notifications } = useNotificationStore.getState();
+      const idToRemove = notifications[1].id;
+
+      act(() => {
+        useNotificationStore.getState().removeNotification(idToRemove);
+      });
+
+      const updatedNotifications =
+        useNotificationStore.getState().notifications;
+      expect(updatedNotifications).toHaveLength(2);
+      expect(updatedNotifications[0].content).toBe("Keep this");
+      expect(updatedNotifications[1].content).toBe("Keep this too");
+    });
+
+    it("does nothing if id not found", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "Test"
+        });
+      });
+
+      act(() => {
+        useNotificationStore.getState().removeNotification("non-existent-id");
+      });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    });
+  });
+
+  describe("clearNotifications", () => {
+    it("clears all notifications", () => {
+      act(() => {
+        useNotificationStore.getState().addNotification({
+          type: "info",
+          content: "First"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "warning",
+          content: "Second"
+        });
+        useNotificationStore.getState().addNotification({
+          type: "error",
+          content: "Third"
+        });
+      });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(3);
+
+      act(() => {
+        useNotificationStore.getState().clearNotifications();
+      });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+
+    it("works when already empty", () => {
+      act(() => {
+        useNotificationStore.getState().clearNotifications();
+      });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+  });
+
+  describe("updateLastDisplayedTimestamp", () => {
+    it("updates the lastDisplayedTimestamp", () => {
+      const testDate = new Date("2024-01-15T10:30:00Z");
+
+      act(() => {
+        useNotificationStore.getState().updateLastDisplayedTimestamp(testDate);
+      });
+
+      expect(useNotificationStore.getState().lastDisplayedTimestamp).toEqual(
+        testDate
+      );
+    });
+
+    it("can update timestamp multiple times", () => {
+      const date1 = new Date("2024-01-15T10:30:00Z");
+      const date2 = new Date("2024-01-15T11:45:00Z");
+
+      act(() => {
+        useNotificationStore.getState().updateLastDisplayedTimestamp(date1);
+      });
+      expect(useNotificationStore.getState().lastDisplayedTimestamp).toEqual(
+        date1
+      );
+
+      act(() => {
+        useNotificationStore.getState().updateLastDisplayedTimestamp(date2);
+      });
+      expect(useNotificationStore.getState().lastDisplayedTimestamp).toEqual(
+        date2
+      );
+    });
+  });
+});
+

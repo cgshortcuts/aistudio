@@ -1,0 +1,301 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import React, { memo, useCallback, useMemo } from "react";
+import { Text, BORDER_RADIUS, ListGroup, MOTION, SPACING, getSpacingPx } from "../ui_primitives";
+import RenderNamespaces from "./RenderNamespaces";
+import useNodeMenuStore from "../../stores/NodeMenuStore";
+import { useShallow } from "zustand/react/shallow";
+import { NamespaceTree } from "../../hooks/useNamespaceTree";
+import { HomeNamespaceIcon } from "./NamespaceIcon";
+import OptionalPacksSection from "./OptionalPacksSection";
+
+interface NamespacePanelProps {
+  namespaceTree: NamespaceTree;
+}
+
+const namespacePanelStyles = (theme: Theme) =>
+  css({
+    "&": {
+      width: "200px",
+      marginRight: "0.5em",
+      marginLeft: "0.5em",
+      position: "relative",
+      transition: MOTION.all
+    },
+    "&.collapsed": {
+      width: 0,
+      opacity: 0,
+      visibility: "hidden",
+      marginRight: "1em"
+    },
+    "& .namespace-list": {
+      display: "flex",
+      flexDirection: "column",
+      gap: 0,
+      overflowY: "auto",
+      minWidth: "200px",
+      width: "100%",
+      boxSizing: "border-box",
+      height: "100%",
+      maxHeight: "calc(min(750px, 80vh))",
+      padding: "0.5em",
+      borderRadius: BORDER_RADIUS.xl,
+      border: `1px solid ${theme.vars.palette.divider}`,
+      backgroundColor: "transparent"
+    },
+    "& .namespace-list::-webkit-scrollbar": { width: "6px" },
+    "& .namespace-list::-webkit-scrollbar-track": { background: "transparent" },
+    "& .namespace-list::-webkit-scrollbar-thumb": {
+      backgroundColor: theme.vars.palette.action.disabledBackground,
+      borderRadius: BORDER_RADIUS.lg
+    },
+    "& .namespace-list::-webkit-scrollbar-thumb:hover": {
+      backgroundColor: theme.vars.palette.action.disabled
+    },
+    "& .namespace-section-title": {
+      fontSize: theme.fontSizeSmaller,
+      fontWeight: 600,
+      textTransform: "uppercase",
+      letterSpacing: "0.6px",
+      color: theme.vars.palette.text.secondary,
+      padding: "1.1em 0 .4em .5em",
+      margin: 0,
+      userSelect: "none"
+    },
+    "& .namespace-section-title.providers": {
+      marginTop: ".25em"
+    },
+    "& .namespace-list-local": {
+      flex: "0 0 auto",
+      height: "fit-content",
+      overflowY: "visible",
+      marginBottom: 0,
+      paddingBottom: 0
+    },
+    "& .namespace-list-providers": {
+      flex: "0 0 auto",
+      height: "fit-content",
+      overflowY: "visible",
+      borderTop: "none",
+      marginTop: 0,
+      paddingTop: 0
+    },
+    "& .namespaces": {
+      display: "flex",
+      flexDirection: "column",
+      gap: "0"
+    },
+    "& .namespace-item": {
+      color: theme.vars.palette.text.primary,
+      display: "flex",
+      alignItems: "center",
+      gap: "0.6em",
+      whiteSpace: "nowrap",
+      overflow: "hidden",
+      userSelect: "none"
+    },
+    "& .namespace-item .namespace-label": {
+      textTransform: "capitalize",
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      minWidth: 0
+    },
+    "& .namespace-item .namespace-icon": {
+      color: theme.vars.palette.text.secondary
+    },
+    "& .list-item.selected .namespace-item .namespace-icon": {
+      color: "var(--palette-primary-main)",
+      borderColor: "rgba(var(--palette-primary-mainChannel) / 0.4)",
+      backgroundColor: "rgba(var(--palette-primary-mainChannel) / 0.12)"
+    },
+    "& .disabled .namespace-item": {
+      color: theme.vars.palette.text.disabled
+    },
+    "& .namespaces .list-item": {
+      cursor: "pointer",
+      padding: "0.4em 0.5em",
+      backgroundColor: "transparent",
+      fontFamily: theme.fontFamily1,
+      fontSize: theme.fontSizeSmall,
+      fontWeight: 400,
+      lineHeight: 1.2,
+      transition: `${MOTION.background}, ${MOTION.opacity}`,
+      overflow: "hidden",
+      margin: `${getSpacingPx(SPACING.micro)} 0`, // was 1px 0
+      borderRadius: BORDER_RADIUS.md
+    },
+    "& .namespaces .list-item.disabled": {
+      backgroundColor: "transparent",
+      color: theme.vars.palette.grey[200],
+      "&:hover": {
+        backgroundColor: theme.vars.palette.action.hover
+      }
+    },
+    "& .list-item.firstDisabled": {
+      borderTop: `1px solid ${theme.vars.palette.divider}`,
+      marginTop: "0.5em"
+    },
+    "& .namespaces .list-item:hover": {
+      backgroundColor: theme.vars.palette.action.hover
+    },
+    "& .namespaces .list-item.expanded": {
+      opacity: 1
+    },
+    "& .namespaces .list-item.collapsed": {
+      maxHeight: "0",
+      opacity: 0,
+      padding: "0",
+      width: "0",
+      margin: "0",
+      overflow: "hidden"
+    },
+    "& .namespaces .list-item.selected": {
+      backgroundColor: "rgba(var(--palette-primary-mainChannel) / 0.12)",
+      fontWeight: 600,
+      color: "var(--palette-primary-main)"
+    },
+    "& .namespaces .list-item.selected .namespace-item": {
+      color: "var(--palette-primary-main)"
+    },
+    "& .namespaces .list-item.disabled.selected": {
+      backgroundColor: theme.vars.palette.action.selected
+    },
+    // Namespaces that contain matches for the active search/filter: tint the
+    // label so the user can see where to drill in, without a hard border.
+    "& .namespaces .list-item.highlighted .namespace-label": {
+      color: "var(--palette-primary-main)"
+    },
+    "& .namespaces .list-item.highlighted.selected .namespace-item": {
+      color: "var(--palette-primary-main)"
+    },
+    "& .namespaces .sublist": {
+      paddingLeft: "0.85em"
+    }
+  });
+
+const NamespacePanel: React.FC<NamespacePanelProps> = ({ namespaceTree }) => {
+  const theme = useTheme();
+  const { searchTerm, selectedPath, setSelectedPath } = useNodeMenuStore(
+    useShallow((state) => ({
+      searchTerm: state.searchTerm,
+      selectedPath: state.selectedPath,
+      setSelectedPath: state.setSelectedPath
+    }))
+  );
+  const selectedProviderType = useNodeMenuStore(
+    (state) => state.selectedProviderType
+  );
+
+  const selectedPathString = useMemo(
+    () => selectedPath.join("."),
+    [selectedPath]
+  );
+
+  const minSearchTermLength =
+    searchTerm.includes("+") ||
+    searchTerm.includes("-") ||
+    searchTerm.includes("*") ||
+    searchTerm.includes("/")
+      ? 0
+      : 1;
+
+  const filteredTree = useMemo(() => {
+    if (selectedProviderType === "all") {
+      return namespaceTree;
+    }
+
+    const filterByProvider = (tree: NamespaceTree): NamespaceTree => {
+      return Object.entries(tree).reduce<NamespaceTree>((acc, [key, node]) => {
+        const children = filterByProvider(node.children);
+        if (node.providerKind === selectedProviderType) {
+          acc[key] = {
+            ...node,
+            children
+          };
+        }
+        return acc;
+      }, {});
+    };
+
+    return filterByProvider(namespaceTree);
+  }, [namespaceTree, selectedProviderType]);
+
+  const { localTree, providerTree } = useMemo(() => {
+    const local: NamespaceTree = {};
+    const providers: NamespaceTree = {};
+    Object.entries(filteredTree).forEach(([key, value]) => {
+      if (value.providerKind === "local") {
+        local[key] = value;
+      } else {
+        providers[key] = value;
+      }
+    });
+
+    return { localTree: local, providerTree: providers };
+  }, [filteredTree]);
+
+  const handleResetNamespacePath = useCallback(() => {
+    setSelectedPath([]);
+  }, [setSelectedPath]);
+
+  return (
+    <div
+      css={namespacePanelStyles(theme)}
+      className="namespace-panel-container"
+    >
+      <ListGroup className="namespace-list">
+        <div className="namespaces">
+          <div
+            className={`list-item ${selectedPathString ? "" : "selected"}`}
+            onClick={handleResetNamespacePath}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                handleResetNamespacePath();
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            title={
+              searchTerm.length > minSearchTermLength
+                ? "Show all results"
+                : "Home"
+            }
+          >
+            <div className="namespace-item">
+              <HomeNamespaceIcon />
+              <span className="namespace-label">
+                {searchTerm.length > minSearchTermLength
+                  ? "All results"
+                  : "Home"}
+              </span>
+            </div>
+          </div>
+        </div>
+        {Object.keys(localTree).length > 0 && (
+          <>
+            <Text className="namespace-section-title">Local</Text>
+            <div className="namespace-list-local">
+              <RenderNamespaces tree={localTree} />
+            </div>
+          </>
+        )}
+        {Object.keys(providerTree).length > 0 && (
+          <>
+            <Text className="namespace-section-title providers">
+              Providers
+            </Text>
+            <div className="namespace-list-providers">
+              <RenderNamespaces tree={providerTree} />
+            </div>
+          </>
+        )}
+        <OptionalPacksSection />
+      </ListGroup>
+    </div>
+  );
+};
+
+export default memo(NamespacePanel);

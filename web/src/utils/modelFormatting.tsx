@@ -1,0 +1,139 @@
+import type { JSX } from "react";
+import { UnifiedModel } from "../stores/ApiTypes";
+import { formatByteSize } from "./formatUtils";
+import ModelIcon from "../icons/data_types/nodetool/model.svg";
+import PetsIcon from "@mui/icons-material/Pets";
+import { SPACING, getSpacingPx } from "../components/ui_primitives";
+
+export const prettifyModelType = (type: string): JSX.Element | string => {
+  if (type === "All") {return type;}
+
+  if (type === "llama_model") {
+    return (
+      <>
+        <img
+          src="/ollama.png"
+          alt="Ollama"
+          style={{
+            width: "16px",
+            marginRight: getSpacingPx(SPACING.md),
+            filter: "invert(1)"
+          }}
+        />
+        Ollama
+      </>
+    );
+  }
+
+  if (type === "llama_cpp") {
+    return (
+      <>
+        <PetsIcon style={{ fontSize: 18, marginRight: 8 }} />
+        Llama cpp
+      </>
+    );
+  }
+
+  const parts = type.split(".");
+  if (parts[0] === "hf") {
+    parts.shift();
+    return (
+      <>
+        <img
+          src="https://huggingface.co/front/assets/huggingface_logo-noborder.svg"
+          alt="Hugging Face"
+          style={{ width: "20px", marginRight: getSpacingPx(SPACING.md) }}
+        />
+        {parts
+          .map((part) =>
+            part
+              .split("_")
+              .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+              .join(" ")
+          )
+          .join(" ")}
+      </>
+    );
+  }
+
+  return (
+    <>
+      <img
+        src={ModelIcon}
+        alt="Model"
+        style={{
+          width: "20px",
+          marginRight: getSpacingPx(SPACING.md),
+          filter: "invert(1)"
+        }}
+      />
+      {type
+        .split("_")
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(" ")}
+    </>
+  );
+};
+
+const MODEL_BYTE_UNITS = [
+  "Bytes",
+  "KB",
+  "MB",
+  "GB",
+  "TB",
+  "PB",
+  "EB",
+  "ZB",
+  "YB"
+] as const;
+
+export const formatBytes = (bytes?: number): string => {
+  if (bytes === undefined || bytes === null || isNaN(bytes)) {
+    return "";
+  }
+  return formatByteSize(bytes, MODEL_BYTE_UNITS, 2, "0 Bytes");
+};
+
+export const groupModelsByType = (models: UnifiedModel[]): Record<string, UnifiedModel[]> => {
+  const grouped: Record<string, UnifiedModel[]> = {};
+  for (const model of models) {
+    const type = model.type || "Other";
+    if (!grouped[type]) {
+      grouped[type] = [];
+    }
+    grouped[type].push(model);
+  }
+  return grouped;
+};
+
+export const sortModelTypes = (types: string[]): string[] => {
+  const getOrder = (type: string) => {
+    switch (type) {
+      case "All":
+        return 0;
+      case "llama_model":
+        return 1;
+      case "llama_cpp":
+        return 1;
+      case "mlx":
+        return 1;
+      case "Other":
+        return 3;
+      default:
+        return 4;
+    }
+  };
+
+  return types.sort((a, b) => {
+    const orderA = getOrder(a);
+    const orderB = getOrder(b);
+
+    if (orderA < orderB) {
+      return -1;
+    }
+    if (orderA > orderB) {
+      return 1;
+    }
+    return a.localeCompare(b);
+  });
+};

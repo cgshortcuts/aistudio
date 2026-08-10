@@ -1,0 +1,792 @@
+import { handleChatWebSocketMessage } from "../chatProtocol";
+import type { WebSocketMessage } from "../../../lib/websocket/GlobalWebSocketManager";
+import type { GlobalChatState } from "../../../stores/GlobalChatStore";
+
+/**
+ * Each case stands up only the slice of GlobalChatState its reducer reads; the
+ * full state is ~70 fields wide. Reads off the result stay type-checked.
+ */
+const partialChatState = (state: unknown): GlobalChatState =>
+  state as GlobalChatState;
+import { FrontendToolRegistry } from "../../../lib/tools/frontendTools";
+import { globalWebSocketManager } from "../../../lib/websocket/GlobalWebSocketManager";
+
+jest.mock("../../../lib/tools/frontendTools", () => ({
+  FrontendToolRegistry: {
+    has: jest.fn(),
+    call: jest.fn()
+  }
+}));
+
+jest.mock("../../../lib/websocket/GlobalWebSocketManager", () => ({
+  globalWebSocketManager: {
+    send: jest.fn().mockResolvedValue(undefined),
+    ensureConnection: jest.fn().mockResolvedValue(undefined)
+  }
+}));
+
+describe("chatProtocol", () => {
+  describe("agent turn status", () => {
+    const makeState = (threadRuntimeStatus: string): GlobalChatState =>
+      partialChatState({
+      status: "streaming",
+      currentThreadId: "thread-1",
+      threads: {
+        "thread-1": {
+          id: "thread-1",
+          title: "T",
+          updated_at: new Date().toISOString()
+        }
+      },
+      threadRuntime: {
+        "thread-1": {
+          status: threadRuntimeStatus,
+          statusMessage: null,
+          progress: { current: 0, total: 0 },
+          error: null,
+          planningUpdate: null,
+          taskUpdate: null,
+          logUpdate: null,
+          runningToolCallId: null,
+          toolMessage: null,
+          sendMessageTimeoutId: null
+        }
+      },
+      messageCache: { "thread-1": [{ role: "user", type: "message", content: "go" }] },
+      selectedModel: { provider: "", id: "" },
+      summarizeThread: jest.fn(),
+      updateThreadTitle: jest.fn()
+    });
+
+    // An assistant message carrying tool_calls is mid-loop by definition: the
+    // model asked for tools, so the turn continues. Resetting to idle here is
+    // what flips the composer back to Run while tools are still running.
+    it("stays busy on an assistant message that requests tool calls", async () => {
+      let capturedState: GlobalChatState = makeState("streaming");
+      const set = jest.fn((updater) => {
+        capturedState = {
+          ...capturedState,
+          ...(typeof updater === "function" ? updater(capturedState) : updater)
+        };
+      });
+
+      await handleChatWebSocketMessage(
+        {
+          type: "message",
+          role: "assistant",
+          thread_id: "thread-1",
+          content: null,
+          tool_calls: [{ id: "c1", name: "ui_sketch_get_state", args: {} }]
+        } as unknown as WebSocketMessage,
+        set,
+        () => capturedState
+      );
+
+      expect(capturedState.threadRuntime["thread-1"].status).not.toBe("idle");
+    });
+
+    it("goes idle on a final assistant message with no tool calls", async () => {
+      let capturedState: GlobalChatState = makeState("streaming");
+      const set = jest.fn((updater) => {
+        capturedState = {
+          ...capturedState,
+          ...(typeof updater === "function" ? updater(capturedState) : updater)
+        };
+      });
+
+      await handleChatWebSocketMessage(
+        {
+          type: "message",
+          role: "assistant",
+          thread_id: "thread-1",
+          content: "All done."
+        } as unknown as WebSocketMessage,
+        set,
+        () => capturedState
+      );
+
+      expect(capturedState.threadRuntime["thread-1"].status).toBe("idle");
+    });
+  });
+
+  // Server-side planners (plan_workflow_graph, plan_orchestration_script)
+  // forward progress as bare events, not agent_execution messages. Without a
+  // dispatch branch they were dropped and the user saw a silent "Thinking…"
+  // for the whole plan.
+  describe("planner progress events", () => {
+    const makeState = (): GlobalChatState =>
+      partialChatState({
+      status: "streaming",
+      currentThreadId: "thread-1",
+      threads: {
+        "thread-1": {
+          id: "thread-1",
+          title: "T",
+          updated_at: new Date().toISOString()
+        }
+      },
+      threadRuntime: {
+        "thread-1": {
+          status: "streaming",
+          statusMessage: null,
+          progress: { current: 0, total: 0 },
+          error: null,
+          planningUpdate: null,
+          taskUpdate: null,
+          logUpdate: null,
+          runningToolCallId: null,
+          toolMessage: null,
+          sendMessageTimeoutId: null
+        }
+      },
+      lastTaskUpdatesByThread: {},
+      messageCache: { "thread-1": [] },
+      selectedModel: { provider: "", id: "" },
+      summarizeThread: jest.fn(),
+      updateThreadTitle: jest.fn()
+    });
+
+    const dispatch = async (payload: WebSocketMessage) => {
+      let capturedState: GlobalChatState = makeState();
+      const set = jest.fn((updater) => {
+        capturedState = {
+          ...capturedState,
+          ...(typeof updater === "function" ? updater(capturedState) : updater)
+        };
+      });
+      await handleChatWebSocketMessage(payload, set, () => capturedState);
+      return capturedState;
+    };
+
+    it("routes planning_update to the thread runtime", async () => {
+      const state = await dispatch({
+        type: "planning_update",
+        thread_id: "thread-1",
+        phase: "generation",
+        status: "running",
+        content: "Writing orchestration script..."
+      });
+
+      expect(state.threadRuntime["thread-1"].planningUpdate).toMatchObject({
+        phase: "generation",
+        content: "Writing orchestration script..."
+      });
+    });
+
+    it("routes log_update to the thread runtime", async () => {
+      const state = await dispatch({
+        type: "log_update",
+        thread_id: "thread-1",
+        content: "Executing orchestration script...",
+        severity: "info"
+      });
+
+      expect(state.threadRuntime["thread-1"].logUpdate).toMatchObject({
+        content: "Executing orchestration script..."
+      });
+    });
+
+    it("routes task_update to the thread runtime and the last-update map", async () => {
+      const state = await dispatch({
+        type: "task_update",
+        thread_id: "thread-1",
+        event: "task_created",
+        task: { id: "t1", title: "Research", steps: [] }
+      });
+
+      expect(state.threadRuntime["thread-1"].taskUpdate).toMatchObject({
+        event: "task_created"
+      });
+      expect(state.lastTaskUpdatesByThread["thread-1"]).toMatchObject({
+        event: "task_created"
+      });
+    });
+  });
+
+  describe("title generation", () => {
+    it("generates title from first user message when first assistant chunk completes", async () => {
+      let capturedState: GlobalChatState = partialChatState({
+        status: "connected",
+        currentThreadId: "thread-1",
+        threads: {
+          "thread-1": { id: "thread-1", title: undefined, updated_at: new Date().toISOString() }
+        },
+        messageCache: {
+          "thread-1": [
+            { role: "user", type: "message", content: "Hello world" }
+          ]
+        },
+        selectedModel: { provider: "", id: "" },
+        summarizeThread: jest.fn(),
+        updateThreadTitle: jest.fn()
+      });
+
+      const set = jest.fn((updater) => {
+        capturedState = { ...capturedState, ...(typeof updater === "function" ? updater(capturedState) : updater) };
+      });
+
+      const get = () => capturedState;
+
+      await handleChatWebSocketMessage(
+        { type: "chunk", content: "Hi there!", done: true } as unknown as WebSocketMessage,
+        set,
+        get
+      );
+
+      expect(capturedState.updateThreadTitle).toHaveBeenCalledWith("thread-1", "Hello world");
+    });
+
+    it("does not generate title when thread already has a title", async () => {
+      let capturedState: GlobalChatState = partialChatState({
+        status: "connected",
+        currentThreadId: "thread-1",
+        threads: {
+          "thread-1": { id: "thread-1", title: "Existing Title", updated_at: new Date().toISOString() }
+        },
+        messageCache: {
+          "thread-1": [
+            { role: "user", type: "message", content: "Hello world" }
+          ]
+        },
+        selectedModel: { provider: "", id: "" },
+        summarizeThread: jest.fn(),
+        updateThreadTitle: jest.fn()
+      });
+
+      const set = jest.fn((updater) => {
+        capturedState = { ...capturedState, ...(typeof updater === "function" ? updater(capturedState) : updater) };
+      });
+
+      const get = () => capturedState;
+
+      await handleChatWebSocketMessage(
+        { type: "chunk", content: "Hi there!", done: true } as unknown as WebSocketMessage,
+        set,
+        get
+      );
+
+      expect(capturedState.updateThreadTitle).not.toHaveBeenCalled();
+    });
+
+    it("does not generate title for non-first assistant messages", async () => {
+      let capturedState: GlobalChatState = partialChatState({
+        status: "connected",
+        currentThreadId: "thread-1",
+        threads: {
+          "thread-1": { id: "thread-1", title: undefined, updated_at: new Date().toISOString() }
+        },
+        messageCache: {
+          "thread-1": [
+            { role: "user", type: "message", content: "First question" },
+            { role: "assistant", type: "message", content: "First answer" },
+            { role: "user", type: "message", content: "Second question" }
+          ]
+        },
+        selectedModel: { provider: "", id: "" },
+        summarizeThread: jest.fn(),
+        updateThreadTitle: jest.fn()
+      });
+
+      const set = jest.fn((updater) => {
+        capturedState = { ...capturedState, ...(typeof updater === "function" ? updater(capturedState) : updater) };
+      });
+
+      const get = () => capturedState;
+
+      await handleChatWebSocketMessage(
+        { type: "chunk", content: "Second answer", done: true } as unknown as WebSocketMessage,
+        set,
+        get
+      );
+
+      expect(capturedState.updateThreadTitle).not.toHaveBeenCalled();
+    });
+
+    it("handles array content for title generation", async () => {
+      let capturedState: GlobalChatState = partialChatState({
+        status: "connected",
+        currentThreadId: "thread-1",
+        threads: {
+          "thread-1": { id: "thread-1", title: undefined, updated_at: new Date().toISOString() }
+        },
+        messageCache: {
+          "thread-1": [
+            { role: "user", type: "message", content: [{ type: "text", text: "Hello world" }] }
+          ]
+        },
+        selectedModel: { provider: "", id: "" },
+        summarizeThread: jest.fn(),
+        updateThreadTitle: jest.fn()
+      });
+
+      const set = jest.fn((updater) => {
+        capturedState = { ...capturedState, ...(typeof updater === "function" ? updater(capturedState) : updater) };
+      });
+
+      const get = () => capturedState;
+
+      await handleChatWebSocketMessage(
+        { type: "chunk", content: "Hi!", done: true } as unknown as WebSocketMessage,
+        set,
+        get
+      );
+
+      expect(capturedState.updateThreadTitle).toHaveBeenCalledWith("thread-1", "Hello world");
+    });
+
+    it("uses fallback title for non-text content", async () => {
+      let capturedState: GlobalChatState = partialChatState({
+        status: "connected",
+        currentThreadId: "thread-1",
+        threads: {
+          "thread-1": { id: "thread-1", title: undefined, updated_at: new Date().toISOString() }
+        },
+        messageCache: {
+          "thread-1": [
+            { role: "user", type: "message", content: [{ type: "image_url", image: { type: "image", uri: "test.jpg" } }] }
+          ]
+        },
+        selectedModel: { provider: "", id: "" },
+        summarizeThread: jest.fn(),
+        updateThreadTitle: jest.fn()
+      });
+
+      const set = jest.fn((updater) => {
+        capturedState = { ...capturedState, ...(typeof updater === "function" ? updater(capturedState) : updater) };
+      });
+
+      const get = () => capturedState;
+
+      await handleChatWebSocketMessage(
+        { type: "chunk", content: "Hi!", done: true } as unknown as WebSocketMessage,
+        set,
+        get
+      );
+
+      expect(capturedState.updateThreadTitle).toHaveBeenCalledWith("thread-1", "New conversation");
+    });
+
+    it("truncates long titles to 50 characters", async () => {
+      let capturedState: GlobalChatState = partialChatState({
+        status: "connected",
+        currentThreadId: "thread-1",
+        threads: {
+          "thread-1": { id: "thread-1", title: undefined, updated_at: new Date().toISOString() }
+        },
+        messageCache: {
+          "thread-1": [
+            { role: "user", type: "message", content: "This is a very long message that should definitely be truncated because it exceeds fifty characters" }
+          ]
+        },
+        selectedModel: { provider: "", id: "" },
+        summarizeThread: jest.fn(),
+        updateThreadTitle: jest.fn()
+      });
+
+      const set = jest.fn((updater) => {
+        capturedState = { ...capturedState, ...(typeof updater === "function" ? updater(capturedState) : updater) };
+      });
+
+      const get = () => capturedState;
+
+      await handleChatWebSocketMessage(
+        { type: "chunk", content: "Hi!", done: true } as unknown as WebSocketMessage,
+        set,
+        get
+      );
+
+      expect(capturedState.updateThreadTitle).toHaveBeenCalledWith(
+        "thread-1",
+        "This is a very long message that should definitely..."
+      );
+    });
+  });
+
+  it("ignores non-critical messages while stopping", async () => {
+    const set = jest.fn();
+    const get = () =>
+      ({
+        status: "stopping"
+      }) as unknown as GlobalChatState;
+
+    await handleChatWebSocketMessage({ type: "chunk", content: "hi" } as unknown as WebSocketMessage, set, get);
+
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("applies chunks using chunk.thread_id when currentThreadId points to a different thread", async () => {
+    let capturedState: GlobalChatState = partialChatState({
+      status: "connected",
+      currentThreadId: "thread-current",
+      threads: {
+        "thread-current": {
+          id: "thread-current",
+          title: "Current",
+          updated_at: new Date().toISOString()
+        },
+        "thread-stream": {
+          id: "thread-stream",
+          title: undefined,
+          updated_at: new Date().toISOString()
+        }
+      },
+      messageCache: {
+        "thread-current": [
+          { role: "user", type: "message", content: "Current thread" }
+        ],
+        "thread-stream": [
+          { role: "user", type: "message", content: "Hello stream" }
+        ]
+      },
+      selectedModel: { provider: "", id: "" },
+      summarizeThread: jest.fn(),
+      updateThreadTitle: jest.fn()
+    });
+
+    const set = jest.fn((updater) => {
+      capturedState = {
+        ...capturedState,
+        ...(typeof updater === "function" ? updater(capturedState) : updater)
+      };
+    });
+
+    const get = () => capturedState;
+
+    await handleChatWebSocketMessage(
+      {
+        type: "chunk",
+        thread_id: "thread-stream",
+        content: "Hi from stream",
+        done: true
+      } as unknown as WebSocketMessage,
+      set,
+      get
+    );
+
+    expect(capturedState.messageCache["thread-stream"]).toEqual([
+      { role: "user", type: "message", content: "Hello stream" },
+      expect.objectContaining({
+        role: "assistant",
+        type: "message",
+        content: "Hi from stream"
+      })
+    ]);
+    expect(capturedState.messageCache["thread-current"]).toEqual([
+      { role: "user", type: "message", content: "Current thread" }
+    ]);
+    expect(capturedState.updateThreadTitle).toHaveBeenCalledWith(
+      "thread-stream",
+      "Hello stream"
+    );
+  });
+
+  it("resets loading status when a non-stream assistant message arrives", async () => {
+    jest.useFakeTimers();
+    const clearTimeoutSpy = jest.spyOn(global, "clearTimeout");
+
+    const timeoutId = setTimeout(() => undefined, 5000);
+    let capturedState: GlobalChatState = partialChatState({
+      status: "loading",
+      currentThreadId: "thread-1",
+      threadRuntime: {
+        "thread-1": {
+          status: "loading",
+          statusMessage: "Thinking...",
+          progress: { current: 1, total: 2 },
+          error: null,
+          planningUpdate: { planning_status: "in_progress" },
+          taskUpdate: { execution_status: "running" },
+          logUpdate: { message: "step started" },
+          runningToolCallId: null,
+          toolMessage: null,
+          sendMessageTimeoutId: timeoutId
+        }
+      },
+      progress: { current: 1, total: 2 },
+      statusMessage: "Thinking...",
+      currentPlanningUpdate: { planning_status: "in_progress" },
+      currentTaskUpdate: { execution_status: "running" },
+      currentTaskUpdateThreadId: "thread-1",
+      currentLogUpdate: { message: "step started" },
+      threads: {
+        "thread-1": {
+          id: "thread-1",
+          title: undefined,
+          updated_at: new Date().toISOString()
+        }
+      },
+      messageCache: {
+        "thread-1": [{ role: "user", type: "message", content: "Hello" }]
+      },
+      selectedModel: { provider: "", id: "" },
+      summarizeThread: jest.fn(),
+      updateThreadTitle: jest.fn()
+    });
+
+    const set = jest.fn((updater) => {
+      capturedState = {
+        ...capturedState,
+        ...(typeof updater === "function" ? updater(capturedState) : updater)
+      };
+    });
+
+    const get = () => capturedState;
+
+    await handleChatWebSocketMessage(
+      {
+        type: "message",
+        role: "assistant",
+        thread_id: "thread-1",
+        content: "Hi there!"
+      } as unknown as WebSocketMessage,
+      set,
+      get
+    );
+
+    expect(capturedState.status).toBe("connected");
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(timeoutId);
+    expect(
+      capturedState.threadRuntime["thread-1"].sendMessageTimeoutId
+    ).toBeNull();
+    expect(capturedState.threadRuntime["thread-1"].status).toBe("idle");
+    expect(capturedState.progress).toEqual({ current: 0, total: 0 });
+    expect(capturedState.statusMessage).toBeNull();
+    expect(capturedState.currentPlanningUpdate).toBeNull();
+    expect(capturedState.currentTaskUpdate).toBeNull();
+    expect(capturedState.currentTaskUpdateThreadId).toBeNull();
+    expect(capturedState.currentLogUpdate).toBeNull();
+    expect(capturedState.messageCache["thread-1"]).toHaveLength(2);
+
+    clearTimeoutSpy.mockRestore();
+    jest.useRealTimers();
+  });
+
+  it("replaces the streaming placeholder when an assistant tool_call message carries the same text", async () => {
+    // Reproduces the duplicate-message bug: while streaming, applyChunk builds a
+    // local-stream-* placeholder from the text. The server then re-sends that
+    // same text as an assistant message with tool_calls. The placeholder must be
+    // replaced — not joined by a second copy of the text.
+    let capturedState: GlobalChatState = partialChatState({
+      status: "streaming",
+      currentThreadId: "thread-1",
+      threads: {
+        "thread-1": {
+          id: "thread-1",
+          title: "T",
+          updated_at: new Date().toISOString()
+        }
+      },
+      messageCache: {
+        "thread-1": [
+          { role: "user", type: "message", content: "Search the web" },
+          {
+            id: "local-stream-123-abc",
+            role: "assistant",
+            type: "message",
+            content: "Let me search for that."
+          }
+        ]
+      },
+      selectedModel: { provider: "", id: "" },
+      summarizeThread: jest.fn(),
+      updateThreadTitle: jest.fn()
+    });
+
+    const set = jest.fn((updater) => {
+      capturedState = {
+        ...capturedState,
+        ...(typeof updater === "function" ? updater(capturedState) : updater)
+      };
+    });
+
+    const get = () => capturedState;
+
+    await handleChatWebSocketMessage(
+      {
+        type: "message",
+        id: "server-msg-1",
+        role: "assistant",
+        thread_id: "thread-1",
+        created_at: new Date().toISOString(),
+        content: "Let me search for that.",
+        tool_calls: [{ id: "call-1", name: "web_search", args: {} }]
+      } as unknown as WebSocketMessage,
+      set,
+      get
+    );
+
+    const messages = capturedState.messageCache["thread-1"];
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toEqual(
+      expect.objectContaining({
+        id: "server-msg-1",
+        role: "assistant",
+        content: "Let me search for that.",
+        tool_calls: [{ id: "call-1", name: "web_search", args: {} }]
+      })
+    );
+    // The local streaming id is replaced by the finalized server message.
+    expect(messages[1].id).not.toMatch(/^local-stream-/);
+  });
+
+  it("does not overwrite an earlier longer placeholder with a short finalized message (multi-tool-round dedup)", async () => {
+    // Regression: with two un-finalized local-stream-* placeholders, a short
+    // finalized message ("Searching") was matching the older longer placeholder
+    // ("Searching the web for results") via candidateNormalized.startsWith(incoming)
+    // and overwriting it instead of replacing the correct trailing placeholder.
+    let capturedState: GlobalChatState = partialChatState({
+      status: "streaming",
+      currentThreadId: "thread-1",
+      threads: {
+        "thread-1": {
+          id: "thread-1",
+          title: "T",
+          updated_at: new Date().toISOString()
+        }
+      },
+      messageCache: {
+        "thread-1": [
+          { role: "user", type: "message", content: "Search twice" },
+          // Older placeholder from tool round 1 (longer text)
+          {
+            id: "local-stream-100-aaa",
+            role: "assistant",
+            type: "message",
+            content: "Searching the web for results about your query."
+          },
+          // Tool result from round 1 (server-authored, should be skipped)
+          {
+            id: "tool-result-1",
+            role: "tool",
+            type: "message",
+            content: "Found 10 results."
+          },
+          // Trailing placeholder from tool round 2 (shorter text)
+          {
+            id: "local-stream-200-bbb",
+            role: "assistant",
+            type: "message",
+            content: "Searching"
+          }
+        ]
+      },
+      selectedModel: { provider: "", id: "" },
+      summarizeThread: jest.fn(),
+      updateThreadTitle: jest.fn()
+    });
+
+    const set = jest.fn((updater) => {
+      capturedState = {
+        ...capturedState,
+        ...(typeof updater === "function" ? updater(capturedState) : updater)
+      };
+    });
+    const get = () => capturedState;
+
+    // Server finalizes tool round 2 with "Searching" — must replace local-stream-200-bbb
+    await handleChatWebSocketMessage(
+      {
+        type: "message",
+        id: "server-msg-2",
+        role: "assistant",
+        thread_id: "thread-1",
+        created_at: new Date().toISOString(),
+        content: "Searching",
+        tool_calls: [{ id: "call-2", name: "web_search", args: {} }]
+      } as unknown as WebSocketMessage,
+      set,
+      get
+    );
+
+    const messages = capturedState.messageCache["thread-1"];
+    // Still 4 messages — placeholder B replaced, not A
+    expect(messages).toHaveLength(4);
+    // The older placeholder (A) must remain untouched
+    expect(messages[1]).toMatchObject({
+      id: "local-stream-100-aaa",
+      content: "Searching the web for results about your query."
+    });
+    // The trailing placeholder (B) must be replaced by the server message
+    expect(messages[3]).toMatchObject({
+      id: "server-msg-2",
+      content: "Searching"
+    });
+    expect(messages[3].id).not.toMatch(/^local-stream-/);
+  });
+
+  it("returns tool errors for unknown client tools", async () => {
+    (FrontendToolRegistry.has as jest.Mock).mockReturnValue(false);
+
+    const set = jest.fn();
+    const get = () =>
+      ({
+        status: "connected",
+        wsManager: { send: jest.fn() },
+        currentThreadId: null,
+        threads: {},
+        messageCache: {},
+        selectedModel: { provider: "", id: "" },
+        summarizeThread: jest.fn()
+      }) as unknown as GlobalChatState;
+
+    await handleChatWebSocketMessage(
+      {
+        type: "tool_call",
+        tool_call_id: "tc1",
+        name: "unknown_tool",
+        args: {},
+        thread_id: "thread-1"
+      } as unknown as WebSocketMessage,
+      set,
+      get
+    );
+
+    expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "tool_result",
+        ok: false
+      })
+    );
+  });
+
+  it("returns structured tool_result on tool failure", async () => {
+    (FrontendToolRegistry.has as jest.Mock).mockReturnValue(true);
+    (FrontendToolRegistry.call as jest.Mock).mockRejectedValue(new Error("nope"));
+
+    const set = jest.fn();
+    const get = () =>
+      ({
+        status: "connected",
+        wsManager: { send: jest.fn() },
+        workflowId: null,
+        threadWorkflowId: {},
+        currentThreadId: null,
+        threads: {},
+        messageCache: {},
+        selectedModel: { provider: "", id: "" },
+        summarizeThread: jest.fn()
+      }) as unknown as GlobalChatState;
+
+    await handleChatWebSocketMessage(
+      {
+        type: "tool_call",
+        tool_call_id: "tc_fail",
+        name: "ui_fail",
+        args: {},
+        thread_id: "thread-1"
+      } as unknown as WebSocketMessage,
+      set,
+      get
+    );
+
+    expect(globalWebSocketManager.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "tool_result",
+        tool_call_id: "tc_fail",
+        ok: false,
+        error: "nope",
+        result: { error: "nope" }
+      })
+    );
+  });
+});

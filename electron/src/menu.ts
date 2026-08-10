@@ -1,0 +1,382 @@
+import { Menu, shell, dialog, clipboard } from "electron";
+import type { MenuItemConstructorOptions } from "electron";
+import { IpcChannels } from "./types.d";
+import { getMainWindow } from "./state";
+import { createLogViewerWindow, openSettingsInMainWindow } from "./window";
+import { createChatWindow } from "./workflowWindow";
+import { getSystemInfo } from "./systemInfo";
+import { openPerformanceMonitorWindow } from "./perfMonitor";
+import { logMessage } from "./logger";
+import { listVaults, getActiveVaultId } from "./vaults";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
+
+/**
+ * Builds the "Vaults" menu: a radio list of vaults (active one checked) for
+ * quick switching, plus an entry to open the Settings window where vaults are
+ * created/renamed/deleted. Falls back gracefully if the vault list can't be
+ * read so a settings problem never breaks the whole menu.
+ */
+const buildVaultSubmenu = (): MenuItemConstructorOptions[] => {
+  let vaults: ReturnType<typeof listVaults> = [];
+  let activeId = "";
+  try {
+    vaults = listVaults();
+    activeId = getActiveVaultId();
+  } catch (error) {
+    logMessage(`Failed to read vaults for menu: ${String(error)}`, "warn");
+  }
+
+  const vaultItems: MenuItemConstructorOptions[] = vaults.map((vault) => ({
+    label: vault.name,
+    type: "radio",
+    checked: vault.id === activeId,
+    click: () => {
+      if (vault.id === activeId) {
+        return;
+      }
+      // Dynamically import the switch orchestrator so the (heavy) server
+      // restart chain isn't pulled into the menu module at load time.
+      void import("./vaultSwitch")
+        .then(({ applyVaultSwitch }) => applyVaultSwitch(vault.id))
+        .then(() => buildMenu())
+        .catch((error) => {
+          logMessage(`Failed to switch vault: ${String(error)}`, "error");
+          dialog.showErrorBox(
+            "Switch Vault",
+            `Could not switch vault: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+    },
+  }));
+
+  return [
+    ...vaultItems,
+    { type: "separator" },
+    {
+      label: "Manage Vaults…",
+      click: () => openSettingsInMainWindow(),
+    },
+  ];
+};
+
+const buildMenu = () => {
+  const mainWindow = getMainWindow();
+  if (!mainWindow) {
+    return;
+  }
+  const menu = Menu.buildFromTemplate([
+    {
+      // === CUSTOM FORK START: AiStudio Branding ===
+      label: process.platform === "darwin" ? APP_DISPLAY_NAME : "",
+      // === CUSTOM FORK END ===
+      submenu: [
+        { role: "about" },
+        { type: "separator" },
+        { role: "services" },
+        { type: "separator" },
+        { role: "hide" },
+        { role: "hideOthers" },
+        { role: "unhide" },
+        { type: "separator" },
+        { role: "quit" },
+      ],
+    },
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "Save",
+          accelerator: "CmdOrCtrl+S",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "saveWorkflow",
+            });
+          },
+        },
+        { type: "separator" },
+        {
+          label: "New Workflow",
+          accelerator: "CmdOrCtrl+T",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "newTab",
+            });
+          },
+        },
+        {
+          label: "Close Tab",
+          accelerator: "CmdOrCtrl+W",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "close",
+            });
+          },
+        },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        {
+          label: "Undo",
+          accelerator: "CmdOrCtrl+Z",
+          role: "undo",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "undo",
+            });
+          },
+        },
+        {
+          label: "Redo",
+          accelerator: "Shift+CmdOrCtrl+Z",
+          role: "redo",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "redo",
+            });
+          },
+        },
+        { type: "separator" },
+        {
+          label: "Cut",
+          accelerator: "CmdOrCtrl+X",
+          click: () => {
+            // Execute native cut operation first (for text fields)
+            mainWindow.webContents.cut();
+            // Also send IPC event for custom handling (e.g., node cutting)
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "cut",
+            });
+          },
+        },
+        {
+          label: "Copy",
+          accelerator: "CmdOrCtrl+C",
+          click: () => {
+            // Execute native copy operation first (for text fields)
+            mainWindow.webContents.copy();
+            // Also send IPC event for custom handling (e.g., node copying)
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "copy",
+            });
+          },
+        },
+        {
+          label: "Paste",
+          accelerator: "CmdOrCtrl+V",
+          click: () => {
+            // Execute native paste operation first (for text fields)
+            mainWindow.webContents.paste();
+            // Also send IPC event for custom handling (e.g., node pasting)
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "paste",
+            });
+          },
+        },
+        {
+          label: "Duplicate",
+          accelerator: "CmdOrCtrl+D",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "duplicate",
+            });
+          },
+        },
+        {
+          label: "Duplicate Vertical",
+          accelerator: "CmdOrCtrl+Shift+D",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "duplicateVertical",
+            });
+          },
+        },
+        {
+          label: "Group",
+          accelerator: "CmdOrCtrl+G",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "group",
+            });
+          },
+        },
+        {
+          label: "Select All",
+          accelerator: "CmdOrCtrl+A",
+          role: "selectAll",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "selectAll",
+            });
+          },
+        },
+        { type: "separator" },
+        {
+          label: "Align",
+          accelerator: "CmdOrCtrl+A",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "align",
+            });
+          },
+        },
+        {
+          label: "Align with Spacing",
+          accelerator: "Shift+CmdOrCtrl+A",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "alignWithSpacing",
+            });
+          },
+        },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        {
+          label: "Fit View",
+          accelerator: "CmdOrCtrl+0",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "fitView",
+            });
+          },
+        },
+        { type: "separator" },
+        {
+          label: "Reset Zoom",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "resetZoom",
+            });
+          },
+        },
+        {
+          label: "Zoom In",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "zoomIn",
+            });
+          },
+        },
+        {
+          label: "Zoom Out",
+          click: () => {
+            mainWindow.webContents.send(IpcChannels.MENU_EVENT, {
+              type: "zoomOut",
+            });
+          },
+        },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Tools",
+      submenu: [
+        {
+          label: "Chat",
+          click: () => createChatWindow(),
+        },
+        {
+          label: "Log Viewer",
+          click: () => createLogViewerWindow(),
+        },
+        {
+          label: "Performance Monitor",
+          click: () => openPerformanceMonitorWindow(),
+        },
+        { type: "separator" },
+        {
+          label: "Settings",
+          click: () => openSettingsInMainWindow(),
+        },
+      ],
+    },
+    {
+      label: "Vaults",
+      submenu: buildVaultSubmenu(),
+    },
+    {
+      label: "Window",
+      submenu: [{ role: "minimize" }],
+    },
+    {
+      role: "help",
+      submenu: [
+        {
+          label: "Learn More",
+          click: async () => {
+            await shell.openExternal("https://nodetool.ai");
+          },
+        },
+        { type: "separator" },
+        {
+          label: "System Information",
+          click: async () => {
+            await showSystemInfoDialog();
+          },
+        },
+      ],
+    },
+  ]);
+
+  Menu.setApplicationMenu(menu);
+};
+
+async function showSystemInfoDialog(): Promise<void> {
+  const mainWindow = getMainWindow();
+  
+  try {
+    const info = await getSystemInfo();
+    
+    const message = `${APP_DISPLAY_NAME} ${info.appVersion}
+
+Application
+  Electron: ${info.electronVersion}
+  Chrome: ${info.chromeVersion}
+  Node.js: ${info.nodeVersion}
+
+Operating System
+  OS: ${info.os}
+  Version: ${info.osVersion}
+  Architecture: ${info.arch}
+
+Installation Paths
+  Application: ${info.installPath}
+  Conda Environment: ${info.condaEnvPath}
+  Data: ${info.dataPath}
+  Logs: ${info.logsPath}
+
+Features & Versions
+  Python: ${info.pythonVersion || "Not available"}
+  CUDA: ${info.cudaAvailable ? (info.cudaVersion || "Available") : "Not available"}`;
+
+    const dialogOptions = {
+      type: "info" as const,
+      title: "System Information",
+      message: `${APP_DISPLAY_NAME} ${info.appVersion}`,
+      detail: message,
+      buttons: ["OK", "Copy to Clipboard"],
+    };
+
+    const showDialog = mainWindow 
+      ? dialog.showMessageBox(mainWindow, dialogOptions)
+      : dialog.showMessageBox(dialogOptions);
+    
+    const result = await showDialog;
+    if (result.response === 1) {
+      clipboard.writeText(message);
+    }
+  } catch (error) {
+    dialog.showErrorBox("Error", `Failed to gather system information: ${error}`);
+  }
+}
+
+export { buildMenu };

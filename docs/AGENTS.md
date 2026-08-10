@@ -1,0 +1,542 @@
+---
+layout: page
+title: "Agent System"
+permalink: /agents
+description: "Architecture of the NodeTool agent system — planning, execution, tools, skills, and workflow integration."
+---
+
+**Navigation**: [Root AGENTS.md](../AGENTS.md) | [CLAUDE.md](../CLAUDE.md) → **Agent System**
+
+> Code in `@nodetool-ai/agents` follows the canonical standards in [DEVELOPMENT_STANDARDS.md](DEVELOPMENT_STANDARDS.md) — in particular, the rules for [TypeScript (§1)](DEVELOPMENT_STANDARDS.md#1-typescript), [Error handling (§18)](DEVELOPMENT_STANDARDS.md#18-error-handling), [Observability (§17)](DEVELOPMENT_STANDARDS.md#17-observability), and [Security/Sandboxing (§16)](DEVELOPMENT_STANDARDS.md#16-security). This document describes the architecture; the standards doc describes the rules.
+
+The **agent system** (`@nodetool-ai/agents`) gives LLMs the ability to decompose complex objectives into steps, execute those steps with tools, and return structured results. It powers the Agent, Research Agent, and Control Agent nodes in the workflow editor, as well as the standalone Agent CLI.
+
+---
+
+## Architecture Overview
+
+```
+Objective (user goal)
+    │
+    ▼
+┌── Agent ──────────────────────────────────────────────┐
+│                                                        │
+│  1. Skill resolution    (load SKILL.md files)          │
+│  2. Planning phase      (TaskPlanner → Task with Steps)│
+│  3. Execution phase     (TaskExecutor → CodeActExecutor)│
+│                                                        │
+└────────────────────────────────────────────────────────┘
+    │
+    ▼
+Structured result (validated against output JSON schema)
+```
+
+### Agent Classes
+
+| Class | When to Use | Source |
+|---|---|---|
+| **Agent** | Multi-step objectives needing decomposition (full DAG planning + execution) | `packages/agents/src/agent.ts` |
+| **ParallelTaskExecutor** | Execute independent tasks of a plan concurrently | `packages/agents/src/parallel-task-executor.ts` |
+| **TaskPlanner** | Decompose an objective into a task DAG | `packages/agents/src/task-planner.ts` |
+| **TaskExecutor** | Walk the step DAG, respecting dependency order | `packages/agents/src/task-executor.ts` |
+| **CodeActExecutor** | Run the sandboxed-JavaScript action loop for a single step | `packages/agents/src/codeact/codeact-executor.ts` |
+
+The top-level **Agent** orchestrates planning (via `TaskPlanner`) and execution (via `TaskExecutor` →
+`CodeActExecutor`), then validates the final result against the output schema. Its constructor accepts a
+`provider` (`BaseProvider`), `model`, `tools`, `objective`, and the options in the
+[Configuration Reference](#configuration-reference) below. It exposes
+`execute(context): AsyncGenerator<ProcessingMessage>` and `getResults(): unknown`.
+
+---
+
+## Planning Phase
+
+When you use the full **Agent**, the first thing it does is call **TaskPlanner** to decompose the objective into a **Task** — an ordered DAG of **Steps** with dependency edges.
+
+```ts
+interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  steps: Step[];
+}
+
+interface Step {
+  id: string;
+  instructions: string;
+  dependsOn: string[];          // IDs of prerequisite steps (forms a DAG)
+  tools?: string[];             // restrict available tools for this step
+  outputSchema?: string;        // JSON schema for step output validation
+  mode?: "discover" | "process" | "aggregate";
+  perItemInstructions?: string; // template for fan-out processing
+  completed: boolean;
+}
+```
+
+The planner sends the objective to the LLM with a `create_task` tool. The response is parsed, validated as a DAG (no circular dependencies), and retried up to three times on failure.
+
+You can skip planning entirely by passing a pre-built `task` object to the Agent constructor.
+
+---
+
+## Execution Phase
+
+**TaskExecutor** walks the step DAG, respecting dependency order. For each step, it creates a **CodeActExecutor** that runs the code-action loop:
+
+1. Build messages — the CodeAct contract, the tool catalog, the step instructions
+2. Stream the LLM response
+3. Run the action's JavaScript in the QuickJS sandbox, where the toolbelt is `tools.<name>()`
+4. Feed the observation (return value, logs, error) back as the tool result
+5. Repeat until the program calls `finish(result)` or max iterations are reached
+6. Validate the result against the step's output schema — host-side, in `finish`
+
+See [codeact-design.md](codeact-design.md) for the action protocol, the
+sandbox limits that apply per action, and the `state` object that persists
+across a step's actions.
+
+### Fan-Out Execution
+
+Steps can use three modes for batch processing:
+
+| Mode | Purpose | Example |
+|------|---------|---------|
+| **discover** | Produce a list of items | "Find all CSV files in the workspace" |
+| **process** | Create sub-step per item (runs in parallel) | "Analyze each CSV file" |
+| **aggregate** | Collect per-item results into final output | "Summarize all analyses" |
+
+---
+
+## Memory
+
+Every `ProcessingContext` carries an **`AgentMemory`** at `context.memory` — the single namespaced store for results shared between steps, tasks, sub-agents, and tools. There are no parallel result maps; all executors write and read through the same API.
+
+```ts
+import { memoryKeys } from "@nodetool-ai/runtime";
+
+context.memory.set({
+  key: memoryKeys.task("research"),
+  kind: "task_result",
+  value: { findings: ["alpha", "beta"] },
+  source: "research",
+  title: "Research findings"
+});
+
+context.memory.getValue(memoryKeys.task("research"));
+```
+
+| Namespace | Helper | Used For |
+|---|---|---|
+| `step:<id>` | `memoryKeys.step(id)` | Per-step results |
+| `task:<id>` | `memoryKeys.task(id)` | Per-task results |
+| `input:<key>` | `memoryKeys.input(key)` | Caller-supplied inputs and edge inputs |
+| `shared:<key>` | `memoryKeys.shared(key)` | Cross-agent communication, tool-published facts |
+
+**Access pattern — progressive disclosure via tool calls**: memory contents are NOT auto-injected into prompts. The agent uses three auto-attached tools:
+
+| Tool | Purpose |
+|---|---|
+| `memory_list` | Discover available entries (metadata only — keys, titles, kinds, byte sizes) |
+| `memory_read` | Fetch full values for specific keys |
+| `memory_write` | Publish a value under `shared:<key>` for other agents to discover |
+
+The default execution system prompt explains these tools; the user message names only the **specific** upstream keys the planner declared as required for the step. Values are pulled on demand.
+
+For the full API, tool schemas, propagation flow, examples, and troubleshooting, see [Agent Memory System](agent-memory.md).
+
+---
+
+## Tool System
+
+Every tool extends a single base class:
+
+```ts
+abstract class Tool {
+  abstract readonly name: string;
+  abstract readonly description: string;
+  abstract readonly inputSchema: Record<string, unknown>; // JSON Schema
+
+  abstract process(
+    context: ProcessingContext,
+    params: Record<string, unknown>,
+  ): Promise<unknown>;
+
+  toProviderTool(): ProviderTool;  // convert to LLM tool-call format
+}
+```
+
+### Built-In Tools
+
+| Category | Tools | Source File |
+|---|---|---|
+| **Step control** | `FinishStepTool` | `finish-step-tool.ts` |
+| **Workflow control** | `ControlNodeTool` | `control-tool.ts` |
+| **File system** | `ReadFileTool`, `WriteFileTool`, `ListDirectoryTool` | `filesystem-tools.ts` |
+| **Web** | `BrowserTool`, `ScreenshotTool` | `browser-tools.ts` |
+| **HTTP** | `HttpRequestTool`, `DownloadFileTool` | `http-tools.ts` |
+| **Search** | `WebSearchTool`, `GoogleNewsTool`, `GoogleImagesTool` | `search-tools.ts` |
+| **Code execution** | `RunCodeTool`, `MiniJSAgentTool` | `code-tools.ts`, `js-code-tool.ts` |
+| **OpenAI** | `OpenAIWebSearchTool`, `OpenAIImageGenerationTool`, `OpenAITextToSpeechTool` | `openai-tools.ts` |
+| **Google** | `GoogleGroundedSearchTool`, `GoogleImageGenerationTool` | `google-tools.ts` |
+| **Vector DB** | `VecTextSearchTool`, `VecIndexTool`, `VecHybridSearchTool`, and more | `vector-tools.ts` |
+| **PDF** | `ExtractPDFTextTool`, `ConvertPDFToMarkdownTool`, and more | `pdf-tools.ts` |
+| **Email** | `SearchEmailTool`, `ArchiveEmailTool`, `AddLabelToEmailTool` | `email-tools.ts` |
+| **Workspace** | `WorkspaceReadTool`, `WorkspaceWriteTool`, `WorkspaceListTool` | `workspace-tools.ts` |
+| **Assets** | `SaveAssetTool`, `ReadAssetTool` | `asset-tools.ts` |
+| **Workflow / MCP** | `ValidateWorkflowTool`, `DebugWorkflowTool`, `BuildAppTool`, `RunWorkflowTool`, `StartBackgroundJobTool`, `CreateWorkflowTool`, `ListWorkflowsTool`, `GetWorkflowTool`, `GetExampleWorkflowTool`, `ExportWorkflowDigraphTool`, `SearchNodesTool`, `ListNodesTool`, `GetNodeInfoTool`, `ListJobsTool`, `GetJobTool`, `GetJobLogsTool`, `ListAssetsTool`, `GetAssetTool` | `mcp-tools.ts` |
+| **Models** | `ListModelsTool` | `list-models-tool.ts` |
+
+### Workflow Harness Tools
+
+`ValidateWorkflowTool` and `DebugWorkflowTool` (in `mcp-tools.ts`) are the
+agent-facing front ends to the same harnesses the CLI exposes as
+`nodetool validate` and `nodetool debug` — use them to author and verify graphs
+from inside an agent:
+
+- **`validate_workflow`** — static check of an inline `graph` ({nodes, edges})
+  being built or a saved `workflow_id`: unknown node types, missing required
+  props, unselected models, unregistered providers, model ids the provider does
+  not offer, dangling/mis-typed edges. Sub-second. Run it before the expensive
+  `debug`. `create_workflow` and `POST /api/workflows/:id/run|debug` apply the
+  provider/model half of this check themselves, so a hallucinated model id is
+  refused at save and at run rather than surfacing mid-execution.
+- **`debug_workflow`** — run a workflow and return status, outputs, errors, job
+  logs, and a graph overview in one call.
+- **`build_app`** — build a mini app from a prompt (or a pinned `BuildSpec`) and
+  return the `BuildReport`: stages, repairs, the simulated interactions, a
+  verdict, and — only behind a passing verdict — the `ApplicationBundle`. Posts
+  to `POST /api/applications/build`. Minutes, not seconds: with `poll: true` it
+  returns a session id to read at `GET /api/debug/sessions/:id` or cancel at
+  `POST /api/debug/sessions/:id/cancel`. The bundle is offered, never installed
+  — install it with `POST /api/applications/import-bundle`.
+- **`run_workflow`** / **`start_background_job`** — execute synchronously or as a
+  background job (poll with `get_job` / `get_job_logs`).
+- **`create_workflow`**, **`search_nodes`**, **`list_nodes`**, **`get_node_info`**,
+  **`get_example_workflow`**, **`export_workflow_digraph`** — build and inspect
+  graphs against the live node registry.
+
+The full harness index — CLI commands, the browser surface, single-node runs,
+deploy, and tracing — is in the [root AGENTS.md](../AGENTS.md#agent-harnesses--tooling).
+
+### JavaScript Sandbox
+
+The `MiniJSAgentTool` and the `CodeNode` workflow node both run user JavaScript inside a **QuickJS WebAssembly** sandbox (`packages/agents/src/js-sandbox.ts`). QuickJS runs in its own WASM instance with a separate heap, providing a true memory/CPU boundary — unlike Node's `node:vm` which shares the V8 heap.
+
+**Limits enforced:**
+
+| Limit | Value |
+|-------|-------|
+| Execution timeout | 30 s |
+| Guest heap | 64 MB |
+| Guest stack | 512 KB |
+| Max output size | 100 KB |
+| Max loop iterations | 10 000 |
+| Max `fetch` calls | 20 |
+| Max response body | 1 MB |
+
+The sandbox exposes a curated surface: vanilla JavaScript plus bridge functions (`fetch`, `workspace`, `getSecret`, `uuid`, `sleep`, `console`). Third-party libraries (lodash, dayjs, etc.) are intentionally excluded — use dedicated workflow nodes instead.
+
+### Tool Registry
+
+Register custom tools so they can be resolved by name:
+
+```ts
+import { registerTool, resolveTool, getAllTools } from "@nodetool-ai/agents";
+
+registerTool(new MyCustomTool());
+const tool = resolveTool("my_custom_tool");
+const allTools = getAllTools(); // returns all registered tools
+```
+
+### Builtin Tools in Tool-Agent Nodes (`runAgentLoop`)
+
+There is a **separate** registry for tools that workflow tool-agent nodes
+expose via `runAgentLoop` (in `@nodetool-ai/llm-nodes`) — distinct from the
+`@nodetool-ai/agents` `registerTool`/`resolveTool` registry above. Builtin
+node tools (e.g. the `browser_*` CDP tools) are registered into it at module
+load via `registerBuiltinAgentToolClasses` or, for lazily-built sets,
+`registerBuiltinAgentToolFactory` (which is what
+`code-nodes/src/nodes/sandbox.ts` uses), and resolved with
+`resolveBuiltinAgentTool(name)`.
+
+**Hydration contract:** a tool may be passed as a fully-formed `ToolLike` (has
+`process` + `inputSchema`) or a bare name-stub (`{ name }`). `runAgentLoop`
+hydrates stubs by name before use, so either form works — a real tool passes
+through unchanged. **But a stub is inert until hydrated:** it has no `process`,
+so if you build tools by name and execute them *outside* `runAgentLoop`, call
+`resolveBuiltinAgentTool` / `hydrateBuiltinAgentTool` yourself first, or the
+model gets a schemaless tool and every call is rejected as "Unknown tool".
+
+```ts
+// In a tool-agent node, getTools() may return hydrated tools…
+return TOOL_NAMES.map((name) => resolveBuiltinAgentTool(name)).filter(Boolean);
+// …or stubs (runAgentLoop will hydrate them):
+return TOOL_NAMES.map((name) => ({ name }));
+```
+
+### Writing a Custom Tool
+
+```ts
+import { Tool } from "@nodetool-ai/agents";
+import type { ProcessingContext } from "@nodetool-ai/runtime";
+
+class WeatherTool extends Tool {
+  readonly name = "get_weather";
+  readonly description = "Get current weather for a city.";
+  readonly inputSchema = {
+    type: "object",
+    properties: {
+      city: { type: "string", description: "City name" },
+    },
+    required: ["city"],
+  };
+
+  async process(context: ProcessingContext, params: Record<string, unknown>) {
+    const city = String(params.city);
+    const res = await fetch(`https://api.example.com/weather?q=${encodeURIComponent(city)}`);
+    return await res.json();
+  }
+}
+```
+
+**Rules for custom tools**:
+- Always validate params before use (the schema provides type hints to the LLM, but doesn't enforce at runtime).
+- Return serializable values (JSON-compatible objects).
+- Handle errors within `process` — throw `Error` objects with descriptive messages.
+- Use `context` for secret resolution, storage access, and provider calls.
+
+---
+
+## Skills
+
+Skills are markdown files (`SKILL.md`) that inject domain-specific instructions into the agent's system prompt.
+
+### Skill Format
+
+```markdown
+---
+name: data-analysis
+description: Analyze CSV datasets and produce summary statistics
+---
+
+When working with data analysis tasks:
+1. Load the dataset with the file read tool
+2. Examine column types and null counts
+3. Compute summary statistics
+...
+```
+
+### Skill Discovery
+
+The agent searches these directories (in order):
+
+1. Directories passed to the constructor (`skillDirs`)
+2. Paths in the `NODETOOL_AGENT_SKILL_DIRS` environment variable
+3. `./.claude/skills`
+4. `~/.claude/skills`
+5. `~/.codex/skills`
+
+### Skill Resolution
+
+- **Explicit** — set `NODETOOL_AGENT_SKILLS=skill-a,skill-b` or pass `skills: ["skill-a"]` in the constructor
+- **Auto-select** — the agent matches words in the objective against skill descriptions (disable with `NODETOOL_AGENT_AUTO_SKILLS=0`)
+
+Matched skill instructions are prepended to the system prompt under an `# Agent Skills` header.
+
+---
+
+## Workflow Nodes
+
+The agent system surfaces in the workflow editor through several node types defined in `packages/llm-nodes/src/nodes/agents.ts`:
+
+| Node | Purpose |
+|---|---|
+| **AgentNode** | General-purpose agent with streaming output, tool access, and control edges |
+| **SummarizerNode** | Summarize text with streaming output |
+| **ExtractorNode** | Extract structured data from text |
+| **ClassifierNode** | Classify text into categories |
+| **CreateThreadNode** | Manage multi-turn conversation threads |
+
+### Control Edges
+
+When an agent node has outgoing control edges, **ControlNodeTool** instances are automatically added to its tool list. The agent can call these tools to trigger downstream nodes with specific parameter values:
+
+```
+AgentNode ──control edge──> ImageGeneratorNode
+   │
+   └─ LLM calls "image_generator" tool with { prompt: "sunset over mountains" }
+      → ImageGeneratorNode receives prompt override and executes
+```
+
+---
+
+## Using Agents Programmatically
+
+### Full Agent with Planning
+
+```ts
+import { Agent } from "@nodetool-ai/agents";
+import { BrowserTool, GoogleSearchTool, WriteFileTool } from "@nodetool-ai/agents";
+
+const agent = new Agent({
+  name: "researcher",
+  objective: "Research TypeScript ORMs and write a comparison report",
+  provider: openaiProvider,
+  model: "gpt-5.6",
+  tools: [new GoogleSearchTool(), new BrowserTool(), new WriteFileTool()],
+  workspace: "/tmp/research-output",
+  maxSteps: 10,
+  maxStepIterations: 15,
+});
+
+for await (const message of agent.execute(context)) {
+  if (message.type === "chunk") {
+    process.stdout.write(message.content);
+  }
+}
+
+const result = agent.getResults();
+```
+
+### Agent with an Output Schema
+
+Pass an `outputSchema` to have the final result validated against a JSON schema:
+
+```ts
+import { Agent } from "@nodetool-ai/agents";
+
+const agent = new Agent({
+  name: "extractor",
+  objective: "Extract all email addresses from this text: ...",
+  provider: openaiProvider,
+  model: "gpt-5.6",
+  tools: [],
+  outputSchema: {
+    type: "object",
+    properties: {
+      emails: { type: "array", items: { type: "string" } },
+    },
+  },
+});
+
+for await (const message of agent.execute(context)) {
+  // handle streaming messages
+}
+
+const { emails } = agent.getResults() as { emails: string[] };
+```
+
+---
+
+## Configuration Reference
+
+| Option | Default | Description |
+|---|---|---|
+| `name` | required | Agent identifier |
+| `objective` | required | Goal to achieve |
+| `provider` | required | LLM provider instance (`BaseProvider`) |
+| `model` | required | Model ID (e.g. `"gpt-5.6"`) |
+| `planningModel` | same as `model` | Alternative model for the planning phase |
+| `reasoningModel` | same as `model` | Alternative model for reasoning-heavy steps |
+| `tools` | `[]` | Array of `Tool` instances |
+| `systemPrompt` | `""` | Custom system instructions |
+| `maxSteps` | `10` | Maximum number of steps in a task |
+| `maxStepIterations` | `15` | Maximum LLM round-trips per step |
+| `outputSchema` | — | JSON schema for the final result |
+| `workspace` | auto-generated | Directory for file artifacts |
+| `skills` | — | Explicit skill names to load |
+| `skillDirs` | — | Additional directories to search for skills |
+| `task` | — | Pre-planned task (skips planning phase) |
+
+---
+
+## Claude Agent SDK
+
+`ClaudeAgentProvider` (`packages/runtime/src/providers/claude-agent-provider.ts`)
+is a **pure LLM provider** that reaches Claude through the local `claude` CLI
+(the Claude Agent SDK transport) instead of an API key. It sends no
+`ANTHROPIC_API_KEY`; the CLI authenticates with the machine's logged-in Claude
+subscription (credentials stored under `~/.claude`), so it bills against the
+subscription rather than per-token API spend.
+
+Internally it spawns the executable in non-interactive print mode
+(`claude -p --output-format stream-json --verbose --include-partial-messages`)
+and translates the CLI's newline-delimited JSON stream into the standard
+`ProviderStreamItem` stream (text + thinking chunks). The Claude Code agent loop
+is collapsed to a single, tool-free turn so it behaves like a plain chat
+completion:
+
+- `--system-prompt <prompt>` fully **replaces** the coding-agent preset with the
+  caller's system message (or a generic assistant prompt), giving vanilla LLM
+  behaviour rather than the Claude Code persona.
+- `--allowedTools ""` disables every built-in tool, and `--max-turns 1` keeps it
+  to one model call. `hasToolSupport()` returns `false` — the caller drives any
+  tool loop with a `tool_use`-returning provider (e.g. `AnthropicProvider`).
+
+Provider id: `claude_agent_sdk` (`PROVIDER_IDS.CLAUDE_AGENT_SDK`). It registers
+with no credential kwargs (auth lives in the CLI's store, so it is always
+"configured"; a missing CLI surfaces at call time) and is pruned from the cloud
+profile since it needs a local executable. Token usage is attributed to the
+concrete dated model the CLI resolves an alias to (captured from the
+`message_start` event) so cost maps onto Anthropic pricing.
+
+### Signing in
+
+`nodetool auth claude login` runs the same OAuth flow the `claude` CLI does
+(public client, PKCE, JSON token endpoint) and writes the tokens to
+`$CLAUDE_CONFIG_DIR/.credentials.json` — the file the SDK reads — so a NodeTool
+login and a `claude login` are interchangeable. On a headless or remote host,
+`--manual` skips the loopback listener and takes the `code#state` shown in the
+browser instead. The same flow is served at
+`/api/oauth/claude/{start,complete,tokens,disconnect}` and rendered as a sign-in
+card on the Models & Providers settings page. Implementation and protocol notes:
+[packages/runtime/src/providers/oauth/README.md](../packages/runtime/src/providers/oauth/README.md).
+
+`CLAUDE_CODE_OAUTH_TOKEN` remains the alternative on hosts with no interactive
+login; it is explicitly allowlisted through the nested-session env stripping
+below.
+
+**Soft dependency.** `@anthropic-ai/claude-agent-sdk` is an *optional peer
+dependency* of `@nodetool-ai/runtime` — it is not installed by default and must
+be added with the package manager (`npm install @anthropic-ai/claude-agent-sdk`)
+before this provider can run. The package is imported lazily, so its absence
+only surfaces — as a clear install hint — when the provider is actually used;
+the rest of the runtime and the browser worker bundle never pull it in.
+
+### Executable resolution & nested sessions
+
+The binary is resolved from `CLAUDE_CODE_EXECUTABLE` (explicit path) and
+otherwise `claude` on `PATH`. The desktop app ships `@anthropic-ai/claude-code`
+as a runtime package; server/dev users need `claude` installed and logged in.
+
+When NodeTool itself runs **under** Claude Code (e.g. Claude Code on the web),
+the inherited `CLAUDECODE` / `CLAUDE_CODE_*` / `CLAUDE_SESSION_*` /
+`CLAUDE_ENABLE_*` / `CLAUDE_AFTER_*` / `CLAUDE_AUTO_*` env vars are stripped from
+the spawned child so the nested CLI starts clean. `ANTHROPIC_BASE_URL` and
+`HTTP_PROXY` / `HTTPS_PROXY` are preserved for API routing.
+
+**`uid=0` blocker (tool path).** The tool-free primitive
+(`generateMessages`) runs without permission bypass, but `generateLoop` with
+tools exposes them as an in-process MCP server and runs the SDK under
+`permissionMode: "bypassPermissions"` + `allowDangerouslySkipPermissions: true`
+(see the query options in `claude-agent-provider.ts`). The CLI **refuses
+`--dangerously-skip-permissions` as `root`/sudo** — so the tool path fails
+(`Claude Code process exited with code 1`) whenever NodeTool runs as `uid=0`,
+which the web sandbox does. Two ways out:
+- Run the server as a **non-root** user — but only if that user can reach the
+  CLI's auth (in the web sandbox the OAuth credentials + proxy CA bundle are
+  root-only, so switching users trips `authentication_failed` and a CA
+  `EACCES`). This is the SDK's intended fix and works on normal hosts.
+- Set **`IS_SANDBOX=1`** in the environment. It is preserved by
+  `buildChildEnv()` (not a `CLAUDE_*` var) and lifts the CLI's root refusal.
+  Accurate and safe inside an actual sandboxed container; do **not** set it on a
+  real multi-tenant host.
+
+---
+
+## Related Pages
+
+- [Agent Memory System](agent-memory.md) — Unified memory across all agent types: API, propagation, examples
+- [Chat & Agents](global-chat-agents.md) — Using agents in the chat interface
+- [Agent CLI](agent-cli.md) — Running agents from the command line
+- [Agent Configuration Schema](agent-config-schema.md) — YAML configuration reference
+- [Custom Nodes Guide](developer/custom-nodes-guide.md) — Building custom workflow nodes

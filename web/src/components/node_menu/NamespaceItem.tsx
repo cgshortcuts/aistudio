@@ -1,0 +1,90 @@
+import React, { useCallback } from "react";
+import useNodeMenuStore from "../../stores/NodeMenuStore";
+import RenderNamespaces from "./RenderNamespaces";
+import { NamespaceTree } from "../../hooks/useNamespaceTree";
+import NamespaceIcon from "./NamespaceIcon";
+import { useActivateOnKey } from "../../hooks/useActivateOnKey";
+
+interface NamespaceItemProps {
+  namespace: string;
+  path: string[];
+  isExpanded: boolean;
+  isSelected: boolean;
+  isHighlighted: boolean;
+  hasChildren: boolean;
+  tree: NamespaceTree;
+}
+
+const formatNamespaceLabel = (value: string): string => {
+  const normalized = value.replaceAll("_", " ");
+  if (normalized.toLowerCase() === "openai") {
+    return "OpenAI";
+  }
+  return normalized;
+};
+
+const NamespaceItem: React.FC<NamespaceItemProps> = ({
+  namespace,
+  path,
+  isExpanded,
+  isSelected,
+  isHighlighted,
+  hasChildren,
+  tree
+}) => {
+  const setSelectedPath = useNodeMenuStore((state) => state.setSelectedPath);
+
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLLIElement>) => {
+      e.stopPropagation();
+      if (isSelected) {
+        return;
+      }
+      setSelectedPath(path);
+    },
+    [isSelected, path, setSelectedPath]
+  );
+
+  const handleKeyDown = useActivateOnKey<HTMLLIElement>(
+    (e) => {
+      e.stopPropagation();
+      if (isSelected) {
+        return;
+      }
+      setSelectedPath(path);
+    }
+  );
+
+  const isTopLevel = path.length === 1;
+
+  return (
+    <>
+      <li
+        className={`list-item ${isExpanded ? "expanded" : "collapsed"} ${
+          isSelected ? "selected" : ""
+        } ${isHighlighted ? "highlighted" : "no-highlight"}`}
+        role="button"
+        tabIndex={0}
+        onClick={handleClick}
+        onKeyDown={handleKeyDown}
+      >
+        <div className="namespace-item">
+          {isTopLevel && <NamespaceIcon namespace={namespace} />}
+          <span className="namespace-label">
+            {formatNamespaceLabel(namespace)}
+          </span>
+        </div>
+      </li>
+      {hasChildren && isExpanded && (
+        <div className="sublist">
+          <RenderNamespaces
+            tree={tree[namespace].children}
+            currentPath={path}
+          />
+        </div>
+      )}
+    </>
+  );
+};
+
+export default React.memo(NamespaceItem);

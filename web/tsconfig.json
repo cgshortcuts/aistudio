@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "allowUmdGlobalAccess": true,
+    "useDefineForClassFields": true,
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": false,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "customConditions": ["nodetool-dev"],
+    "types": ["jest", "@testing-library/jest-dom", "@webgpu/types"],
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "jsx": "react-jsx",
+    // Note: unused variable checking is handled by ESLint's @typescript-eslint/no-unused-vars
+    // for more granular control (allows underscore prefix patterns, ignoreRestSiblings, etc.)
+    // "noUnusedLocals": true,
+    // "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src", "eslint.config.mjs"],
+  "exclude": ["node_modules", "dist"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

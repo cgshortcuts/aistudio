@@ -1,0 +1,94 @@
+{
+  "name": "@nodetool-ai/video-nodes",
+  "version": "0.7.0-rc.34",
+  "description": "NodeTool video + 3D model nodes",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "node ../../scripts/build-typescript-workspace.mjs && node scripts/bundle-render3d-page.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "^4.3.0",
+    "@gltf-transform/functions": "^4.3.0",
+    "@napi-rs/canvas": "^0.1.65",
+    "@nodetool-ai/audio-nodes": "*",
+    "@nodetool-ai/config": "*",
+    "@nodetool-ai/gpu": "*",
+    "@nodetool-ai/node-sdk": "*",
+    "@nodetool-ai/nodes-utils": "*",
+    "@nodetool-ai/protocol": "*",
+    "@nodetool-ai/runtime": "*",
+    "@nodetool-ai/timeline": "*",
+    "chrome-launcher": "^1.2.0",
+    "chrome-remote-interface": "^0.34.0",
+    "manifold-3d": "^3.4.1",
+    "meshoptimizer": "^1.1.1",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/chrome-remote-interface": "^0.33.0",
+    "@types/node": "^22.0.0",
+    "@types/three": "^0.185.0",
+    "@webgpu/types": "^0.1.70",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./nodes/*": {
+      "types": "./dist/nodes/*.d.ts",
+      "import": "./dist/nodes/*.js",
+      "default": "./dist/nodes/*.js"
+    },
+    "./render3d-page.js": "./dist/render3d-page.js",
+    "./lib/*": {
+      "types": "./dist/lib/*.d.ts",
+      "import": "./dist/lib/*.js",
+      "default": "./dist/lib/*.js"
+    }
+  },
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodetool-ai/nodetool.git",
+    "directory": "packages/video-nodes"
+  },
+  "homepage": "https://nodetool.ai",
+  "bugs": {
+    "url": "https://github.com/nodetool-ai/nodetool/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "nodetool",
+    "ai",
+    "workflow",
+    "workflow-automation",
+    "typescript",
+    "ai-nodes",
+    "no-code",
+    "visual-programming",
+    "workflow-nodes",
+    "video",
+    "video-processing",
+    "3d",
+    "3d-models"
+  ]
+}

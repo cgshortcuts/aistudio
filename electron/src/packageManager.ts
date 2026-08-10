@@ -1,0 +1,1476 @@
+import { spawn } from "child_process";
+import { app } from "electron";
+import { logMessage } from "./logger";
+import {
+  getProcessEnv,
+  getPythonPath,
+  getCondaEnvPath,
+} from "./config";
+import * as path from "path";
+
+
+/** Extract the message from an unknown catch-clause error. */
+function errorMsg(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Shape of a single entry from `uv pip list --format=json`. */
+interface PipPackage {
+  name: string;
+  version: string;
+}
+
+function isPipPackageArray(value: unknown): value is PipPackage[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item): item is PipPackage =>
+        typeof item === "object" &&
+        item !== null &&
+        "name" in item &&
+        typeof item.name === "string" &&
+        "version" in item &&
+        typeof item.version === "string"
+    )
+  );
+}
+
+/** Shape of a package entry from the nodetool registry JSON. */
+interface RegistryPackageItem {
+  name: string;
+  description?: string;
+  repo_id: string;
+  namespaces?: string[];
+  version?: string;
+  latestVersion?: string;
+  latest_version?: string;
+}
+
+const PACKAGE_DESCRIPTION_OVERRIDES: Record<string, string> = {
+  "nodetool-ai/nodetool-core":
+    "Essential NodeTool core nodes and shared runtime components. Install this package in every NodeTool environment.",
+  "nunchaku-tech/nunchaku":
+    "Accelerates FLUX and Qwen image models with Nunchaku quantization kernels. Install this only if you plan to run Nunchaku-optimized HuggingFace models.",
+};
+
+export function getPackageDescription(pkg: Pick<RegistryPackageItem, "repo_id" | "description">): string {
+  const override = PACKAGE_DESCRIPTION_OVERRIDES[pkg.repo_id.toLowerCase()];
+  if (override) {
+    return override;
+  }
+  return typeof pkg.description === "string" ? pkg.description.trim() : "";
+}
+
+export function needsTorchPlatformDetection(packageName: string): boolean {
+  return TORCH_DEPENDENT_PACKAGES.has(canonicalizePackageName(packageName));
+}
+
+async function ensureTorchPlatformDetectedForPackage(
+  packageName: string
+): Promise<void> {
+  if (!needsTorchPlatformDetection(packageName)) {
+    return;
+  }
+
+  const saved = getSavedTorchPlatform();
+  if (saved) {
+    logMessage(
+      `Using saved torch platform for ${packageName}: ${saved.platform}`
+    );
+    return;
+  }
+
+  const message = `Detecting GPU platform before installing ${packageName}...`;
+  logMessage(message);
+  emitServerLog(message);
+  emitBootMessage(message);
+
+  const result = await detectTorchPlatform();
+  saveTorchPlatform(result);
+}
+
+// TODO: Package manager needs to be rewritten for npm packages.
+// This is a temporary stub — uv/pip is no longer installed in the conda env.
+function getUVPath(): string {
+  return process.platform === "win32"
+    ? path.join(getCondaEnvPath(), "Library", "bin", "uv.exe")
+    : path.join(getCondaEnvPath(), "bin", "uv");
+}
+import { emitServerLog, emitBootMessage } from "./events";
+import {
+  PackageInfo,
+  PackageModel,
+  PackageListResponse,
+  InstalledPackageListResponse,
+  PackageResponse,
+  PackageNode,
+  PackageUpdateInfo,
+} from "./types";
+import * as https from "https";
+import {
+  getSavedTorchPlatform,
+  getTorchIndexUrl,
+  saveTorchPlatform,
+} from "./torchPlatformCache";
+import { detectTorchPlatform, type TorchPlatform } from "./torchruntime";
+import { fileExists } from "./utils";
+import {
+  RUNTIME_PACKAGE_IDS as REGISTRY_RUNTIME_PACKAGE_IDS,
+  RUNTIME_PACKAGES,
+  buildRuntimeContext,
+  runLifecycleToCompletion,
+  runtimeRegistry,
+} from "./runtime/packages";
+import { NpmRuntimePackage } from "./runtime/packages/NpmRuntimePackage";
+
+/**
+ * Package Manager Module
+ *
+ * This module handles Python package management operations using uv.
+ * It provides functionality to list, install, and uninstall packages
+ * directly through the Node.js process without relying on the Python API.
+ */
+
+// Nodetool wheel-based package index (PEP 503 compliant)
+const PACKAGE_INDEX_URL =
+  "https://nodetool-ai.github.io/nodetool-registry/simple/";
+// Primary PyPI simple index to resolve all other packages
+const PYPI_SIMPLE_INDEX_URL = "https://pypi.org/simple";
+// Legacy JSON registry for backward compatibility
+const REGISTRY_URL =
+  "https://raw.githubusercontent.com/nodetool-ai/nodetool-registry/main/index.json";
+const METADATA_PATH = "src/nodetool/package_metadata";
+const TORCH_DEPENDENT_PACKAGES = new Set([
+  "nodetool-huggingface",
+  "nunchaku",
+]);
+/** Packages that must be installed from registry wheel URLs (PyPI has name collisions). */
+const REGISTRY_WHEEL_PACKAGES = new Set(["nunchaku"]);
+
+export function isRegistryWheelPackage(packageName: string): boolean {
+  return REGISTRY_WHEEL_PACKAGES.has(canonicalizePackageName(packageName));
+}
+
+function getAppVersion(): string {
+  try {
+    return app.getVersion();
+  } catch {
+    return "0.0.0";
+  }
+}
+
+let nodeCache: PackageNode[] | null = null;
+
+/**
+ * Fetch available packages from the registry
+ */
+export async function fetchAvailablePackages(): Promise<PackageListResponse> {
+  return new Promise((resolve, reject) => {
+    https.get(REGISTRY_URL, (response) => {
+      let data = "";
+
+      response.on("data", (chunk) => {
+        data += chunk;
+      });
+
+      response.on("end", () => {
+        try {
+          const registryData = JSON.parse(data) as { packages?: RegistryPackageItem[] };
+          const packages = (registryData.packages || []).map((pkg) => ({
+            name: pkg.name,
+            description: getPackageDescription(pkg),
+            repo_id: pkg.repo_id,
+            namespaces: pkg.namespaces,
+            version:
+              pkg.version ??
+              pkg.latestVersion ??
+              pkg.latest_version ??
+              undefined,
+          })) as PackageInfo[];
+          const npmPackages = getNpmAvailablePackages();
+          resolve({
+            packages: [...packages, ...npmPackages],
+            count: packages.length + npmPackages.length,
+          });
+        } catch (error) {
+          reject(new Error(`Failed to parse registry data: ${error}`));
+        }
+      });
+
+      response.on("error", (error) => {
+        reject(new Error(`Failed to fetch registry: ${error.message}`));
+      });
+    });
+  });
+}
+
+function getNpmAvailablePackages(): PackageInfo[] {
+  return (Object.entries(RUNTIME_PACKAGES) as [RuntimePackageId, typeof RUNTIME_PACKAGES[RuntimePackageId]][])
+    .filter((entry): entry is [RuntimePackageId, NpmRuntimePackage] => entry[1] instanceof NpmRuntimePackage)
+    .map(([id, npmPkg]) => {
+      const firstSpec = npmPkg.npmPackages[0] || "";
+      const at = firstSpec.lastIndexOf("@");
+      const version = at > 0 ? firstSpec.slice(at + 1) : undefined;
+      return {
+        name: npmPkg.name,
+        description: npmPkg.description,
+        repo_id: id,
+        version,
+      };
+    });
+}
+
+function httpsGet(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = https.get(url, (res) => {
+      if (res.statusCode && res.statusCode >= 400) {
+        reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+        return;
+      }
+      let body = "";
+      res.on("data", (chunk) => (body += chunk));
+      res.on("end", () => resolve(body));
+    });
+    req.on("error", (err) => reject(err));
+    req.setTimeout(30000, () => {
+      req.destroy(new Error(`Request timeout for ${url}`));
+    });
+  });
+}
+
+function canonicalizePackageName(name: string): string {
+  return name.toLowerCase().replace(/[-_.]+/g, "-");
+}
+
+function stripFileExtension(filename: string): string {
+  const base = filename.replace(/#.*/, "");
+  if (base.toLowerCase().endsWith(".tar.gz")) {
+    return base.slice(0, -7);
+  }
+  return base.replace(/\.(whl|zip|tar|gz)$/gi, "");
+}
+
+function extractVersionFromFilename(
+  filename: string,
+  packageName: string
+): string | null {
+  const sanitized = filename.trim();
+  if (!sanitized) return null;
+  const baseName = stripFileExtension(sanitized.split("/").pop() || sanitized);
+  const parts = baseName.split("-");
+  if (parts.length < 2) {
+    return null;
+  }
+  const canonicalPackage = canonicalizePackageName(packageName);
+  const canonicalFileName = canonicalizePackageName(parts[0]);
+  if (canonicalPackage !== canonicalFileName) {
+    return null;
+  }
+  return parts[1] || null;
+}
+
+function tokenizeVersion(version: string): string[] {
+  const normalized = version
+    .replace(/([0-9])([a-zA-Z])/g, "$1.$2")
+    .replace(/([a-zA-Z])([0-9])/g, "$1.$2");
+  return normalized.split(/[.\-_+]/).filter(Boolean);
+}
+
+function compareVersions(a: string, b: string): number {
+  if (a === b) return 0;
+  const tokensA = tokenizeVersion(a);
+  const tokensB = tokenizeVersion(b);
+  const length = Math.max(tokensA.length, tokensB.length);
+
+  for (let i = 0; i < length; i += 1) {
+    const segA = tokensA[i];
+    const segB = tokensB[i];
+
+    if (segA === undefined) return -1;
+    if (segB === undefined) return 1;
+    if (segA === segB) continue;
+
+    const numA = Number(segA);
+    const numB = Number(segB);
+    const isNumA = Number.isInteger(numA);
+    const isNumB = Number.isInteger(numB);
+
+    if (isNumA && isNumB) {
+      if (numA > numB) return 1;
+      if (numA < numB) return -1;
+      continue;
+    }
+
+    if (isNumA) return 1;
+    if (isNumB) return -1;
+
+    const cmp = segA.localeCompare(segB);
+    if (cmp !== 0) return cmp;
+  }
+
+  return 0;
+}
+
+interface RegistryWheelSelectionOptions {
+  packageName: string;
+  pythonTag: string;
+  platformTag: string;
+  torchTag: string;
+  cudaTag?: string | null;
+}
+
+function torchPlatformToCudaWheelTag(platform: TorchPlatform | string): string | null {
+  const map: Record<string, string> = {
+    cu118: "cu11.8",
+    cu124: "cu12.4",
+    cu128: "cu12.8",
+    cu129: "cu13.0",
+  };
+  return map[platform] ?? null;
+}
+
+function getPlatformWheelTag(): string {
+  if (process.platform === "win32") {
+    return "win_amd64";
+  }
+  if (process.platform === "linux") {
+    return "linux_x86_64";
+  }
+  return "macosx_11_0_arm64";
+}
+
+function parseWheelUrlsFromSimpleIndex(html: string): string[] {
+  const urls: string[] = [];
+  const hrefMatches = html.matchAll(/href="([^"]+\.whl)"/gi);
+  for (const match of hrefMatches) {
+    urls.push(match[1]);
+  }
+  return urls;
+}
+
+export function selectRegistryWheelUrl(
+  wheelUrls: string[],
+  options: RegistryWheelSelectionOptions
+): string | null {
+  const { packageName, pythonTag, platformTag, torchTag, cudaTag } = options;
+  const platformSuffix = `${pythonTag}-${pythonTag}-${platformTag}`.toLowerCase();
+  const torchNeedle = torchTag.toLowerCase();
+
+  const candidates = wheelUrls.filter((url) => {
+    const filename = (url.split("/").pop() ?? "").toLowerCase();
+    if (!filename.endsWith(".whl")) {
+      return false;
+    }
+    if (!extractVersionFromFilename(filename, packageName)) {
+      return false;
+    }
+    return filename.includes(platformSuffix) && filename.includes(torchNeedle);
+  });
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  const scored = candidates.map((url) => {
+    const filename = url.split("/").pop() ?? "";
+    const version = extractVersionFromFilename(filename, packageName)!;
+    const lower = filename.toLowerCase();
+    const cudaScore =
+      cudaTag && lower.includes(`${cudaTag}${torchTag}`.toLowerCase())
+        ? 2
+        : lower.includes(torchNeedle)
+          ? 1
+          : 0;
+    return { url, version, cudaScore };
+  });
+
+  const maxCudaScore = Math.max(...scored.map((entry) => entry.cudaScore));
+  const bestMatches = scored.filter((entry) => entry.cudaScore === maxCudaScore);
+  bestMatches.sort((a, b) => compareVersions(a.version, b.version));
+  return bestMatches[bestMatches.length - 1]?.url ?? null;
+}
+
+async function runPythonOneLiner(code: string): Promise<string | null> {
+  const pythonPath = getPythonPath();
+  return new Promise((resolve) => {
+    const proc = spawn(pythonPath, ["-c", code], {
+      env: getProcessEnv(),
+      stdio: "pipe",
+      windowsHide: true,
+    });
+
+    let stdout = "";
+    proc.stdout?.on("data", (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    proc.on("exit", (code) => {
+      if (code === 0) {
+        resolve(stdout.trim());
+      } else {
+        resolve(null);
+      }
+    });
+
+    proc.on("error", () => {
+      resolve(null);
+    });
+  });
+}
+
+async function getInstalledTorchTag(): Promise<string | null> {
+  const version = await runPythonOneLiner(
+    "import torch; v=torch.__version__.split('+')[0]; print('.'.join(v.split('.')[:2]))"
+  );
+  if (!version) {
+    return null;
+  }
+  return `torch${version}`;
+}
+
+async function getPythonWheelTag(): Promise<string | null> {
+  return runPythonOneLiner(
+    "import sys; print(f'cp{sys.version_info.major}{sys.version_info.minor}')"
+  );
+}
+
+async function resolveRegistryWheelInstallUrl(
+  packageName: string
+): Promise<string | null> {
+  const normalized = canonicalizePackageName(packageName);
+  const html = await httpsGet(`${PACKAGE_INDEX_URL}${normalized}/`);
+  const wheelUrls = parseWheelUrlsFromSimpleIndex(html);
+  const pythonTag = await getPythonWheelTag();
+  const torchTag = await getInstalledTorchTag();
+  if (!pythonTag || !torchTag) {
+    logMessage(
+      `Could not detect Python/torch tags for ${packageName} wheel selection`,
+      "warn"
+    );
+    return null;
+  }
+
+  const savedPlatform = getSavedTorchPlatform()?.platform ?? "cu128";
+  const cudaTag = torchPlatformToCudaWheelTag(savedPlatform);
+
+  return selectRegistryWheelUrl(wheelUrls, {
+    packageName,
+    pythonTag,
+    platformTag: getPlatformWheelTag(),
+    torchTag,
+    cudaTag,
+  });
+}
+
+function buildDependencyIndexArgs(): string[] {
+  const args = [
+    "--index-url",
+    PYPI_SIMPLE_INDEX_URL,
+    "--extra-index-url",
+    PACKAGE_INDEX_URL,
+    "--index-strategy",
+    "unsafe-best-match",
+  ];
+
+  const torchIndexUrl = getTorchIndexUrl();
+  if (torchIndexUrl) {
+    args.push("--extra-index-url", torchIndexUrl);
+  }
+
+  return args;
+}
+
+async function resolvePackageInstallTarget(
+  packageName: string
+): Promise<{ installSpec: string; displayVersion: string } | null> {
+  if (isRegistryWheelPackage(packageName)) {
+    const wheelUrl = await resolveRegistryWheelInstallUrl(packageName);
+    if (!wheelUrl) {
+      return null;
+    }
+    const filename = wheelUrl.split("/").pop() ?? wheelUrl;
+    const version = extractVersionFromFilename(filename, packageName) ?? "unknown";
+    return { installSpec: wheelUrl, displayVersion: version };
+  }
+
+  const latestVersion = await fetchLatestVersionFromSimpleIndex(packageName);
+  if (!latestVersion) {
+    return null;
+  }
+
+  return {
+    installSpec: `${packageName}==${latestVersion}`,
+    displayVersion: latestVersion,
+  };
+}
+
+async function fetchLatestVersionFromSimpleIndex(
+  packageName: string
+): Promise<string | null> {
+  try {
+    const normalized = canonicalizePackageName(packageName).replace(/-/g, "-");
+    const url = `${PACKAGE_INDEX_URL}${normalized}/`;
+    const html = await httpsGet(url);
+
+    const candidates: string[] = [];
+    const anchorMatches = html.matchAll(/>([^<>]+)</g);
+    for (const match of anchorMatches) {
+      const version = extractVersionFromFilename(match[1], packageName);
+      if (version) {
+        candidates.push(version);
+      }
+    }
+
+    if (candidates.length === 0) {
+      const hrefMatches = html.matchAll(/href="([^"]+)"/gi);
+      for (const match of hrefMatches) {
+        const version = extractVersionFromFilename(match[1], packageName);
+        if (version) {
+          candidates.push(version);
+        }
+      }
+    }
+
+    if (candidates.length === 0) {
+      return null;
+    }
+
+    candidates.sort(compareVersions);
+    return candidates[candidates.length - 1];
+  } catch (error: unknown) {
+    logMessage(
+      `Failed to fetch latest version for ${packageName}: ${errorMsg(error)}`,
+      "warn"
+    );
+    return null;
+  }
+}
+
+async function fetchPackageNodes(repoId: string): Promise<PackageNode[]> {
+  try {
+    const packageName = repoId.split("/")[1];
+    const url = `https://raw.githubusercontent.com/${repoId}/main/${METADATA_PATH}/${packageName}.json`;
+    const jsonText = await httpsGet(url);
+    const metadata = JSON.parse(jsonText) as { nodes?: Partial<PackageNode>[] };
+    const nodes: PackageNode[] = (metadata.nodes || []).map((node) => ({
+      ...node,
+      package: repoId,
+    } as PackageNode));
+    return nodes;
+  } catch (error: unknown) {
+    logMessage(`Error fetching nodes from ${repoId}: ${errorMsg(error)}`, "warn");
+    return [];
+  }
+}
+
+async function fetchAllNodes(
+  forceRefresh: boolean = false
+): Promise<PackageNode[]> {
+  if (nodeCache && !forceRefresh) {
+    return nodeCache;
+  }
+  try {
+    const { packages } = await fetchAvailablePackages();
+    const tasks = packages.map((pkg) => fetchPackageNodes(pkg.repo_id));
+    const results = await Promise.allSettled(tasks);
+    const allNodes: PackageNode[] = [];
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        allNodes.push(...result.value);
+      }
+    }
+    nodeCache = allNodes;
+    return allNodes;
+  } catch (error: unknown) {
+    logMessage(`Failed to fetch all nodes: ${errorMsg(error)}`, "error");
+    return [];
+  }
+}
+
+export async function searchNodes(query: string = ""): Promise<PackageNode[]> {
+  const [nodes, installed] = await Promise.all([
+    fetchAllNodes(),
+    listInstalledPackages().catch(() => ({ packages: [], count: 0 })),
+  ]);
+  const installedRepoIds = new Set(
+    (installed.packages || []).map((p) => p.repo_id)
+  );
+  const trimmed = (query || "").trim();
+  if (!trimmed) {
+    // Sort uninstalled first, then by namespace/title for stability
+    const sorted = [...nodes].sort((a, b) => {
+      const ai = installedRepoIds.has(a.package || "") ? 1 : 0;
+      const bi = installedRepoIds.has(b.package || "") ? 1 : 0;
+      if (ai !== bi) return ai - bi;
+      const nsCmp = (a.namespace || "").localeCompare(b.namespace || "");
+      if (nsCmp !== 0) return nsCmp;
+      return (a.title || "").localeCompare(b.title || "");
+    });
+    // Attach installed flag for consumers
+    return sorted.map((n) => ({
+      ...n,
+      installed: installedRepoIds.has(n.package || ""),
+    }));
+  }
+
+  // --- Lightweight fuzzy matching similar to NodeMenuStore ---
+  const normalize = (s: string) => s.toLowerCase();
+  const tokenize = (s: string) =>
+    normalize(s)
+      .split(/[\s.,\-_]+/)
+      .filter((t) => t.length > 0);
+
+  const sequentialMatchScore = (needle: string, haystack: string): number => {
+    // Returns a score in [0, 0.6] based on sequential char match and gap penalty
+    const normalizedNeedle = normalize(needle);
+    const normalizedHaystack = normalize(haystack);
+    if (!normalizedNeedle || !normalizedHaystack) return 0;
+    let queryIndex = 0;
+    let lastIndex = -1;
+    let gaps = 0;
+    for (let i = 0; i < normalizedHaystack.length && queryIndex < normalizedNeedle.length; i++) {
+      if (normalizedHaystack[i] === normalizedNeedle[queryIndex]) {
+        if (lastIndex >= 0) gaps += i - lastIndex - 1;
+        lastIndex = i;
+        queryIndex += 1;
+      }
+    }
+    const ratio = queryIndex / normalizedNeedle.length;
+    if (ratio === 0) return 0;
+    const gapPenalty = Math.min(gaps / Math.max(normalizedNeedle.length, 1), 1);
+    return 0.6 * ratio * (1 - 0.5 * gapPenalty);
+  };
+
+  const substringScore = (needle: string, haystack: string): number => {
+    // Returns a score in [0, 1] with boosts for prefix and word-boundary matches
+    const normalizedNeedle = normalize(needle);
+    const normalizedHaystack = normalize(haystack);
+    if (!normalizedNeedle || !normalizedHaystack) return 0;
+    const indexFound = normalizedHaystack.indexOf(normalizedNeedle);
+    if (indexFound < 0) return 0;
+    const isPrefix = indexFound === 0;
+    const isWordBoundary = indexFound > 0 ? /[^a-z0-9]/.test(normalizedHaystack[indexFound - 1]) : true;
+    const lengthBoost = Math.min(normalizedNeedle.length / Math.max(normalizedHaystack.length, normalizedNeedle.length), 1);
+    let score = 0.7 + 0.3 * lengthBoost;
+    if (isPrefix) score += 0.15;
+    else if (isWordBoundary) score += 0.05;
+    return Math.min(score, 1);
+  };
+
+  const scoreField = (q: string, value?: string): number => {
+    if (!value) return 0;
+    const sub = substringScore(q, value);
+    if (sub > 0) return sub;
+    return sequentialMatchScore(q, value);
+  };
+
+  type PackageNodeStringKey = "title" | "namespace" | "node_type" | "description";
+  const fieldWeights: Array<{
+    key: PackageNodeStringKey;
+    weight: number;
+  }> = [
+    { key: "title", weight: 1.0 },
+    { key: "namespace", weight: 0.85 },
+    { key: "node_type", weight: 0.8 },
+    { key: "description", weight: 0.6 },
+  ];
+
+  const tokens = tokenize(trimmed);
+  const noSpace = normalize(trimmed.replace(/\s+/g, ""));
+  const effectiveTokens = tokens.length > 0 ? tokens : [normalize(trimmed)];
+
+  const scored = nodes
+    .map((node) => {
+      const tokenScores: number[] = [];
+      for (const token of effectiveTokens) {
+        let bestForToken = 0;
+        for (const { key, weight } of fieldWeights) {
+          const value = node[key] || "";
+          const base = scoreField(token, value);
+          bestForToken = Math.max(bestForToken, base * weight);
+        }
+        // Also try token without spaces against title and namespace for friendlier matching
+        if (noSpace && noSpace !== token) {
+          bestForToken = Math.max(
+            bestForToken,
+            0.9 * scoreField(noSpace, node.title || ""),
+            0.85 * scoreField(noSpace, node.namespace || "")
+          );
+        }
+        tokenScores.push(bestForToken);
+      }
+      // Average across tokens to avoid bias towards more tokens
+      const averageScore =
+        tokenScores.length > 0
+          ? tokenScores.reduce((a, b) => a + b, 0) / tokenScores.length
+          : 0;
+      return { node, score: averageScore };
+    })
+    .filter((entry) => entry.score >= 0.15)
+    .sort((a, b) => {
+      const ai = installedRepoIds.has(a.node.package || "") ? 1 : 0;
+      const bi = installedRepoIds.has(b.node.package || "") ? 1 : 0;
+      if (ai !== bi) return ai - bi;
+      if (b.score !== a.score) return b.score - a.score;
+      const nsCmp = (a.node.namespace || "").localeCompare(
+        b.node.namespace || ""
+      );
+      if (nsCmp !== 0) return nsCmp;
+      return (a.node.title || "").localeCompare(b.node.title || "");
+    });
+
+  return scored.map((s) => ({
+    ...s.node,
+    installed: installedRepoIds.has(s.node.package || ""),
+  }));
+}
+
+export async function checkForPackageUpdates(): Promise<PackageUpdateInfo[]> {
+  try {
+    const installedPackages = await listInstalledPackagesInternal();
+    if (!installedPackages.length) {
+      return [];
+    }
+
+    let registryPackages: PackageInfo[] = [];
+    try {
+      const registry = await fetchAvailablePackages();
+      registryPackages = registry.packages;
+    } catch (error: unknown) {
+      logMessage(
+        `Failed to fetch package registry for update check: ${errorMsg(error)}`,
+        "warn"
+      );
+    }
+
+    const versionHints = new Map<string, string>();
+    for (const pkg of registryPackages) {
+      if (!pkg.version) continue;
+      const keys = [
+        pkg.name?.toLowerCase(),
+        canonicalizePackageName(pkg.name || ""),
+        pkg.repo_id?.toLowerCase(),
+      ].filter((v): v is string => typeof v === "string" && v.length > 0);
+      for (const key of keys) {
+        if (!versionHints.has(key)) {
+          versionHints.set(key, pkg.version);
+        }
+      }
+    }
+
+    const updateChecks = installedPackages.map(async (pkg) => {
+      // For npm runtime packages, compare installed version against pinned version
+      const runtimePkg = isRuntimePackageId(pkg.repo_id) ? RUNTIME_PACKAGES[pkg.repo_id] : undefined;
+      if (runtimePkg instanceof NpmRuntimePackage) {
+        const firstSpec = runtimePkg.npmPackages[0] || "";
+        const at = firstSpec.lastIndexOf("@");
+        const pinnedVersion = at > 0 ? firstSpec.slice(at + 1) : undefined;
+        if (pinnedVersion && pinnedVersion !== pkg.version) {
+          return {
+            name: pkg.name,
+            repo_id: pkg.repo_id,
+            installedVersion: pkg.version,
+            latestVersion: pinnedVersion,
+          };
+        }
+        return null;
+      }
+
+      const keyCandidates = [
+        pkg.name.toLowerCase(),
+        canonicalizePackageName(pkg.name),
+        pkg.repo_id.toLowerCase(),
+      ];
+
+      let latest: string | null = null;
+      for (const key of keyCandidates) {
+        const hint = versionHints.get(key);
+        if (hint) {
+          latest = hint;
+          break;
+        }
+      }
+
+      if (!latest) {
+        latest = await fetchLatestVersionFromSimpleIndex(pkg.name);
+      }
+
+      if (!latest) {
+        return null;
+      }
+
+      return compareVersions(latest, pkg.version) > 0
+        ? {
+            name: pkg.name,
+            repo_id: pkg.repo_id,
+            installedVersion: pkg.version,
+            latestVersion: latest,
+          }
+        : null;
+    });
+
+    const results = await Promise.all(updateChecks);
+    return results.filter((entry): entry is PackageUpdateInfo => entry !== null);
+  } catch (error: unknown) {
+    logMessage(`Failed to check for package updates: ${errorMsg(error)}`, "warn");
+    return [];
+  }
+}
+
+/**
+ * Ensure the Python runtime (python + uv) is installed in the conda env.
+ *
+ * After the install-wizard refactor (commits 08534478e / a6a392c47), Python
+ * is an opt-in runtime that the user installs from the Runtimes panel. Any
+ * `uv` operation triggered before that runtime is installed (e.g. clicking
+ * "Install" on a Python package in the Package Manager) used to fail with
+ * "uv executable not found", with no recovery path inside the Package
+ * Manager UI. We now install the Python runtime on demand the first time
+ * a uv command is requested, then proceed.
+ *
+ * This is idempotent: once `uv` exists on disk, the check is a no-op.
+ */
+async function ensurePythonRuntimeAvailable(): Promise<void> {
+  const uvPath = getUVPath();
+  if (await fileExists(uvPath)) {
+    return;
+  }
+
+  emitBootMessage("Setting up Python runtime (one-time, ~1-2 min)...");
+  logMessage(
+    `uv not found at ${uvPath} — auto-installing Python runtime before uv operation`,
+    "warn"
+  );
+
+  const result = await installRuntimePackage("python");
+  if (!result.success) {
+    throw new Error(
+      `Could not set up Python runtime automatically: ${result.message}. ` +
+      `Open the Runtimes panel and install Python manually, then retry.`
+    );
+  }
+
+  // Belt-and-braces: verify uv really did appear, in case the install
+  // reported success but landed something unexpected.
+  if (!(await fileExists(uvPath))) {
+    throw new Error(
+      `Python runtime install reported success but uv was not found at ${uvPath}. ` +
+      `Open the Runtimes panel and reinstall Python.`
+    );
+  }
+}
+
+/**
+ * Run a uv command
+ */
+async function runUvCommand(
+  args: string[],
+  options?: { stdin?: string; silent?: boolean }
+): Promise<string> {
+  await ensurePythonRuntimeAvailable();
+
+  const uvPath = getUVPath();
+  const pythonPath = getPythonPath();
+  const command = [uvPath, ...args];
+
+  return new Promise((resolve, reject) => {
+    logMessage(`Running uv command: ${command.join(" ")}`);
+
+    const env = getProcessEnv();
+    // Set UV_PYTHON to explicitly tell uv which Python to use
+    env.UV_PYTHON = pythonPath;
+    // Clear any other Python environment variables
+    delete env.PYTHONHOME;
+    delete env.PYTHONPATH;
+
+    const process = spawn(command[0], command.slice(1), {
+      env,
+      stdio: "pipe",
+      // Prevent a console window from flashing on Windows while uv runs.
+      windowsHide: true,
+    });
+
+    if (options?.stdin && process.stdin) {
+      process.stdin.write(options.stdin);
+      process.stdin.end();
+    }
+
+    let stdout = "";
+    let stderr = "";
+
+    process.stdout?.on("data", (data: Buffer) => {
+      const output = data.toString();
+      stdout += output;
+      if (!options?.silent) {
+        const lines = output
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter(Boolean);
+        for (const line of lines) {
+          logMessage(line);
+          emitServerLog(line);
+        }
+      }
+    });
+
+    process.stderr?.on("data", (data: Buffer) => {
+      const output = data.toString();
+      stderr += output;
+      const lines = output
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      for (const line of lines) {
+        logMessage(line, "warn");
+        emitServerLog(line);
+      }
+    });
+
+    process.on("exit", (code: number | null) => {
+      if (code === 0) {
+        resolve(stdout);
+      } else {
+        reject(new Error(`Command failed with code ${code}: ${stderr}`));
+      }
+    });
+
+    process.on("error", (error) => {
+      // Provide a more helpful error message for ENOENT
+      if (error.message.includes("ENOENT")) {
+        reject(new Error(
+          `Python environment not properly installed: could not run uv at ${uvPath}. ` +
+          `Please use "Reinstall environment" to fix this issue.`
+        ));
+      } else {
+        reject(new Error(`Failed to run command: ${error.message}`));
+      }
+    });
+  });
+}
+
+/**
+ * Internal function to list installed Python packages without version checking.
+ */
+async function listPythonInstalledPackages(): Promise<PackageModel[]> {
+  try {
+    const output = await runUvCommand(["pip", "list", "--format=json"], { silent: true });
+    const parsed: unknown = JSON.parse(output);
+    const allPackages = isPipPackageArray(parsed) ? parsed : [];
+
+    return allPackages
+      .filter((pkg) => pkg.name.startsWith("nodetool-"))
+      .map((pkg) => ({
+        name: pkg.name,
+        description: "",
+        version: pkg.version,
+        authors: [],
+        repo_id: "nodetool-ai/" + pkg.name,
+        nodes: [],
+        examples: [],
+        assets: [],
+      } as PackageModel));
+  } catch (error: unknown) {
+    logMessage(`Failed to list installed Python packages: ${errorMsg(error)}`, "error");
+    return [];
+  }
+}
+
+/**
+ * List installed npm runtime packages from the optional-node directory.
+ */
+async function listNpmInstalledPackages(): Promise<PackageModel[]> {
+  try {
+    const ctx = buildRuntimeContext();
+    const packages: PackageModel[] = [];
+    for (const [id, pkg] of Object.entries(RUNTIME_PACKAGES) as [RuntimePackageId, typeof RUNTIME_PACKAGES[RuntimePackageId]][]) {
+      if (!(pkg instanceof NpmRuntimePackage)) continue;
+      const status = await pkg.status(ctx);
+      if (!status.installed) continue;
+      packages.push({
+        name: pkg.name,
+        description: pkg.description,
+        version: status.installedVersion ?? "unknown",
+        authors: [],
+        repo_id: id,
+        nodes: [],
+        examples: [],
+        assets: [],
+      });
+    }
+    return packages;
+  } catch (error: unknown) {
+    logMessage(`Failed to list installed npm packages: ${errorMsg(error)}`, "warn");
+    return [];
+  }
+}
+
+/**
+ * Internal function to list installed packages without version checking
+ * Used by both listInstalledPackages and checkForPackageUpdates to avoid circular dependency
+ */
+async function listInstalledPackagesInternal(): Promise<PackageModel[]> {
+  const [pythonPackages, npmPackages] = await Promise.all([
+    listPythonInstalledPackages(),
+    listNpmInstalledPackages(),
+  ]);
+  return [...pythonPackages, ...npmPackages];
+}
+
+/**
+ * List installed packages with upgrade information
+ */
+export async function listInstalledPackages(): Promise<InstalledPackageListResponse> {
+  try {
+    const nodetoolPackages = await listInstalledPackagesInternal();
+
+    // Check for available updates
+    const updateInfo = await checkForPackageUpdates();
+    const updateMap = new Map(
+      updateInfo.map((info) => [info.name, info.latestVersion])
+    );
+
+    // Enrich packages with update information
+    const enrichedPackages = nodetoolPackages.map((pkg: PackageModel) => {
+      const latestVersion = updateMap.get(pkg.name);
+      return {
+        ...pkg,
+        latestVersion: latestVersion || pkg.version,
+        hasUpdate: latestVersion ? latestVersion !== pkg.version : false,
+      };
+    });
+
+    return {
+      packages: enrichedPackages,
+      count: enrichedPackages.length,
+    };
+  } catch (error: unknown) {
+    logMessage(`Failed to list installed packages: ${errorMsg(error)}`, "error");
+    return { packages: [], count: 0 };
+  }
+}
+
+/**
+ * Install a package using wheel-based package index
+ * Always fetches the latest version from the simple index and installs that specific version
+ */
+export async function installPackage(repoId: string): Promise<PackageResponse> {
+  // Route npm runtime packages to the runtime installer
+  if (isRuntimePackageId(repoId)) {
+    const runtimePkg = RUNTIME_PACKAGES[repoId];
+    if (runtimePkg instanceof NpmRuntimePackage) {
+      return installRuntimePackage(repoId);
+    }
+  }
+
+  try {
+    const packageName = repoId.split("/")[1];
+
+    const installTarget = await resolvePackageInstallTarget(packageName);
+    if (!installTarget) {
+      return {
+        success: false,
+        message: `Could not find package ${packageName} in the package index`,
+      };
+    }
+
+    const { installSpec, displayVersion } = installTarget;
+    const message = `Installing ${packageName} v${displayVersion}...`;
+    logMessage(message);
+    emitServerLog(message);
+
+    await ensureTorchPlatformDetectedForPackage(packageName);
+
+    const args = [
+      "pip",
+      "install",
+      "--prerelease=allow",
+      ...buildDependencyIndexArgs(),
+      "--system",
+      installSpec,
+    ];
+
+    if (isRegistryWheelPackage(packageName)) {
+      logMessage(`Installing ${packageName} from registry wheel URL: ${installSpec}`);
+    } else {
+      const torchIndexUrl = getTorchIndexUrl();
+      if (torchIndexUrl) {
+        logMessage(`Adding PyTorch index for package installation: ${torchIndexUrl}`);
+      }
+    }
+
+    await runUvCommand(args);
+
+    return {
+      success: true,
+      message: `Package ${repoId} v${displayVersion} installed successfully from wheel index`,
+    };
+  } catch (error: unknown) {
+    logMessage(
+      `Failed to install package ${repoId}: ${errorMsg(error)}`,
+      "error"
+    );
+    // Renderer prepends its own "Failed to install package:" framing, so
+    // return just the underlying reason to avoid duplicated prefixes in
+    // user-facing dialogs.
+    return {
+      success: false,
+      message: errorMsg(error),
+    };
+  }
+}
+
+/**
+ * Uninstall a package
+ */
+export async function uninstallPackage(
+  repoId: string
+): Promise<PackageResponse> {
+  if (isRuntimePackageId(repoId)) {
+    const runtimePkg = RUNTIME_PACKAGES[repoId];
+    if (runtimePkg instanceof NpmRuntimePackage) {
+      return uninstallRuntimePackage(repoId);
+    }
+  }
+
+  try {
+    // Extract project name from repo_id (e.g., "owner/project" -> "project")
+    const projectName = repoId.split("/")[1];
+
+    // Use uv pip uninstall
+    await runUvCommand(["pip", "uninstall", projectName], { stdin: "y\n" });
+
+    return {
+      success: true,
+      message: `Package ${repoId} uninstalled successfully`,
+    };
+  } catch (error: unknown) {
+    logMessage(
+      `Failed to uninstall package ${repoId}: ${errorMsg(error)}`,
+      "error"
+    );
+    // Renderer prepends its own "Failed to uninstall package:" framing.
+    return {
+      success: false,
+      message: errorMsg(error),
+    };
+  }
+}
+
+/**
+ * Update a package using wheel-based package index
+ * Always fetches the latest version from the simple index and installs that specific version
+ * Forces a true reinstall by clearing the uv cache and reinstalling the package
+ */
+export async function updatePackage(repoId: string): Promise<PackageResponse> {
+  if (isRuntimePackageId(repoId)) {
+    const runtimePkg = RUNTIME_PACKAGES[repoId];
+    if (runtimePkg instanceof NpmRuntimePackage) {
+      return runLifecycleToCompletion(repoId, "update");
+    }
+  }
+
+  try {
+    const packageName = repoId.split("/")[1];
+
+    const installTarget = await resolvePackageInstallTarget(packageName);
+    if (!installTarget) {
+      return {
+        success: false,
+        message: `Could not find package ${packageName} in the package index`,
+      };
+    }
+
+    const { installSpec, displayVersion } = installTarget;
+    const message = `Updating ${packageName} to v${displayVersion}...`;
+    logMessage(message);
+    emitServerLog(message);
+    emitBootMessage(message);
+
+    await ensureTorchPlatformDetectedForPackage(packageName);
+
+    const args = [
+      "pip",
+      "install",
+      "--upgrade",
+      "--reinstall",  // Force reinstall even if same version
+      "--refresh",    // Clear cache and fetch fresh from index
+      "--prerelease=allow",
+      ...buildDependencyIndexArgs(),
+      "--system",
+      installSpec,
+    ];
+
+    if (isRegistryWheelPackage(packageName)) {
+      logMessage(`Updating ${packageName} from registry wheel URL: ${installSpec}`);
+    } else {
+      const torchIndexUrl = getTorchIndexUrl();
+      if (torchIndexUrl) {
+        logMessage(`Adding PyTorch index for package update: ${torchIndexUrl}`);
+      }
+    }
+
+    await runUvCommand(args);
+
+    return {
+      success: true,
+      message: `Package ${repoId} updated to v${displayVersion} successfully from wheel index`,
+    };
+  } catch (error: unknown) {
+    logMessage(`Failed to update package ${repoId}: ${errorMsg(error)}`, "error");
+    // Renderer prepends its own "Failed to update package:" framing.
+    return {
+      success: false,
+      message: errorMsg(error),
+    };
+  }
+}
+
+/**
+ * Check all expected package versions
+ * Returns list of packages that need to be installed/updated
+ */
+export async function checkExpectedPackageVersions(): Promise<
+  Array<{
+    packageName: string;
+    currentVersion?: string;
+    expectedVersion: string | null;
+  }>
+> {
+  const expectedVersion = getAppVersion();
+  const packagesNeedingUpdate: Array<{
+    packageName: string;
+    currentVersion?: string;
+    expectedVersion: string | null;
+  }> = [];
+
+  try {
+    // Optimization: fetch all installed packages in one go using pip list
+    // This avoids spawning a separate process for each package version check
+    const installedPackages = await listInstalledPackagesInternal();
+    const nodetoolPackages = installedPackages.filter((pkg) =>
+      pkg.name.startsWith("nodetool-")
+    );
+
+    for (const pkg of nodetoolPackages) {
+      const currentVersion = pkg.version;
+
+      if (!currentVersion) {
+        continue;
+      }
+
+      const versionsMatch = compareVersions(currentVersion, expectedVersion);
+      if (versionsMatch !== 0) {
+        logMessage(
+          `Package ${pkg.name} version mismatch: installed=${currentVersion}, expected=${expectedVersion}`
+        );
+        packagesNeedingUpdate.push({
+          packageName: pkg.name,
+          currentVersion,
+          expectedVersion,
+        });
+      }
+    }
+  } catch (error: unknown) {
+    logMessage(
+      `Failed to check expected package versions: ${errorMsg(error)}`,
+      "error"
+    );
+  }
+
+  return packagesNeedingUpdate;
+}
+
+/**
+ * Install or update packages to their expected versions
+ * Returns summary of installation results
+ */
+export async function installExpectedPackages(): Promise<{
+  success: boolean;
+  packagesChecked: number;
+  packagesUpdated: number;
+  failures: Array<{ packageName: string; error: string }>;
+}> {
+  const packagesNeedingUpdate = await checkExpectedPackageVersions();
+  const failures: Array<{ packageName: string; error: string }> = [];
+  let packagesUpdated = 0;
+
+  if (packagesNeedingUpdate.length > 0) {
+    const packageNames = packagesNeedingUpdate.map((p) => p.packageName).join(", ");
+    logMessage(`Installing expected packages: ${packageNames}`);
+
+    const expectedVersion = getAppVersion();
+    const packageSpecs = packagesNeedingUpdate.map(
+      (p) => `${p.packageName}==${expectedVersion}`
+    );
+
+    try {
+      const message = `Installing ${packagesNeedingUpdate.length} packages (v${expectedVersion})...`;
+      logMessage(message);
+      emitServerLog(message);
+      emitBootMessage(message);
+
+      for (const pkg of packagesNeedingUpdate) {
+        await ensureTorchPlatformDetectedForPackage(pkg.packageName);
+      }
+
+      const args = [
+        "pip",
+        "install",
+        "--prerelease=allow",
+        "--index-url",
+        PYPI_SIMPLE_INDEX_URL,
+        "--extra-index-url",
+        PACKAGE_INDEX_URL,
+        "--index-strategy",
+        "unsafe-best-match",
+        "--system",
+        ...packageSpecs,
+      ];
+
+      const torchIndexUrl = getTorchIndexUrl();
+      if (torchIndexUrl) {
+        args.push("--extra-index-url", torchIndexUrl);
+      }
+
+      await runUvCommand(args);
+      const successMessage = `Successfully installed ${packageNames} (v${expectedVersion})`;
+      logMessage(successMessage);
+      emitServerLog(successMessage);
+      emitBootMessage(successMessage);
+
+      packagesUpdated = packagesNeedingUpdate.length;
+    } catch (error: unknown) {
+      const msg = errorMsg(error);
+      logMessage(`Failed to install packages: ${msg}`, "error");
+      for (const pkg of packagesNeedingUpdate) {
+        failures.push({
+          packageName: pkg.packageName,
+          error: msg,
+        });
+      }
+    }
+  }
+
+  return {
+    success: failures.length === 0,
+    packagesChecked: packagesNeedingUpdate.length,
+    packagesUpdated,
+    failures,
+  };
+}
+
+/**
+ * Validate repository ID format
+ */
+export function validateRepoId(repoId: string): {
+  valid: boolean;
+  error?: string;
+} {
+  if (!repoId) {
+    return { valid: false, error: "Repository ID cannot be empty" };
+  }
+
+  const pattern = /^[a-zA-Z0-9][-a-zA-Z0-9_]*\/[a-zA-Z0-9][-a-zA-Z0-9_]*$/;
+  if (!pattern.test(repoId)) {
+    return {
+      valid: false,
+      error: `Invalid repository ID format: ${repoId}. Must be in the format <owner>/<project>`,
+    };
+  }
+
+  return { valid: true };
+}
+
+// =============================================================================
+// Runtime Package Management
+// =============================================================================
+// These functions manage "system-level" runtime packages that were previously
+// handled by the install wizard. They are now exposed through the package
+// manager UI so users can install them on-demand without blocking the app.
+// =============================================================================
+
+import type { RuntimePackageId, RuntimePackageStatus } from "./types.d";
+
+function isRuntimePackageId(id: string): id is RuntimePackageId {
+  return id in RUNTIME_PACKAGES;
+}
+
+/** All valid runtime package IDs — sourced from the runtime registry. */
+export const RUNTIME_PACKAGE_IDS: readonly RuntimePackageId[] =
+  REGISTRY_RUNTIME_PACKAGE_IDS;
+
+/**
+ * Check the installation status of all runtime packages.
+ * Delegates to the runtime registry.
+ */
+export async function getRuntimePackageStatuses(): Promise<RuntimePackageStatus[]> {
+  const statuses = await runtimeRegistry.statuses();
+  return statuses.map((s) => {
+    const pkg = RUNTIME_PACKAGES[s.id];
+    return {
+      id: s.id,
+      name: pkg.name,
+      description: pkg.description,
+      installed: s.installed,
+      installing: runtimeRegistry.isInstalling(s.id),
+    };
+  });
+}
+
+/**
+ * Get the current conda environment install location, or the default if not set.
+ */
+export function getCondaInstallLocation(): string {
+  return getCondaEnvPath();
+}
+
+/**
+ * Install a runtime package. Delegates to the registry while preserving the
+ * `installLocation` shortcut used by the install wizard for conda.
+ */
+export async function installRuntimePackage(
+  packageId: RuntimePackageId,
+  installLocation?: string,
+): Promise<{ success: boolean; message: string }> {
+  const pkg = RUNTIME_PACKAGES[packageId];
+  if (!pkg) {
+    return { success: false, message: `Unknown runtime: ${packageId}` };
+  }
+
+  if (installLocation) {
+    const { setCondaInstallLocation } = await import("./installer");
+    setCondaInstallLocation(installLocation);
+  }
+
+  emitBootMessage(`Installing ${pkg.name}...`);
+  logMessage(`Installing runtime: ${packageId}`);
+
+  const result = await runLifecycleToCompletion(packageId, "install");
+  if (result.success) {
+    return { success: true, message: `${pkg.name} installed successfully` };
+  }
+  logMessage(`Failed to install runtime package ${packageId}: ${result.message}`, "error");
+  return { success: false, message: `Failed to install: ${result.message}` };
+}
+
+/**
+ * Uninstall a runtime package. Delegates to the registry.
+ */
+export async function uninstallRuntimePackage(
+  packageId: RuntimePackageId,
+): Promise<{ success: boolean; message: string }> {
+  const pkg = RUNTIME_PACKAGES[packageId];
+  if (!pkg) {
+    return { success: false, message: `Unknown runtime: ${packageId}` };
+  }
+
+  try {
+    logMessage(`Uninstalling runtime: ${packageId}`);
+    emitBootMessage(`Removing ${pkg.name}...`);
+    await runtimeRegistry.uninstall(packageId);
+    return { success: true, message: `${pkg.name} removed successfully` };
+  } catch (error: unknown) {
+    logMessage(`Failed to uninstall runtime package ${packageId}: ${errorMsg(error)}`, "error");
+    return { success: false, message: `Failed to uninstall: ${errorMsg(error)}` };
+  }
+}

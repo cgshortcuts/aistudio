@@ -1,0 +1,134 @@
+/**
+ * Tests for FilePreview component
+ */
+
+import React from 'react';
+import { render, screen, fireEvent } from '@testing-library/react-native';
+import { FilePreview } from './FilePreview';
+import { DroppedFile } from '../../types/chat.types';
+
+describe('FilePreview', () => {
+  const mockOnRemove = jest.fn();
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe('Remove button', () => {
+    it('gives the 20pt icon a 44pt effective touch target', () => {
+      const file: DroppedFile = {
+        dataUri: 'data:application/pdf;base64,pdf123',
+        type: 'application/pdf',
+        name: 'document.pdf',
+      };
+
+      render(<FilePreview file={file} onRemove={mockOnRemove} />);
+
+      const button = screen.getByLabelText('Remove file document.pdf');
+      expect(button.props.hitSlop).toEqual({ top: 12, bottom: 12, left: 12, right: 12 });
+    });
+  });
+
+  describe('Image files', () => {
+    it('shows file icon for image with invalid data URI format', () => {
+      const invalidImageFile: DroppedFile = {
+        dataUri: 'https://example.com/image.png', // Not a base64 data URI
+        type: 'image/png',
+        name: 'remote-image.png',
+      };
+
+      render(<FilePreview file={invalidImageFile} onRemove={mockOnRemove} />);
+      // Should show file name since it's not a valid base64 image
+      expect(screen.getByText('remote-image.png')).toBeTruthy();
+    });
+  });
+
+  describe('Non-image files', () => {
+    const audioFile: DroppedFile = {
+      dataUri: 'data:audio/mpeg;base64,audio123',
+      type: 'audio/mpeg',
+      name: 'song.mp3',
+    };
+
+    const videoFile: DroppedFile = {
+      dataUri: 'data:video/mp4;base64,video123',
+      type: 'video/mp4',
+      name: 'video.mp4',
+    };
+
+    const pdfFile: DroppedFile = {
+      dataUri: 'data:application/pdf;base64,pdf123',
+      type: 'application/pdf',
+      name: 'document.pdf',
+    };
+
+    const genericFile: DroppedFile = {
+      dataUri: 'data:application/octet-stream;base64,file123',
+      type: 'application/octet-stream',
+      name: 'unknown-file.bin',
+    };
+
+    it('shows file icon and name for audio files', () => {
+      render(<FilePreview file={audioFile} onRemove={mockOnRemove} />);
+      expect(screen.getByText('song.mp3')).toBeTruthy();
+    });
+
+    it('shows file icon and name for video files', () => {
+      render(<FilePreview file={videoFile} onRemove={mockOnRemove} />);
+      expect(screen.getByText('video.mp4')).toBeTruthy();
+    });
+
+    it('shows file icon and name for PDF files', () => {
+      render(<FilePreview file={pdfFile} onRemove={mockOnRemove} />);
+      expect(screen.getByText('document.pdf')).toBeTruthy();
+    });
+
+    it('shows file icon and name for generic files', () => {
+      render(<FilePreview file={genericFile} onRemove={mockOnRemove} />);
+      expect(screen.getByText('unknown-file.bin')).toBeTruthy();
+    });
+  });
+
+  describe('Remove button', () => {
+    const testFile: DroppedFile = {
+      dataUri: 'data:image/png;base64,test',
+      type: 'image/png',
+      name: 'test.png',
+    };
+
+    it('calls onRemove when remove button is pressed', () => {
+      render(<FilePreview file={testFile} onRemove={mockOnRemove} />);
+      
+      const removeButton = screen.UNSAFE_root.findAllByType(
+        require('react-native').TouchableOpacity
+      )[0];
+      
+      fireEvent.press(removeButton);
+      expect(mockOnRemove).toHaveBeenCalledTimes(1);
+    });
+
+    it('has correct accessibility label', () => {
+      render(<FilePreview file={testFile} onRemove={mockOnRemove} />);
+      
+      const removeButton = screen.UNSAFE_root.findAllByType(
+        require('react-native').TouchableOpacity
+      )[0];
+      
+      expect(removeButton.props.accessibilityLabel).toBe('Remove file test.png');
+    });
+  });
+
+  describe('Long file names', () => {
+    const longNameFile: DroppedFile = {
+      dataUri: 'data:application/pdf;base64,pdf123',
+      type: 'application/pdf',
+      name: 'this-is-a-very-long-filename-that-should-be-truncated-properly.pdf',
+    };
+
+    it('renders long file names (truncation is handled by numberOfLines prop)', () => {
+      render(<FilePreview file={longNameFile} onRemove={mockOnRemove} />);
+      // The text should still be in the document, truncation is visual
+      expect(screen.getByText(longNameFile.name)).toBeTruthy();
+    });
+  });
+});

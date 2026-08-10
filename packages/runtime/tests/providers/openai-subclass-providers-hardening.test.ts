@@ -1,0 +1,146 @@
+/**
+ * Mutation-hardening for the thin OpenAI-compatible provider subclasses.
+ *
+ * They share a shape: a default clientFactory pointing at the vendor baseURL,
+ * and a getAvailableLanguageModels that fetches /models and filters rows to
+ * non-empty string ids. These tests pin the default baseURL (by letting the
+ * real factory run) and the row-filtering/empty-data branches. See
+ * MUTATION_TESTING.md.
+ */
+import { describe, it, expect, vi } from "vitest";
+import { AlibabaProvider } from "../../src/providers/alibaba-provider.js";
+import { CerebrasProvider } from "../../src/providers/cerebras-provider.js";
+import { GMIProvider } from "../../src/providers/gmi-provider.js";
+import { GroqProvider } from "../../src/providers/groq-provider.js";
+import { XAIProvider } from "../../src/providers/xai-provider.js";
+import { DeepSeekProvider } from "../../src/providers/deepseek-provider.js";
+
+type AnyProvider = {
+  getClient: () => { baseURL: string };
+  getAvailableLanguageModels: () => Promise<Array<{ id: string }>>;
+};
+
+const fetchReturning = (body: unknown) =>
+  vi.fn().mockResolvedValue({ ok: true, json: async () => body });
+
+const cases = [
+  {
+    name: "alibaba",
+    baseURL: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    id: "alibaba",
+    make: (opts?: object) =>
+      new AlibabaProvider({ DASHSCOPE_API_KEY: "k" }, opts as never)
+  },
+  {
+    name: "cerebras",
+    baseURL: "https://api.cerebras.ai/v1",
+    id: "cerebras",
+    make: (opts?: object) =>
+      new CerebrasProvider({ CEREBRAS_API_KEY: "k" }, opts as never)
+  },
+  {
+    name: "gmi",
+    baseURL: "https://api.gmi-serving.com/v1",
+    id: "gmi",
+    make: (opts?: object) =>
+      new GMIProvider({ GMI_API_KEY: "k" }, opts as never)
+  },
+  {
+    name: "groq",
+    baseURL: "https://api.groq.com/openai/v1",
+    id: "groq",
+    make: (opts?: object) =>
+      new GroqProvider({ GROQ_API_KEY: "k" }, opts as never)
+  },
+  {
+    name: "xai",
+    baseURL: "https://api.x.ai/v1",
+    id: "xai",
+    make: (opts?: object) => new XAIProvider({ XAI_API_KEY: "k" }, opts as never)
+  },
+  {
+    name: "deepseek",
+    baseURL: "https://api.deepseek.com/v1",
+    id: "deepseek",
+    make: (opts?: object) =>
+      new DeepSeekProvider({ DEEPSEEK_API_KEY: "k" }, opts as never)
+  }
+];
+
+for (const c of cases) {
+  describe(`${c.name}-provider hardening`, () => {
+    it("builds a client at the vendor base URL by default", () => {
+      const p = c.make() as unknown as AnyProvider;
+      expect(p.getClient().baseURL).toBe(c.baseURL);
+    });
+
+    it("keeps only rows with a non-empty string id", async () => {
+      const fetchFn = fetchReturning({
+        data: [
+          { id: "good", name: "Good" },
+          { id: "" }, // empty id → dropped
+          { name: "no-id" }, // missing id → dropped
+          { id: 123 } // non-string id → dropped
+        ]
+      });
+      const p = c.make({
+        client: {},
+        fetchFn
+      }) as unknown as AnyProvider;
+      const models = await p.getAvailableLanguageModels();
+      expect(models.map((m) => m.id)).toEqual(["good"]);
+    });
+
+    it("returns [] when the payload has no data array", async () => {
+      const fetchFn = fetchReturning({});
+      const p = c.make({
+        client: {},
+        fetchFn
+      }) as unknown as AnyProvider;
+      expect(await p.getAvailableLanguageModels()).toEqual([]);
+    });
+  });
+}
+
+/**
+ * OpenAI's media and embedding catalogs are hardcoded in OpenAIProvider and
+ * tagged `provider: "openai"`. Subclasses inherit the chat dialect, not the
+ * lineup — before the `servesOpenAICatalog()` guard, every one of them
+ * advertised `gpt-image-2`, `whisper-1`, `sora-2` and friends as its own, and
+ * selecting one sent the request to a host with no such endpoint.
+ */
+describe("OpenAI-compatible subclasses do not inherit OpenAI's catalog", () => {
+  const mediaListers = [
+    "getAvailableImageModels",
+    "getAvailableTTSModels",
+    "getAvailableASRModels",
+    "getAvailableVideoModels",
+    "getAvailableEmbeddingModels"
+  ] as const;
+
+  for (const c of cases) {
+    it(`${c.name} reports no OpenAI-branded models`, async () => {
+      const p = c.make({ client: {}, fetchFn: fetchReturning({}) }) as unknown as Record<
+        string,
+        () => Promise<Array<{ id: string; provider: string }>>
+      >;
+      for (const lister of mediaListers) {
+        const models = await p[lister]();
+        expect(
+          models.filter((m) => m.provider === "openai"),
+          `${c.name}.${lister} leaked OpenAI models`
+        ).toEqual([]);
+      }
+    });
+  }
+
+  it("still serves the catalog on the real OpenAI provider", async () => {
+    const { OpenAIProvider } = await import("../../src/providers/openai-provider.js");
+    const openai = new OpenAIProvider({ OPENAI_API_KEY: "k" });
+    expect((await openai.getAvailableImageModels()).length).toBeGreaterThan(0);
+    expect((await openai.getAvailableTTSModels()).length).toBeGreaterThan(0);
+    expect((await openai.getAvailableASRModels()).length).toBeGreaterThan(0);
+    expect((await openai.getAvailableVideoModels()).length).toBeGreaterThan(0);
+    expect((await openai.getAvailableEmbeddingModels()).length).toBeGreaterThan(0);
+  });
+});

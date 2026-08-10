@@ -1,0 +1,200 @@
+/**
+ * Platform-aware paths for Nodetool data files.
+ *
+ * Single source of truth for default file locations so callers don't need to
+ * re-implement OS detection or XDG logic.
+ *
+ * Priority: explicit env var > platform default.
+ *
+ * The `node:path` / `node:os` / `node:url` imports are loaded lazily via
+ * top-level dynamic import so this module loads on non-Node runtimes
+ * (browser, Edge). All exported functions throw if invoked off-Node.
+ */
+
+import { IS_NODE, importNodeBuiltin } from "./node-import.js";
+
+type PathApi = {
+  join: (...parts: string[]) => string;
+};
+type OsApi = { homedir: () => string };
+type UrlApi = { fileURLToPath: (url: string | URL) => string };
+
+const pathLib = await importNodeBuiltin<PathApi>("node:path");
+const osLib = await importNodeBuiltin<OsApi>("node:os");
+const urlLib = await importNodeBuiltin<UrlApi>("node:url");
+
+function notOnNode(name: string): never {
+  throw new Error(
+    `paths.${name}() is Node-only and not available in this runtime`
+  );
+}
+
+const join = (...parts: string[]): string =>
+  pathLib ? pathLib.join(...parts) : notOnNode("join");
+const homedir = (): string => (osLib ? osLib.homedir() : notOnNode("homedir"));
+const fileURLToPath = (url: string | URL): string =>
+  urlLib ? urlLib.fileURLToPath(url) : notOnNode("fileURLToPath");
+
+/**
+ * Base directory for all Nodetool user data.
+ *
+ * Must match Python's get_system_data_path() in nodetool-core so both
+ * runtimes read/write the same database and assets.
+ *
+ * - Windows:  %APPDATA%\nodetool          (e.g. C:\Users\<name>\AppData\Roaming\nodetool)
+ * - macOS/Linux: $XDG_DATA_HOME/nodetool  (fallback: ~/.local/share/nodetool)
+ */
+export function getNodetoolDataDir(): string {
+  if (!IS_NODE) return notOnNode("getNodetoolDataDir");
+  if (process.platform === "win32") {
+    return join(
+      process.env["APPDATA"] ?? join(homedir(), "AppData", "Roaming"),
+      "nodetool"
+    );
+  }
+  // macOS and Linux: use XDG standard to match Python side
+  return join(
+    process.env["XDG_DATA_HOME"] ?? join(homedir(), ".local", "share"),
+    "nodetool"
+  );
+}
+
+function stripUrlSuffix(value: string): string {
+  return value.split(/[?#]/, 1)[0];
+}
+
+function normalizeWindowsDrivePath(value: string): string {
+  if (process.platform === "win32" && /^\/[A-Za-z]:[\\/]/.test(value)) {
+    return value.slice(1);
+  }
+  return value;
+}
+
+function assertNoDatabaseOverrideConflict(): void {
+  if (process.env["DB_PATH"]?.trim() && process.env["DATABASE_URL"]?.trim()) {
+    throw new Error(
+      "DB_PATH and DATABASE_URL are both set. Use only one database configuration variable."
+    );
+  }
+}
+
+export function getPostgresDatabaseUrl(): string | undefined {
+  assertNoDatabaseOverrideConflict();
+  const raw = process.env["DATABASE_URL"]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  return /^postgres(?:ql)?:\/\//i.test(raw) ? raw : undefined;
+}
+
+/**
+ * Resolve a SQLite database path from DATABASE_URL.
+ *
+ * Supports common SQLite forms such as:
+ * - /absolute/path/nodetool.sqlite3
+ * - file:./nodetool.sqlite3
+ * - file:///absolute/path/nodetool.sqlite3
+ * - sqlite:./nodetool.sqlite3
+ * - sqlite:///absolute/path/nodetool.sqlite3
+ */
+function getDatabaseUrlDbPath(): string | undefined {
+  const raw = process.env["DATABASE_URL"]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+
+  if (/^file:\/\//i.test(raw)) {
+    return fileURLToPath(new URL(raw));
+  }
+
+  if (/^file:/i.test(raw)) {
+    return stripUrlSuffix(raw.slice("file:".length));
+  }
+
+  if (/^sqlite:/i.test(raw)) {
+    const value = stripUrlSuffix(raw.slice("sqlite:".length));
+    if (value.startsWith("///")) {
+      return normalizeWindowsDrivePath(`/${value.slice(3)}`);
+    }
+    if (value.startsWith("//")) {
+      return value.slice(2);
+    }
+    return value;
+  }
+
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+    return raw;
+  }
+
+  // Non-SQLite DATABASE_URL values are handled by callers that support other
+  // dialects (for example PostgreSQL via getPostgresDatabaseUrl()). For SQLite
+  // path resolution, ignore them and fall back to the default path.
+  return undefined;
+}
+
+/** Default path for the main SQLite database. Override with DB_PATH or DATABASE_URL. */
+export function getDefaultDbPath(): string {
+  assertNoDatabaseOverrideConflict();
+  return (
+    process.env["DB_PATH"] ??
+    getDatabaseUrlDbPath() ??
+    join(getNodetoolDataDir(), "nodetool.sqlite3")
+  );
+}
+
+/** Default path for the vector store database. Override with VECTORSTORE_DB_PATH. */
+export function getDefaultVectorstoreDbPath(): string {
+  return (
+    process.env["VECTORSTORE_DB_PATH"] ??
+    join(getNodetoolDataDir(), "vectorstore.db")
+  );
+}
+
+/** Default path for local asset storage. Override with ASSET_FOLDER or STORAGE_PATH. */
+export function getDefaultAssetsPath(): string {
+  return (
+    process.env["ASSET_FOLDER"] ??
+    process.env["STORAGE_PATH"] ??
+    join(getNodetoolDataDir(), "assets")
+  );
+}
+
+/**
+ * Default cache directory for the `@huggingface/transformers` (Transformers.js)
+ * runtime. Override with TRANSFORMERS_JS_CACHE_DIR.
+ *
+ * Transformers.js uses its own flat layout (`{cacheDir}/{repo_id}/{file_path}`)
+ * which is incompatible with the Python `huggingface_hub` cache, so we keep it
+ * under the Nodetool data directory rather than alongside `~/.cache/huggingface`.
+ */
+export function getDefaultTransformersJsCacheDir(): string {
+  return (
+    process.env["TRANSFORMERS_JS_CACHE_DIR"] ??
+    join(getNodetoolDataDir(), "transformers-js-cache")
+  );
+}
+
+/**
+ * Return the absolute filesystem path for a storage key.
+ * Use this on the server side for direct file reads.
+ */
+export function getAssetFilePath(key: string): string {
+  return join(getDefaultAssetsPath(), key.replace(/^\/+/, ""));
+}
+
+/**
+ * Build a client-facing URL for a storage key.
+ * Returns `/api/storage/<key>` — served by the local HTTP server (file
+ * backend) or proxied/redirected to cloud storage by the storage handler.
+ */
+export function buildAssetUrl(key: string): string {
+  // Encode each path segment so reserved chars (`#`, `?`, space, `%`) survive
+  // the round-trip through the decoding route (storage-api.ts decodeURIComponent
+  // and FileStorageAdapter.keyFromUri). `/` separators are preserved.
+  const encoded = key
+    .replace(/^\/+/, "")
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/");
+  return `/api/storage/${encoded}`;
+}

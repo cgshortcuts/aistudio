@@ -1,0 +1,92 @@
+/**
+ * Thread model – conversation thread container.
+ *
+ * Port of Python's `nodetool.models.thread`.
+ */
+
+import { eq, and, gt, lt, desc, asc } from "drizzle-orm";
+import { DBModel, createTimeOrderedUuid } from "./base-model.js";
+import { getDb } from "./db.js";
+import { threads } from "./schema/threads.js";
+
+export class Thread extends DBModel {
+  static override table = threads;
+
+  declare id: string;
+  declare user_id: string;
+  declare workflow_id: string | null;
+  declare title: string;
+  declare created_at: string;
+  declare updated_at: string;
+
+  constructor(data: Record<string, unknown>) {
+    super(data);
+    const now = new Date().toISOString();
+    this.id ??= createTimeOrderedUuid();
+    this.workflow_id ??= null;
+    this.title ??= "";
+    this.created_at ??= now;
+    this.updated_at ??= now;
+  }
+
+  override beforeSave(): void {
+    this.updated_at = new Date().toISOString();
+  }
+
+  /** Find a thread by id, scoped to the user. */
+  static async find(userId: string, threadId: string): Promise<Thread | null> {
+    const thread = await Thread.get<Thread>(threadId);
+    if (!thread) return null;
+    if (thread.user_id === userId) return thread;
+    return null;
+  }
+
+  /**
+   * Paginate threads for a user. When `workflowId` is provided, only threads
+   * bound to that workflow are returned (used by the node editor to scope its
+   * thread list to the open workflow).
+   */
+  static async paginate(
+    userId: string,
+    opts: {
+      limit?: number;
+      startKey?: string;
+      reverse?: boolean;
+      workflowId?: string;
+    } = {}
+  ): Promise<[Thread[], string]> {
+    const { limit = 50, reverse = true, workflowId, startKey } = opts;
+    const db = getDb();
+    const conditions = [eq(threads.user_id, userId)];
+    if (workflowId !== undefined) {
+      conditions.push(eq(threads.workflow_id, workflowId));
+    }
+    // Seek past the cursor row so following `next` advances the page. Without
+    // this the same first page was returned forever while still advertising a
+    // cursor.
+    if (startKey) {
+      const cursorRow = await Thread.get<Thread>(startKey);
+      if (cursorRow && cursorRow.user_id === userId) {
+        conditions.push(
+          reverse
+            ? lt(threads.updated_at, cursorRow.updated_at)
+            : gt(threads.updated_at, cursorRow.updated_at)
+        );
+      }
+    }
+    const where =
+      conditions.length === 1 ? conditions[0] : and(...conditions);
+    const rows = await db
+      .select()
+      .from(threads)
+      .where(where)
+      .orderBy(reverse ? desc(threads.updated_at) : asc(threads.updated_at))
+      .limit(limit + 1)
+
+    const items = rows.map((r: Record<string, unknown>) => new Thread(r as Record<string, unknown>));
+    if (items.length <= limit) return [items, ""];
+    items.pop();
+    const cursor = items[items.length - 1]?.id ?? "";
+    return [items, cursor];
+  }
+}

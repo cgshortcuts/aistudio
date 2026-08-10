@@ -1,0 +1,90 @@
+{
+  "name": "@nodetool-ai/protocol",
+  "version": "0.7.0-rc.34",
+  "description": "Shared message types and protocol definitions for the NodeTool workflow runtime",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "node ../../scripts/build-typescript-workspace.mjs && npm run generate:processing-messages-schema",
+    "generate:sdk-protocol": "tsx scripts/generate-sdk-protocol.ts",
+    "check:sdk-protocol": "tsx scripts/generate-sdk-protocol.ts --check",
+    "generate:processing-messages-schema": "tsx scripts/generate-processing-messages-schema.ts",
+    "check:processing-messages-schema": "tsx scripts/generate-processing-messages-schema.ts --check",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nodetool-ai/gpu": "*",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.2"
+  },
+  "exports": {
+    ".": {
+      "nodetool-dev": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./builtin-packs": {
+      "nodetool-dev": "./src/builtin-packs.ts",
+      "types": "./dist/builtin-packs.d.ts",
+      "import": "./dist/builtin-packs.js",
+      "default": "./dist/builtin-packs.js"
+    },
+    "./bridge-protocol": {
+      "nodetool-dev": "./src/bridge-protocol.ts",
+      "types": "./dist/bridge-protocol.d.ts",
+      "import": "./dist/bridge-protocol.js",
+      "default": "./dist/bridge-protocol.js"
+    },
+    "./api-schemas": {
+      "nodetool-dev": "./src/api-schemas/index.ts",
+      "types": "./dist/api-schemas/index.d.ts",
+      "import": "./dist/api-schemas/index.js",
+      "default": "./dist/api-schemas/index.js"
+    },
+    "./api-schemas/*.js": {
+      "nodetool-dev": "./src/api-schemas/*.ts",
+      "types": "./dist/api-schemas/*.d.ts",
+      "import": "./dist/api-schemas/*.js",
+      "default": "./dist/api-schemas/*.js"
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodetool-ai/nodetool.git",
+    "directory": "packages/protocol"
+  },
+  "homepage": "https://nodetool.ai",
+  "bugs": {
+    "url": "https://github.com/nodetool-ai/nodetool/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "schema",
+    "README.md"
+  ],
+  "keywords": [
+    "nodetool",
+    "ai",
+    "workflow",
+    "workflow-automation",
+    "typescript",
+    "message-types",
+    "msgpack",
+    "protocol",
+    "websocket"
+  ]
+}

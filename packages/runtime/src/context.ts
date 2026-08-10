@@ -1,0 +1,3504 @@
+/**
+ * ProcessingContext – runtime context for node execution.
+ *
+ * Port of src/nodetool/workflows/processing_context.py.
+ *
+ * Provides:
+ *   - Message queue for emitting ProcessingMessages.
+ *   - Cache get/set interface.
+ *   - Output normalization (sanitize memory URIs, etc.).
+ *   - Asset handling with pluggable storage adapters.
+ */
+
+import type {
+  AssetRef,
+  ProcessingMessage,
+  ProviderCost
+} from "@nodetool-ai/protocol";
+import {
+  packageAssetHttpPath,
+  parsePackageAssetUri
+} from "@nodetool-ai/protocol";
+import { AgentMemory } from "./agent-memory.js";
+import {
+  recordInvocationAsset,
+  recordInvocationCost
+} from "./invocation-account.js";
+import { VariableChannel } from "./variable-channel.js";
+import { loadMediaRefBytes, type MediaRefValue } from "./media-ref-bytes.js";
+import { encodeRawImageRef } from "./image-codec.js";
+import {
+  expandAssetReferences,
+  inlineTextAssetRefs
+} from "./prompt-asset-refs.js";
+import { importNodeBuiltin } from "@nodetool-ai/config";
+
+// `node:fs/promises`, `node:path`, `node:url`, `node:crypto` are loaded
+// lazily so this module loads in browser / Edge runtimes. The
+// `FileStorageAdapter`, `resolveWorkspacePath`, and `randomUUID`
+// fallback all degrade gracefully when these are unavailable.
+/**
+ * Secret values shorter than this are not recorded for masking: redacting a
+ * two-character value would blank unrelated text wherever it happens to occur.
+ */
+const MIN_MASKABLE_SECRET_LENGTH = 8;
+
+/**
+ * ProcessingContext variable key carrying the provider/model the currently
+ * running agent loop is itself talking to. Every loop that executes tools
+ * (chat turns, `StepExecutor` sub-agents) stamps it, so a tool that launches
+ * another harness — `build_app` and friends — inherits the caller's model by
+ * default instead of demanding one or falling back to a server env default.
+ */
+export const ACTIVE_MODEL_CONTEXT_KEY = "active_agent_model";
+
+/** The value stored under {@link ACTIVE_MODEL_CONTEXT_KEY}. */
+export interface ActiveModelSelection {
+  provider: string;
+  model: string;
+}
+
+const nodeCrypto =
+  await importNodeBuiltin<typeof import("node:crypto")>("node:crypto");
+const nodeFsP =
+  await importNodeBuiltin<typeof import("node:fs/promises")>(
+    "node:fs/promises"
+  );
+const nodePath =
+  await importNodeBuiltin<typeof import("node:path")>("node:path");
+const nodeUrl = await importNodeBuiltin<typeof import("node:url")>("node:url");
+
+const randomUUID = nodeCrypto?.randomUUID
+  ? nodeCrypto.randomUUID
+  : (): string => {
+      const g = globalThis as { crypto?: { randomUUID?: () => string } };
+      if (g.crypto?.randomUUID) return g.crypto.randomUUID();
+      return `id_${Date.now().toString(36)}_${Math.random()
+        .toString(36)
+        .slice(2, 10)}`;
+    };
+
+/**
+ * `process` is undefined in browser/edge runtimes. Reading `process.env`
+ * directly there throws `ReferenceError`, so this context (constructed by the
+ * in-browser workflow runner too) reads env through this guard instead.
+ */
+const safeProcessEnv = (): Record<string, string | undefined> =>
+  typeof process !== "undefined" && process.env ? process.env : {};
+
+function waitForRetry(
+  delayMs: number,
+  signal?: AbortSignal | null
+): Promise<void> {
+  return new Promise((resolveWait, rejectWait) => {
+    if (signal?.aborted) {
+      rejectWait(signal.reason ?? new Error("HTTP request aborted"));
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      rejectWait(signal?.reason ?? new Error("HTTP request aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolveWait();
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+// Eager local bindings; unavailable off-Node, throw at call time.
+function notOnNode(api: string): never {
+  throw new Error(
+    `${api} is unavailable in this runtime — configure a StorageAdapter instead`
+  );
+}
+const access = (...a: Parameters<typeof import("node:fs/promises").access>) =>
+  nodeFsP ? nodeFsP.access(...a) : notOnNode("node:fs/promises.access");
+const mkdir = (...a: Parameters<typeof import("node:fs/promises").mkdir>) =>
+  nodeFsP ? nodeFsP.mkdir(...a) : notOnNode("node:fs/promises.mkdir");
+const readFile = (
+  ...a: Parameters<typeof import("node:fs/promises").readFile>
+) =>
+  nodeFsP ? nodeFsP.readFile(...a) : notOnNode("node:fs/promises.readFile");
+const writeFile = (
+  ...a: Parameters<typeof import("node:fs/promises").writeFile>
+) =>
+  nodeFsP ? nodeFsP.writeFile(...a) : notOnNode("node:fs/promises.writeFile");
+
+const basename = (p: string, ext?: string): string =>
+  nodePath ? nodePath.basename(p, ext) : notOnNode("node:path.basename");
+const dirname = (p: string): string =>
+  nodePath ? nodePath.dirname(p) : notOnNode("node:path.dirname");
+const extname = (p: string): string =>
+  nodePath ? nodePath.extname(p) : notOnNode("node:path.extname");
+const isAbsolute = (p: string): boolean =>
+  nodePath ? nodePath.isAbsolute(p) : notOnNode("node:path.isAbsolute");
+const join = (...parts: string[]): string =>
+  nodePath ? nodePath.join(...parts) : notOnNode("node:path.join");
+const relative = (from: string, to: string): string =>
+  nodePath ? nodePath.relative(from, to) : notOnNode("node:path.relative");
+const resolve = (...parts: string[]): string =>
+  nodePath ? nodePath.resolve(...parts) : notOnNode("node:path.resolve");
+
+const fileURLToPath = (u: string | URL): string =>
+  nodeUrl ? nodeUrl.fileURLToPath(u) : notOnNode("node:url.fileURLToPath");
+const pathToFileURL = (p: string): URL =>
+  nodeUrl ? nodeUrl.pathToFileURL(p) : notOnNode("node:url.pathToFileURL");
+import type { BaseProvider } from "./providers/base-provider.js";
+import type {
+  EncodedAudioResult,
+  EntityReference,
+  Message,
+  MessageContent,
+  ProviderStreamItem
+} from "./providers/types.js";
+import type { NodeExecutor } from "./node-executor.js";
+
+// ---------------------------------------------------------------------------
+// Cache interface
+// ---------------------------------------------------------------------------
+
+export interface CacheAdapter {
+  get(key: string): Promise<unknown | undefined>;
+  set(key: string, value: unknown, ttlSeconds?: number): Promise<void>;
+  has(key: string): Promise<boolean>;
+  delete(key: string): Promise<void>;
+}
+
+/**
+ * In-memory cache adapter (default for tests and single-process execution).
+ */
+export class MemoryCache implements CacheAdapter {
+  private _store = new Map<
+    string,
+    { value: unknown; expires: number | null }
+  >();
+
+  async get(key: string): Promise<unknown | undefined> {
+    const entry = this._store.get(key);
+    if (!entry) return undefined;
+    if (entry.expires !== null && Date.now() > entry.expires) {
+      this._store.delete(key);
+      return undefined;
+    }
+    return entry.value;
+  }
+
+  async set(key: string, value: unknown, ttlSeconds?: number): Promise<void> {
+    const expires = ttlSeconds ? Date.now() + ttlSeconds * 1000 : null;
+    this._store.set(key, { value, expires });
+  }
+
+  async has(key: string): Promise<boolean> {
+    return (await this.get(key)) !== undefined;
+  }
+
+  async delete(key: string): Promise<void> {
+    this._store.delete(key);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Storage adapter interface
+// ---------------------------------------------------------------------------
+
+export interface StorageAdapter {
+  /** Store an asset and return a URI. */
+  store(key: string, data: Uint8Array, contentType?: string): Promise<string>;
+
+  /** Retrieve an asset by URI. */
+  retrieve(uri: string): Promise<Uint8Array | null>;
+
+  /** Check if an asset exists. */
+  exists(uri: string): Promise<boolean>;
+
+  /** Return the URI that store() would produce for this key, without I/O. */
+  uriForKey(key: string): string;
+
+  /**
+   * List entries under a key prefix. With `delimiter: "/"` the listing is
+   * hierarchical (FS-readdir style); without it the listing is flat.
+   */
+  list(
+    prefix: string,
+    opts?: { delimiter?: string }
+  ): Promise<StorageListResult>;
+
+  /** Delete an entry. Returns true if an entry was deleted. */
+  delete(uri: string): Promise<boolean>;
+
+  /** Stat an entry. Returns null if it doesn't exist. */
+  stat(uri: string): Promise<StorageStat | null>;
+}
+
+export interface StorageEntry {
+  key: string;
+  uri: string;
+  size: number;
+  modifiedAt: number;
+  contentType?: string;
+}
+
+export interface StorageListResult {
+  entries: StorageEntry[];
+  commonPrefixes: string[];
+}
+
+export interface StorageStat {
+  key: string;
+  size: number;
+  modifiedAt: number;
+  contentType?: string;
+}
+
+/**
+ * Controls how asset-like values (ImageRef / AudioRef / VideoRef) are
+ * materialized when {@link ProcessingContext.normalizeOutputValue} runs.
+ *
+ * Pick the mode by where the consumer lives:
+ * - `native`: in-process JS/TS code that knows how to handle the live
+ *   object as-is (DSL, tests, kernel-internal handoffs). Inline `data`
+ *   bytes stay attached.
+ * - `data_uri`: anything that renders a `data:image/png;base64,...` URI
+ *   inline (markdown, simple HTML).
+ * - `temp_url`: HTTP-fetching client over a short-lived URL — bytes are
+ *   uploaded to the temp storage adapter and `data` is dropped.
+ * - `storage_url`: same as `temp_url` but persistent storage.
+ * - `workspace`: write the bytes to a file inside `workspaceDir` and
+ *   return that file URI.
+ * - `raw`: keep bytes embedded in the asset's `data` field.
+ *
+ * NOTE: this used to be called `"python"` (mirroring the Python enum,
+ * where it accurately meant "Python-native object"). The rename to
+ * `"native"` makes the contract language-agnostic and matches what the
+ * mode actually does in the TS runtime.
+ */
+export type AssetOutputMode =
+  | "native"
+  | "data_uri"
+  | "temp_url"
+  | "storage_url"
+  | "workspace"
+  | "raw";
+export type ProviderCapability =
+  | "generate_message"
+  | "generate_messages"
+  | "text_to_image"
+  | "image_to_image"
+  | "inpainting"
+  | "upscale_image"
+  | "remove_background"
+  | "relight_image"
+  | "vectorize_image"
+  | "text_to_video"
+  | "image_to_video"
+  | "video_to_video"
+  | "lip_sync"
+  | "text_to_speech"
+  | "text_to_music"
+  | "automatic_speech_recognition"
+  | "generate_embedding";
+
+type PredictionStatus = "pending" | "running" | "completed" | "failed";
+
+export type ProviderPredictionRequest = {
+  provider: string;
+  capability: ProviderCapability;
+  model: string;
+  nodeId?: string;
+  workflowId?: string | null;
+  params?: Record<string, unknown>;
+};
+
+export type HttpRetryOptions = {
+  maxRetries?: number;
+  backoffMs?: number;
+  retryStatuses?: number[];
+  headers?: Record<string, string>;
+};
+
+export type HttpRequestOptions = Omit<
+  RequestInit,
+  "method" | "headers" | "body"
+> & {
+  headers?: Record<string, string>;
+  body?: RequestInit["body"] | null;
+  retry?: HttpRetryOptions;
+};
+
+export interface MessageCreateRequestLike {
+  thread_id: string;
+  role: string;
+  content?: unknown;
+  tool_calls?: unknown;
+  workflow_id?: string | null;
+  name?: string | null;
+  tool_call_id?: string | null;
+}
+
+export interface ThreadMessagesResultLike {
+  messages: Array<Record<string, unknown>>;
+  next: string | null;
+}
+
+export interface AssetCreateParamsLike {
+  userId: string;
+  workflowId: string | null;
+  jobId: string;
+  name: string;
+  contentType: string;
+  content: Uint8Array;
+  parentId?: string | null;
+  nodeId?: string | null;
+}
+
+/** A non-folder asset surfaced when listing a folder's contents. */
+export interface FolderAssetEntry {
+  id: string;
+  content_type: string;
+  name: string;
+}
+
+/** An asset's identity + metadata, as surfaced by {@link ProcessingContext.getAssetInfo}. */
+export interface AssetInfoEntry {
+  id: string;
+  content_type: string;
+  name: string;
+  metadata: Record<string, unknown> | null;
+}
+
+/**
+ * An executable tool the run's owner injects into the context for agent nodes
+ * to pick up by name. Structurally satisfied by the agent system's `Tool` base
+ * class, which lives in a package `runtime` cannot depend on.
+ */
+export interface InjectedTool {
+  name: string;
+  description?: string;
+  inputSchema?: Record<string, unknown>;
+  process: (
+    context: ProcessingContext,
+    params: Record<string, unknown>
+  ) => Promise<unknown>;
+  /**
+   * Preferred entry point when present: strips reserved fields and coerces
+   * params against the tool's schema before dispatching to `process`.
+   */
+  execute?: (
+    context: ProcessingContext,
+    params: Record<string, unknown>,
+    options?: { toolCallId?: string }
+  ) => Promise<unknown>;
+}
+
+export interface ProcessingContextModelInterfaces {
+  getJob?: (args: { userId: string; jobId: string }) => Promise<unknown | null>;
+  createAsset?: (args: AssetCreateParamsLike) => Promise<unknown>;
+  /**
+   * Recursively list the non-folder assets contained in `folderId`. Returns
+   * `null` when the id is not a folder (or does not exist) so callers can tell
+   * "not a folder" apart from "empty folder" (`[]`).
+   */
+  listFolderAssets?: (args: {
+    userId: string;
+    folderId: string;
+  }) => Promise<FolderAssetEntry[] | null>;
+  /**
+   * Look up one owned asset's identity + metadata (no bytes). Returns `null`
+   * when the asset does not exist or is not owned by the user.
+   */
+  getAssetInfo?: (args: {
+    userId: string;
+    assetId: string;
+  }) => Promise<AssetInfoEntry | null>;
+  createMessage?: (args: {
+    userId: string;
+    req: MessageCreateRequestLike;
+  }) => Promise<unknown>;
+  getMessages?: (args: {
+    userId: string;
+    threadId: string;
+    limit?: number;
+    startKey?: string | null;
+    reverse?: boolean;
+  }) => Promise<ThreadMessagesResultLike>;
+  /** Load a persisted sketch (image document) by id; null when missing or not owned. */
+  getImageDocument?: (args: {
+    userId: string;
+    id: string;
+  }) => Promise<unknown | null>;
+  /** Create a persisted sketch (image document); returns the created document response. */
+  createImageDocument?: (args: {
+    userId: string;
+    name: string;
+    projectId?: string;
+    width: number;
+    height: number;
+    document: unknown;
+  }) => Promise<unknown>;
+  /** Load a persisted timeline sequence by id; null when missing or not owned. */
+  getTimelineSequence?: (args: {
+    userId: string;
+    id: string;
+  }) => Promise<unknown | null>;
+  /** Create a persisted timeline sequence from a full sequence document. */
+  createTimelineSequence?: (args: {
+    userId: string;
+    sequence: unknown;
+  }) => Promise<unknown>;
+  /** Replace a persisted timeline sequence's document; null when missing or not owned. */
+  updateTimelineSequence?: (args: {
+    userId: string;
+    id: string;
+    sequence: unknown;
+  }) => Promise<unknown | null>;
+  /** Load a persisted script by id; null when missing or not owned. */
+  getScript?: (args: { userId: string; id: string }) => Promise<unknown | null>;
+  /** Create a persisted script from a name + document. */
+  createScript?: (args: {
+    userId: string;
+    name?: string;
+    projectId?: string;
+    document: unknown;
+  }) => Promise<unknown>;
+  /** Replace a persisted script's document (and optional timeline link); null when missing or not owned. */
+  updateScript?: (args: {
+    userId: string;
+    id: string;
+    document?: unknown;
+    timelineId?: string | null;
+    baseUpdatedAt?: string;
+  }) => Promise<unknown | null>;
+}
+
+function isWithinRoot(root: string, target: string): boolean {
+  const rel = relative(root, target);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Deterministic JSON serialization with object keys sorted at every depth.
+ * Unlike `JSON.stringify(value, sortedKeys)` (a recursive replacer allow-list
+ * that drops nested values), this preserves the full nested structure, so two
+ * values are equal-keyed iff they are deeply equal.
+ */
+function stableStringifyDeep(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value ?? null);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => stableStringifyDeep(v)).join(",")}]`;
+  }
+  const entries = Object.keys(value as Record<string, unknown>)
+    .sort()
+    .map(
+      (k) =>
+        `${JSON.stringify(k)}:${stableStringifyDeep(
+          (value as Record<string, unknown>)[k]
+        )}`
+    );
+  return `{${entries.join(",")}}`;
+}
+
+/**
+ * Normalize the image input for image-to-image / image-to-video predictions
+ * into a list of byte buffers. Accepts the modern `images` array as well as
+ * the legacy singular `image` field so older callers keep working.
+ */
+function coerceImageList(params: Record<string, unknown>): Uint8Array[] {
+  const list = params.images;
+  if (Array.isArray(list)) {
+    return list.filter((b): b is Uint8Array => b instanceof Uint8Array);
+  }
+  const single = params.image;
+  return single instanceof Uint8Array ? [single] : [];
+}
+
+/**
+ * Normalize `params.entities` into provider-level {@link EntityReference}s.
+ *
+ * Consumers send entities in whatever shape they hold: a full protocol Entity
+ * (`reference_images` list), a lean `{name, descriptor, image}` where `image`
+ * is bytes, an ImageRef-like object, or a bare URI string. Images are resolved
+ * to bytes here — the last point with a ProcessingContext — so providers only
+ * ever see `Uint8Array`s. Entities without a name are dropped; an unresolvable
+ * image degrades to a text-only entity (the descriptor still applies).
+ */
+async function coerceEntityList(
+  params: Record<string, unknown>,
+  context: ProcessingContext
+): Promise<EntityReference[] | undefined> {
+  const raw = params.entities;
+  if (!Array.isArray(raw) || raw.length === 0) return undefined;
+
+  const out: EntityReference[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const entity = item as Record<string, unknown>;
+    const name = typeof entity.name === "string" ? entity.name.trim() : "";
+    if (!name) continue;
+    const descriptor =
+      typeof entity.descriptor === "string" ? entity.descriptor : undefined;
+
+    const imageSource =
+      entity.image ??
+      (Array.isArray(entity.reference_images)
+        ? entity.reference_images[0]
+        : undefined);
+    let image: Uint8Array | undefined;
+    if (imageSource instanceof Uint8Array) {
+      image = imageSource;
+    } else if (typeof imageSource === "string" && imageSource.length > 0) {
+      image =
+        (await loadMediaRefBytes(
+          { type: "image", uri: imageSource },
+          context
+        )) ?? undefined;
+    } else if (imageSource && typeof imageSource === "object") {
+      image =
+        (await loadMediaRefBytes(imageSource as MediaRefValue, context)) ??
+        undefined;
+    }
+    out.push({ name, descriptor, image });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeStorageKey(key: string): string {
+  const segments: string[] = [];
+  for (const segment of key.replaceAll("\\", "/").split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      if (segments.length === 0) {
+        throw new Error(`Invalid storage key: ${key}`);
+      }
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  const cleaned = segments.join("/");
+  if (!cleaned) {
+    throw new Error(`Invalid storage key: ${key}`);
+  }
+  return cleaned;
+}
+
+function joinStorageKey(prefix: string | undefined, key: string): string {
+  const normalizedKey = normalizeStorageKey(key);
+  if (!prefix) return normalizedKey;
+  const normalizedPrefix = normalizeStorageKey(prefix);
+  return `${normalizedPrefix}/${normalizedKey}`;
+}
+
+/**
+ * In-memory storage adapter useful for tests and single-process ephemeral runs.
+ */
+export class InMemoryStorageAdapter implements StorageAdapter {
+  private _store = new Map<
+    string,
+    { data: Uint8Array; contentType?: string; modifiedAt: number }
+  >();
+
+  async store(
+    key: string,
+    data: Uint8Array,
+    contentType?: string
+  ): Promise<string> {
+    const normalized = normalizeStorageKey(key);
+    this._store.set(normalized, {
+      data: new Uint8Array(data),
+      contentType,
+      modifiedAt: Date.now()
+    });
+    return `memory://${normalized}`;
+  }
+
+  async retrieve(uri: string): Promise<Uint8Array | null> {
+    if (!uri.startsWith("memory://")) return null;
+    const key = uri.slice("memory://".length);
+    const value = this._store.get(key);
+    return value ? new Uint8Array(value.data) : null;
+  }
+
+  async exists(uri: string): Promise<boolean> {
+    if (!uri.startsWith("memory://")) return false;
+    const key = uri.slice("memory://".length);
+    return this._store.has(key);
+  }
+
+  uriForKey(key: string): string {
+    return `memory://${normalizeStorageKey(key)}`;
+  }
+
+  async list(
+    prefix: string,
+    opts: { delimiter?: string } = {}
+  ): Promise<StorageListResult> {
+    const delimiter = opts.delimiter ?? null;
+    let normalizedPrefix = "";
+    if (prefix && prefix !== "" && prefix !== "/") {
+      try {
+        normalizedPrefix = normalizeStorageKey(prefix);
+      } catch {
+        return { entries: [], commonPrefixes: [] };
+      }
+    }
+    const matchPrefix = normalizedPrefix ? `${normalizedPrefix}/` : "";
+    const entries: StorageEntry[] = [];
+    const commonPrefixes = new Set<string>();
+    for (const [key, entry] of this._store.entries()) {
+      if (
+        matchPrefix &&
+        !key.startsWith(matchPrefix) &&
+        key !== normalizedPrefix
+      )
+        continue;
+      if (matchPrefix === "" || key.startsWith(matchPrefix)) {
+        const rest = matchPrefix ? key.slice(matchPrefix.length) : key;
+        if (delimiter === "/") {
+          const idx = rest.indexOf("/");
+          if (idx >= 0) {
+            commonPrefixes.add(`${matchPrefix}${rest.slice(0, idx + 1)}`);
+            continue;
+          }
+        }
+        entries.push({
+          key,
+          uri: `memory://${key}`,
+          size: entry.data.byteLength,
+          modifiedAt: entry.modifiedAt,
+          ...(entry.contentType ? { contentType: entry.contentType } : {})
+        });
+      }
+    }
+    return {
+      entries: entries.sort((a, b) => a.key.localeCompare(b.key)),
+      commonPrefixes: [...commonPrefixes].sort()
+    };
+  }
+
+  async delete(uri: string): Promise<boolean> {
+    if (!uri.startsWith("memory://")) return false;
+    return this._store.delete(uri.slice("memory://".length));
+  }
+
+  async stat(uri: string): Promise<StorageStat | null> {
+    if (!uri.startsWith("memory://")) return null;
+    const key = uri.slice("memory://".length);
+    const entry = this._store.get(key);
+    if (!entry) return null;
+    return {
+      key,
+      size: entry.data.byteLength,
+      modifiedAt: entry.modifiedAt,
+      ...(entry.contentType ? { contentType: entry.contentType } : {})
+    };
+  }
+}
+
+/**
+ * File-system storage adapter rooted to a single base directory.
+ */
+export class FileStorageAdapter implements StorageAdapter {
+  readonly rootDir: string;
+
+  constructor(rootDir: string) {
+    this.rootDir = resolve(rootDir);
+  }
+
+  private resolvePathFromKey(key: string): string {
+    const normalized = normalizeStorageKey(key);
+    const absolute = resolve(join(this.rootDir, normalized));
+    if (!isWithinRoot(this.rootDir, absolute)) {
+      throw new Error(`Storage key escapes root: ${key}`);
+    }
+    return absolute;
+  }
+
+  private resolvePathFromUri(uri: string): string | null {
+    let absolute: string | null = null;
+
+    if (uri.startsWith("file://")) {
+      try {
+        absolute = resolve(fileURLToPath(uri));
+      } catch {
+        // Invalid file:// URI — treat as unresolvable.
+        return null;
+      }
+    } else if (
+      uri.startsWith("/api/storage/") ||
+      uri.startsWith("api/storage/")
+    ) {
+      const key = uri.replace(/^\/?api\/storage\//, "");
+      try {
+        absolute = this.resolvePathFromKey(key);
+      } catch {
+        // resolvePathFromKey -> normalizeStorageKey throws on an invalid key
+        // (contains "..", leading ".", escapes root). retrieve/exists/delete/
+        // stat document a null/false result for unresolvable URIs, so treat a
+        // bad key as unresolvable instead of letting the throw escape (the
+        // sibling file:// and https:// branches already do this).
+        return null;
+      }
+    } else if (/^https?:\/\//.test(uri)) {
+      try {
+        const parsed = new URL(uri);
+        if (parsed.pathname.startsWith("/api/storage/")) {
+          const key = parsed.pathname.replace(/^\/api\/storage\//, "");
+          absolute = this.resolvePathFromKey(key);
+        }
+      } catch {
+        // Malformed URL — treat as unresolvable.
+        return null;
+      }
+    } else {
+      return null;
+    }
+
+    if (absolute === null || !isWithinRoot(this.rootDir, absolute)) {
+      return null;
+    }
+    return absolute;
+  }
+
+  async store(
+    key: string,
+    data: Uint8Array,
+    _contentType?: string
+  ): Promise<string> {
+    const absolutePath = this.resolvePathFromKey(key);
+    await mkdir(dirname(absolutePath), { recursive: true });
+    await writeFile(absolutePath, data);
+    return pathToFileURL(absolutePath).toString();
+  }
+
+  async retrieve(uri: string): Promise<Uint8Array | null> {
+    const absolutePath = this.resolvePathFromUri(uri);
+    if (!absolutePath) return null;
+    try {
+      return (await readFile(absolutePath)) as Uint8Array;
+    } catch {
+      // File not found or unreadable — caller handles null.
+      return null;
+    }
+  }
+
+  async exists(uri: string): Promise<boolean> {
+    const absolutePath = this.resolvePathFromUri(uri);
+    if (!absolutePath) return false;
+    try {
+      await access(absolutePath);
+      return true;
+    } catch {
+      // File does not exist or is inaccessible.
+      return false;
+    }
+  }
+
+  uriForKey(key: string): string {
+    return pathToFileURL(this.resolvePathFromKey(key)).toString();
+  }
+
+  /**
+   * Minimal listing for the runtime's own FileStorageAdapter — used by tests
+   * and DSL contexts. The websocket server wires the storage package's
+   * fully-featured FileStorageAdapter (with delimiter / fs-safe), which is
+   * the production path.
+   */
+  async list(
+    prefix: string,
+    opts: { delimiter?: string } = {}
+  ): Promise<StorageListResult> {
+    if (!nodeFsP) throw new Error("LocalStorage.list requires Node");
+    const { readdir: rd, stat: st } = nodeFsP;
+    const delimiter = opts.delimiter ?? null;
+    // Root prefixes ("", ".", "/") map to rootDir directly. normalizeStorageKey
+    // rejects "." and "/", so resolving them as keys throws and yields an empty
+    // listing — without this guard the workspace root could never be listed.
+    const isRoot = prefix === "" || prefix === "." || prefix === "/";
+    const baseAbs = (() => {
+      if (isRoot) return this.rootDir;
+      try {
+        return this.resolvePathFromKey(prefix);
+      } catch {
+        return null;
+      }
+    })();
+    if (!baseAbs) return { entries: [], commonPrefixes: [] };
+
+    const entries: StorageEntry[] = [];
+    const commonPrefixes = new Set<string>();
+
+    if (delimiter === "/") {
+      let children: Array<{
+        name: string;
+        isDirectory: () => boolean;
+        isFile: () => boolean;
+      }>;
+      try {
+        children = (await rd(baseAbs, {
+          withFileTypes: true
+        })) as unknown as typeof children;
+      } catch {
+        return { entries: [], commonPrefixes: [] };
+      }
+      const normalizedPrefix = isRoot ? "" : normalizeStorageKey(prefix);
+      for (const child of children) {
+        const childKey = normalizedPrefix
+          ? `${normalizedPrefix}/${child.name}`
+          : child.name;
+        if (child.isDirectory()) {
+          commonPrefixes.add(`${childKey}/`);
+          continue;
+        }
+        if (!child.isFile()) continue;
+        try {
+          const childAbs = join(baseAbs, child.name);
+          const s = await st(childAbs);
+          entries.push({
+            key: childKey,
+            uri: pathToFileURL(childAbs).toString(),
+            size: s.size,
+            modifiedAt: s.mtimeMs
+          });
+        } catch {
+          // skip
+        }
+      }
+      return {
+        entries: entries.sort((a, b) => a.key.localeCompare(b.key)),
+        commonPrefixes: [...commonPrefixes].sort()
+      };
+    }
+
+    // No delimiter: flat listing of everything under the prefix, the shape S3
+    // returns. `resolveAssetBytes` relies on it for the extension-tolerant
+    // lookup that turns `asset://<id>` into `<id>.pdf` on disk.
+    const walk = async (dirAbs: string, keyPrefix: string): Promise<void> => {
+      let children: Array<{
+        name: string;
+        isDirectory: () => boolean;
+        isFile: () => boolean;
+      }>;
+      try {
+        children = (await rd(dirAbs, {
+          withFileTypes: true
+        })) as unknown as typeof children;
+      } catch {
+        return;
+      }
+      for (const child of children) {
+        const childAbs = join(dirAbs, child.name);
+        const childKey = keyPrefix ? `${keyPrefix}/${child.name}` : child.name;
+        if (child.isDirectory()) {
+          await walk(childAbs, childKey);
+          continue;
+        }
+        if (!child.isFile()) continue;
+        try {
+          const s = await st(childAbs);
+          entries.push({
+            key: childKey,
+            uri: pathToFileURL(childAbs).toString(),
+            size: s.size,
+            modifiedAt: s.mtimeMs
+          });
+        } catch {
+          // skip
+        }
+      }
+    };
+    await walk(baseAbs, isRoot ? "" : normalizeStorageKey(prefix));
+    return {
+      entries: entries.sort((a, b) => a.key.localeCompare(b.key)),
+      commonPrefixes: []
+    };
+  }
+
+  async delete(uri: string): Promise<boolean> {
+    const absolutePath = this.resolvePathFromUri(uri);
+    if (!absolutePath) return false;
+    if (!nodeFsP) return false;
+    const { unlink } = nodeFsP;
+    try {
+      await unlink(absolutePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async stat(uri: string): Promise<StorageStat | null> {
+    const absolutePath = this.resolvePathFromUri(uri);
+    if (!absolutePath) return null;
+    if (!nodeFsP) return null;
+    const { stat: st } = nodeFsP;
+    try {
+      const s = await st(absolutePath);
+      if (!s.isFile()) return null;
+      const rel = absolutePath
+        .slice(this.rootDir.length)
+        .replace(/^[\\/]+/, "");
+      return { key: rel, size: s.size, modifiedAt: s.mtimeMs };
+    } catch {
+      return null;
+    }
+  }
+}
+
+export interface S3Client {
+  putObject(input: {
+    bucket: string;
+    key: string;
+    body: Uint8Array;
+    contentType?: string;
+  }): Promise<void>;
+  getObject(input: { bucket: string; key: string }): Promise<Uint8Array | null>;
+  headObject(input: { bucket: string; key: string }): Promise<boolean>;
+}
+
+/**
+ * S3-backed storage adapter with injected client operations.
+ *
+ * This avoids hard-coupling runtime to any specific SDK while providing
+ * predictable URI behavior (`s3://bucket/key`).
+ */
+export class S3StorageAdapter implements StorageAdapter {
+  readonly bucket: string;
+  readonly prefix: string | null;
+  readonly client: S3Client;
+
+  constructor(opts: { bucket: string; client: S3Client; prefix?: string }) {
+    if (!opts.bucket) {
+      throw new Error("S3 bucket is required");
+    }
+    this.bucket = opts.bucket;
+    this.client = opts.client;
+    this.prefix = opts.prefix ? normalizeStorageKey(opts.prefix) : null;
+  }
+
+  private keyForStore(key: string): string {
+    return joinStorageKey(this.prefix ?? undefined, key);
+  }
+
+  private parseUri(uri: string): { bucket: string; key: string } | null {
+    if (!uri.startsWith("s3://")) return null;
+    const withoutScheme = uri.slice("s3://".length);
+    const slashIndex = withoutScheme.indexOf("/");
+    if (slashIndex <= 0 || slashIndex === withoutScheme.length - 1) {
+      return null;
+    }
+    const bucket = withoutScheme.slice(0, slashIndex);
+    const key = withoutScheme.slice(slashIndex + 1);
+    return { bucket, key };
+  }
+
+  async store(
+    key: string,
+    data: Uint8Array,
+    contentType?: string
+  ): Promise<string> {
+    const objectKey = this.keyForStore(key);
+    await this.client.putObject({
+      bucket: this.bucket,
+      key: objectKey,
+      body: data,
+      contentType
+    });
+    return `s3://${this.bucket}/${objectKey}`;
+  }
+
+  async retrieve(uri: string): Promise<Uint8Array | null> {
+    const parsed = this.parseUri(uri);
+    if (!parsed) return null;
+    if (parsed.bucket !== this.bucket) return null;
+    return this.client.getObject(parsed);
+  }
+
+  async exists(uri: string): Promise<boolean> {
+    const parsed = this.parseUri(uri);
+    if (!parsed) return false;
+    if (parsed.bucket !== this.bucket) return false;
+    return this.client.headObject(parsed);
+  }
+
+  uriForKey(key: string): string {
+    return `s3://${this.bucket}/${this.keyForStore(key)}`;
+  }
+
+  /**
+   * The runtime's minimal S3Client interface doesn't expose ListObjectsV2 /
+   * DeleteObject / HeadObject-with-metadata, so list/delete/stat are stubs
+   * here. Production paths use `@nodetool-ai/storage`'s S3StorageAdapter
+   * which calls the full SDK.
+   */
+  async list(
+    _prefix: string,
+    _opts?: { delimiter?: string }
+  ): Promise<StorageListResult> {
+    return { entries: [], commonPrefixes: [] };
+  }
+
+  async delete(_uri: string): Promise<boolean> {
+    return false;
+  }
+
+  async stat(_uri: string): Promise<StorageStat | null> {
+    return null;
+  }
+}
+
+/**
+ * Resolve paths relative to a configured workspace root.
+ *
+ * Supported path forms:
+ * - /workspace/foo/bar.txt
+ * - workspace/foo/bar.txt
+ * - absolute paths (treated as workspace-relative)
+ * - relative paths
+ */
+export function resolveWorkspacePath(
+  workspaceDir: string | null | undefined,
+  path: string
+): string {
+  if (workspaceDir == null) {
+    throw new Error(
+      "No workspace is assigned. File operations require a user-defined workspace. Please configure a workspace before performing disk I/O operations."
+    );
+  }
+  if (workspaceDir === "") {
+    throw new Error("Workspace directory is required");
+  }
+
+  const workspaceRoot = resolve(workspaceDir);
+  const normalizedPath = path.replaceAll("\\", "/");
+
+  let relativePath: string;
+  if (normalizedPath.startsWith("/workspace/")) {
+    relativePath = normalizedPath.slice("/workspace/".length);
+  } else if (normalizedPath.startsWith("workspace/")) {
+    relativePath = normalizedPath.slice("workspace/".length);
+  } else if (
+    isAbsolute(normalizedPath) ||
+    /^[A-Za-z]:\//.test(normalizedPath)
+  ) {
+    if (normalizedPath.startsWith("/")) {
+      relativePath = normalizedPath.slice(1);
+    } else {
+      relativePath = normalizedPath.replace(/^[A-Za-z]:\//, "");
+    }
+  } else {
+    relativePath = normalizedPath;
+  }
+
+  const absPath = resolve(join(workspaceRoot, relativePath));
+  if (!isWithinRoot(workspaceRoot, absPath)) {
+    throw new Error(
+      `Resolved path '${absPath}' is outside the workspace directory.`
+    );
+  }
+  return absPath;
+}
+
+// ---------------------------------------------------------------------------
+// ProcessingContext
+// ---------------------------------------------------------------------------
+
+export class ProcessingContext {
+  readonly jobId: string;
+  readonly workflowId: string | null;
+  /** Chat thread id, when this context is serving a chat-driven agent run. */
+  readonly threadId: string | null;
+  readonly userId: string;
+  readonly workspaceDir: string | null;
+  readonly assetOutputMode: AssetOutputMode;
+  /**
+   * Whether Output nodes should turn transient media into durable Asset rows.
+   * Hosts can disable this for explicitly temporary SDK executions.
+   */
+  readonly persistOutputAssets: boolean;
+  readonly environment: Record<string, string>;
+  /** Bearer token for authenticated calls back to the owning NodeTool API. */
+  readonly authToken: string | null;
+  /**
+   * Run-level cancellation. Set by the kernel to the signal
+   * `WorkflowRunner.cancel()` aborts, so long-running node work (agent loops,
+   * provider calls) can be interrupted rather than merely having its result
+   * discarded. Nodes reached through the streaming `run()` path can also read
+   * the same signal via `inputs.signal`.
+   *
+   * Defaults to a never-aborted signal so contexts built outside a kernel run
+   * (tools, tests, CLI) need not supply one.
+   */
+  signal: AbortSignal = new AbortController().signal;
+
+  /**
+   * Wake-up payload for a trigger-driven run. Set by the kernel
+   * (`WorkflowRunner._runImpl`) from `RunJobRequest.trigger_event` at the
+   * start of each run, alongside {@link signal} — so it must be a mutable
+   * property, not a constructor-only value. The trigger node's actor reads
+   * `triggerEvent?.node_id === this.id` to enter its event-emitting entry
+   * point instead of the normal streaming path. `null` for interactive/
+   * live-test runs.
+   */
+  triggerEvent: { node_id: string; payload: unknown; input_id: string } | null;
+
+  /** Message queue: all emitted processing messages. */
+  private _messages: ProcessingMessage[] = [];
+  /** Whether emit() feeds the pull queue (see constructor option). */
+  private _retainMessageQueue = true;
+  /** Latest node status by node id. */
+  private _nodeStatuses = new Map<string, ProcessingMessage>();
+  /** Latest edge status by edge id. */
+  private _edgeStatuses = new Map<string, ProcessingMessage>();
+
+  /** Message listeners (for real-time streaming). */
+  private _messageListeners = new Set<(msg: ProcessingMessage) => void>();
+
+  /**
+   * One media object can appear in both a live output_update and the
+   * authoritative terminal result. Reuse its materialization within this
+   * execution instead of encoding/storing the same large payload twice.
+   */
+  private readonly _normalizedOutputAssets = new WeakMap<
+    object,
+    Map<AssetOutputMode, Promise<Record<string, unknown>>>
+  >();
+
+  /** Cache adapter. */
+  readonly cache: CacheAdapter;
+
+  /** Storage adapter (optional, for asset handling). */
+  readonly storage: StorageAdapter | null;
+  /**
+   * Workspace storage adapter — the agent's working directory abstracted
+   * behind {@link StorageAdapter}. Tools that read/write/list files use
+   * this adapter so the same code paths work locally (FS-backed) and in
+   * cloud deployments (S3/Supabase-backed).
+   *
+   * If null, file-tool operations should return a clear error rather than
+   * fall back to direct FS access — there is no implicit workspace.
+   */
+  readonly workspaceStorage: StorageAdapter | null;
+  /**
+   * Unified, structured agent memory. The single source of truth for results
+   * shared between agents, tasks, steps and tools. Keys use the namespaces
+   * `step:`, `task:`, `input:`, `shared:` (see {@link memoryKeys}).
+   */
+  readonly memory: AgentMemory = new AgentMemory();
+  /** Variables shared across node execution. */
+  private _variables: Record<string, unknown>;
+  /** Named async channels backing Set/Get Variable (see {@link getChannel}). */
+  private _channels = new Map<string, VariableChannel>();
+  /** Remaining Set Variable writers per channel; channel closes at zero. */
+  private _channelWriters = new Map<string, number>();
+  /** Optional async secret resolver. */
+  private _secretResolver:
+    | ((
+        key: string,
+        userId: string
+      ) => Promise<string | null | undefined> | string | null | undefined)
+    | null = null;
+  /** Every secret value the resolver handed out this run (see {@link ProcessingContext.getResolvedSecretValues}). */
+  private _resolvedSecrets = new Set<string>();
+  /** Fetch function used by HTTP helpers. */
+  private _fetch: (input: string, init?: RequestInit) => Promise<Response>;
+  /** Optional temporary URL resolver for stored assets. */
+  private _tempUrlResolver: ((uri: string) => Promise<string> | string) | null =
+    null;
+  /** Optional async provider resolver by provider id. */
+  private _providerResolver:
+    | ((providerId: string) => Promise<BaseProvider> | BaseProvider)
+    | null = null;
+  /** Optional model-layer adapters used to mirror Python ProcessingContext APIs. */
+  private _modelInterfaces: ProcessingContextModelInterfaces | null = null;
+  /** Provider cache keyed by provider id. */
+  private _providers = new Map<string, BaseProvider>();
+  private _providerPromises = new Map<string, Promise<BaseProvider>>();
+  /** In-context memory URI cache (memory:// key-value objects). */
+  private _memory = new Map<string, unknown>();
+  /** Optional control event dispatcher (set by workflow runner). */
+  private _sendControlEvent:
+    | ((
+        targetNodeId: string,
+        properties: Record<string, unknown>
+      ) => Promise<Record<string, unknown>>)
+    | null = null;
+  /**
+   * Executable tools supplied by the caller that owns this run (set by the
+   * agent workflow runner). Agent nodes merge these into their own tool list
+   * by name, so a node that selects `read_file` gets the caller's live,
+   * fully-wired tool instead of a builtin stub. Tools the caller does not
+   * provide fall back to builtin hydration.
+   */
+  private _injectedTools: InjectedTool[] = [];
+  /** Provider charge (USD) reported by the current node execution (e.g. FAL/KIE generation). */
+  private _providerCost: ProviderCost | null = null;
+  /** Optional executor resolver for sub-workflow execution. */
+  private _resolveExecutor:
+    | ((node: {
+        id: string;
+        type: string;
+        [key: string]: unknown;
+      }) => NodeExecutor)
+    | null = null;
+  /** Optional node type resolver for sub-workflow graph hydration. */
+  private _resolveNodeType:
+    | ((nodeType: string) => Promise<{
+        nodeType: string;
+        propertyTypes?: Record<string, string>;
+        outputs?: Record<string, string>;
+        supportsDynamicInputs?: boolean;
+        descriptorDefaults?: Record<string, unknown>;
+      } | null>)
+    | null = null;
+  /** Total cost tracked for operations executed via this context. */
+  private _totalCost = 0;
+  /** Per-operation cost entries. */
+  private _operationCosts: Array<Record<string, unknown>> = [];
+
+  constructor(opts: {
+    jobId: string;
+    workflowId?: string | null;
+    threadId?: string | null;
+    userId?: string;
+    workspaceDir?: string | null;
+    assetOutputMode?: AssetOutputMode;
+    persistOutputAssets?: boolean;
+    cache?: CacheAdapter;
+    storage?: StorageAdapter | null;
+    workspaceStorage?: StorageAdapter | null;
+    onMessage?: (msg: ProcessingMessage) => void;
+    variables?: Record<string, unknown>;
+    environment?: Record<string, string>;
+    authToken?: string | null;
+    secretResolver?: (
+      key: string,
+      userId: string
+    ) => Promise<string | null | undefined> | string | null | undefined;
+    fetchFn?: (input: string, init?: RequestInit) => Promise<Response>;
+    tempUrlResolver?: (uri: string) => Promise<string> | string;
+    modelInterfaces?: ProcessingContextModelInterfaces;
+    /**
+     * Wake-up payload for a trigger-driven run. Usually left unset at
+     * construction and assigned later by the kernel (see {@link triggerEvent});
+     * accepted here too so tests and single-node harnesses can construct a
+     * context with it directly.
+     */
+    triggerEvent?: {
+      node_id: string;
+      payload: unknown;
+      input_id: string;
+    } | null;
+    /**
+     * Keep emitted messages in the pull queue (popMessage/waitMessage).
+     * Consumers that stream via message listeners instead (the browser/
+     * workflow-runner path) should pass false — with nothing draining the
+     * queue, an infinite realtime stream otherwise retains every chunk
+     * payload for the lifetime of the run. Default true (server paths pull
+     * from the queue).
+     */
+    retainMessageQueue?: boolean;
+  }) {
+    this.jobId = opts.jobId;
+    this.workflowId = opts.workflowId ?? null;
+    this.threadId = opts.threadId ?? null;
+    this.userId = opts.userId ?? "default";
+    this.workspaceDir = opts.workspaceDir ?? null;
+    this.assetOutputMode = opts.assetOutputMode ?? "native";
+    this.persistOutputAssets = opts.persistOutputAssets ?? true;
+    this.cache = opts.cache ?? new MemoryCache();
+    this.storage = opts.storage ?? null;
+    this.workspaceStorage = opts.workspaceStorage ?? null;
+    if (opts.onMessage) {
+      this._messageListeners.add(opts.onMessage);
+    }
+    this._variables = { ...(opts.variables ?? {}) };
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(safeProcessEnv())) {
+      if (typeof v === "string") env[k] = v;
+    }
+    this.environment = { ...env, ...(opts.environment ?? {}) };
+    this.authToken = opts.authToken ?? null;
+    this._secretResolver = opts.secretResolver ?? null;
+    this._fetch =
+      opts.fetchFn ??
+      ((input: string, init?: RequestInit) => fetch(input, init));
+    this._tempUrlResolver = opts.tempUrlResolver ?? null;
+    this._modelInterfaces = opts.modelInterfaces ?? null;
+    this._retainMessageQueue = opts.retainMessageQueue ?? true;
+    this.triggerEvent = opts.triggerEvent ?? null;
+  }
+
+  /**
+   * Derive a child context.
+   *
+   * Defaults to full isolation: fresh agent memory, fresh message queue, the
+   * parent's message listeners inherited. Two opt-ins exist because a child
+   * that must *not* be isolated in one respect should not have to reach around
+   * the copy:
+   *
+   *   - `shareMemory` shares the parent's {@link AgentMemory} instance, so a
+   *     scoped run (own injected tools, own emit fan-out) still reads and
+   *     writes the same step/task results.
+   *   - `inheritMessageListeners: false` drops the parent's listeners, for a
+   *     child that forwards messages itself and would otherwise double-notify.
+   *
+   * The run-level cancellation {@link signal} always carries over: a child that
+   * cannot observe the parent's Stop keeps burning provider calls after the
+   * user cancelled.
+   */
+  copy(opts?: {
+    shareMemory?: boolean;
+    inheritMessageListeners?: boolean;
+  }): ProcessingContext {
+    const next = new ProcessingContext({
+      jobId: this.jobId,
+      workflowId: this.workflowId,
+      threadId: this.threadId,
+      userId: this.userId,
+      workspaceDir: this.workspaceDir,
+      assetOutputMode: this.assetOutputMode,
+      persistOutputAssets: this.persistOutputAssets,
+      cache: this.cache,
+      storage: this.storage,
+      workspaceStorage: this.workspaceStorage,
+      variables: { ...this._variables },
+      environment: { ...this.environment },
+      authToken: this.authToken,
+      fetchFn: this._fetch,
+      secretResolver: this._secretResolver ?? undefined,
+      tempUrlResolver: this._tempUrlResolver ?? undefined,
+      modelInterfaces: this._modelInterfaces ?? undefined,
+      retainMessageQueue: this._retainMessageQueue,
+      triggerEvent: this.triggerEvent
+    });
+    if (opts?.inheritMessageListeners !== false) {
+      for (const listener of this._messageListeners) {
+        next.addMessageListener(listener);
+      }
+    }
+    if (opts?.shareMemory) {
+      (next as { memory: AgentMemory }).memory = this.memory;
+    }
+    next.signal = this.signal;
+    next._providerResolver = this._providerResolver;
+    next._modelInterfaces = this._modelInterfaces;
+    next._sendControlEvent = this._sendControlEvent;
+    next._injectedTools = this._injectedTools;
+    next._providers = new Map(this._providers);
+    next._totalCost = this._totalCost;
+    next._operationCosts = this._operationCosts.map((c) => ({ ...c }));
+    return next;
+  }
+
+  // -----------------------------------------------------------------------
+  // Provider resolution
+  // -----------------------------------------------------------------------
+
+  setProviderResolver(
+    resolver: (providerId: string) => Promise<BaseProvider> | BaseProvider
+  ): void {
+    this._providerResolver = resolver;
+  }
+
+  setModelInterfaces(modelInterfaces: ProcessingContextModelInterfaces): void {
+    this._modelInterfaces = modelInterfaces;
+  }
+
+  /**
+   * Whether a given model interface is wired on this context. Lets callers
+   * decide between the DB-backed path (interface present — let errors
+   * propagate) and an in-memory fallback (interface absent — hermetic CLI
+   * runs, tests) without invoking a method that would throw when unwired.
+   */
+  hasModelInterface(name: keyof ProcessingContextModelInterfaces): boolean {
+    return typeof this._modelInterfaces?.[name] === "function";
+  }
+
+  // -----------------------------------------------------------------------
+  // Control event dispatch
+  // -----------------------------------------------------------------------
+
+  /**
+   * Set the control event dispatcher (called by the workflow runner).
+   * This allows agent nodes to dispatch control events to controlled nodes
+   * and await their results.
+   */
+  setSendControlEvent(
+    fn: (
+      targetNodeId: string,
+      properties: Record<string, unknown>
+    ) => Promise<Record<string, unknown>>
+  ): void {
+    this._sendControlEvent = fn;
+  }
+
+  /**
+   * Dispatch a control event to a target node and await its output.
+   * Returns null if no control event dispatcher is configured.
+   */
+  async sendControlEvent(
+    targetNodeId: string,
+    properties: Record<string, unknown>
+  ): Promise<Record<string, unknown> | null> {
+    if (!this._sendControlEvent) return null;
+    return this._sendControlEvent(targetNodeId, properties);
+  }
+
+  /**
+   * Supply the live tool set for this run. Agent nodes match their selected
+   * tool names against these and prefer them over builtin hydration, so tools
+   * that only the caller can wire (MCP, workspace, skills, security-gated
+   * wrappers) reach nodes the caller did not author.
+   */
+  setInjectedTools(tools: InjectedTool[]): void {
+    this._injectedTools = tools;
+  }
+
+  /** Injected tool matching `name`, or null when the caller supplied none. */
+  getInjectedTool(name: string): InjectedTool | null {
+    return this._injectedTools.find((tool) => tool.name === name) ?? null;
+  }
+
+  // -----------------------------------------------------------------------
+  // Sub-workflow executor resolution
+  // -----------------------------------------------------------------------
+
+  setResolveExecutor(
+    fn: (node: {
+      id: string;
+      type: string;
+      [key: string]: unknown;
+    }) => NodeExecutor
+  ): void {
+    this._resolveExecutor = fn;
+  }
+
+  get resolveExecutor():
+    | ((node: {
+        id: string;
+        type: string;
+        [key: string]: unknown;
+      }) => NodeExecutor)
+    | null {
+    return this._resolveExecutor;
+  }
+
+  setResolveNodeType(
+    fn: (nodeType: string) => Promise<{
+      nodeType: string;
+      propertyTypes?: Record<string, string>;
+      outputs?: Record<string, string>;
+      supportsDynamicInputs?: boolean;
+      descriptorDefaults?: Record<string, unknown>;
+    } | null>
+  ): void {
+    this._resolveNodeType = fn;
+  }
+
+  get resolveNodeType():
+    | ((nodeType: string) => Promise<{
+        nodeType: string;
+        propertyTypes?: Record<string, string>;
+        outputs?: Record<string, string>;
+        supportsDynamicInputs?: boolean;
+        descriptorDefaults?: Record<string, unknown>;
+      } | null>)
+    | null {
+    return this._resolveNodeType;
+  }
+
+  get hasControlEventSupport(): boolean {
+    return this._sendControlEvent !== null;
+  }
+
+  registerProvider(providerId: string, provider: BaseProvider): void {
+    this._providers.set(providerId, provider);
+  }
+
+  async getProvider(providerId: string): Promise<BaseProvider> {
+    if (!providerId || providerId.trim() === "") {
+      throw new Error("providerId is required");
+    }
+
+    const cached = this._providers.get(providerId);
+    if (cached) return cached;
+
+    const pending = this._providerPromises.get(providerId);
+    if (pending) return pending;
+
+    const resolution = (async () => {
+      const resolved = this._providerResolver
+        ? await this._providerResolver(providerId)
+        : await import("./providers/index.js").then(({ getProvider }) =>
+            getProvider(providerId, (key) => this.getSecret(key))
+          );
+      this._providers.set(providerId, resolved);
+      resolved.setMessageEmitter((msg) =>
+        this.postMessage(msg as ProcessingMessage)
+      );
+      return resolved;
+    })();
+    this._providerPromises.set(providerId, resolution);
+    try {
+      return await resolution;
+    } finally {
+      this._providerPromises.delete(providerId);
+    }
+  }
+
+  async get_provider(providerId: string): Promise<BaseProvider> {
+    return this.getProvider(providerId);
+  }
+
+  /**
+   * Check whether a registered provider has all required credentials
+   * resolvable through this context (DB/keychain/env).
+   */
+  async isProviderConfigured(providerId: string): Promise<boolean> {
+    const { isProviderConfigured: check } =
+      await import("./providers/index.js");
+    return check(providerId, (key) => this.getSecret(key));
+  }
+
+  // -----------------------------------------------------------------------
+  // Secrets / Variables API
+  // -----------------------------------------------------------------------
+
+  setSecretResolver(
+    resolver: (
+      key: string,
+      userId: string
+    ) => Promise<string | null | undefined> | string | null | undefined
+  ): void {
+    this._secretResolver = resolver;
+  }
+
+  setTempUrlResolver(
+    resolver: (uri: string) => Promise<string> | string
+  ): void {
+    this._tempUrlResolver = resolver;
+  }
+
+  /**
+   * Resolve a raw storage URI (e.g. `file:///.../storage/<key>`) to a URL the
+   * UI can fetch (e.g. `/api/storage/<key>`). Falls back to returning the URI
+   * unchanged when no resolver is wired (DSL / tests).
+   *
+   * Use this from tools that write binary output via `context.storage.store()`
+   * and want to surface a UI-renderable URL in their result.
+   */
+  async resolveTempUrl(uri: string): Promise<string> {
+    if (!this._tempUrlResolver) return uri;
+    const resolvedUri = await this._tempUrlResolver(uri);
+    if (ProcessingContext.isClientFetchableResolvedAssetUri(uri, resolvedUri)) {
+      return resolvedUri;
+    }
+    throw new Error(
+      `Temp URL resolver returned an unsafe URL for '${uri}': '${resolvedUri}'`
+    );
+  }
+
+  async getSecret(key: string): Promise<string | null> {
+    if (!this._secretResolver) return null;
+    const value = await this._secretResolver(key, this.userId);
+    if (
+      typeof value === "string" &&
+      value.length >= MIN_MASKABLE_SECRET_LENGTH
+    ) {
+      this._resolvedSecrets.add(value);
+    }
+    return value ?? null;
+  }
+
+  /**
+   * Every secret value handed out during this run. The supervisor's escalation
+   * constructor masks against this set — without it, "mask every secret" has no
+   * subject, because the resolver forgets each key as soon as it answers.
+   * Values shorter than `MIN_MASKABLE_SECRET_LENGTH` are not recorded: masking
+   * a two-character value would redact unrelated text everywhere it occurs.
+   */
+  getResolvedSecretValues(): ReadonlySet<string> {
+    return this._resolvedSecrets;
+  }
+
+  async getSecretRequired(key: string): Promise<string> {
+    const value = await this.getSecret(key);
+    if (value === null || value === "") {
+      throw new Error(`Missing required secret: ${key}`);
+    }
+    return value;
+  }
+
+  async get_secret(key: string): Promise<string | null> {
+    return this.getSecret(key);
+  }
+
+  async get_secret_required(key: string): Promise<string> {
+    return this.getSecretRequired(key);
+  }
+
+  get<T = unknown>(key: string, defaultValue?: T): T {
+    if (Object.prototype.hasOwnProperty.call(this._variables, key)) {
+      return this._variables[key] as T;
+    }
+    return defaultValue as T;
+  }
+
+  set(key: string, value: unknown): void {
+    this._variables[key] = value;
+    if (key.startsWith("memory://")) {
+      this._memory.set(key, value);
+    }
+  }
+
+  /** Whether a shared variable with this name has been set. */
+  hasVariable(key: string): boolean {
+    return Object.prototype.hasOwnProperty.call(this._variables, key);
+  }
+
+  /**
+   * Snapshot of all shared variables (name → value). Used by nodes that
+   * resolve variable references against the workflow's shared context — e.g.
+   * the Prompt node merges these into its `{{ name }}` template variables so a
+   * Set Variable node upstream can supply values without an explicit wire.
+   */
+  getVariables(): Record<string, unknown> {
+    return { ...this._variables };
+  }
+
+  // -----------------------------------------------------------------------
+  // Variable channels (Set/Get Variable)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Declare how many Set Variable nodes write to `name`. The runner calls this
+   * before any actor runs so a channel with no writers can close immediately
+   * (readers get end-of-stream instead of hanging).
+   */
+  registerChannelWriters(name: string, count: number): void {
+    this._channelWriters.set(
+      name,
+      (this._channelWriters.get(name) ?? 0) + count
+    );
+  }
+
+  /**
+   * Get (or lazily create) the named variable channel. A channel created for a
+   * name with no registered writers is returned already closed, so a reader
+   * referencing an undefined variable resolves immediately rather than waiting
+   * forever.
+   */
+  getChannel<T = unknown>(name: string): VariableChannel<T> {
+    let channel = this._channels.get(name);
+    if (!channel) {
+      channel = new VariableChannel();
+      this._channels.set(name, channel);
+      if ((this._channelWriters.get(name) ?? 0) === 0) {
+        channel.close();
+      }
+    }
+    return channel as VariableChannel<T>;
+  }
+
+  /**
+   * Record that one Set Variable writer for `name` has finished. When the last
+   * writer finishes, the channel closes — readers drain the buffered values
+   * then end. The runner calls this from each Set Variable actor's completion.
+   */
+  markChannelWriterDone(name: string): void {
+    const remaining = (this._channelWriters.get(name) ?? 0) - 1;
+    this._channelWriters.set(name, Math.max(0, remaining));
+    if (remaining <= 0) {
+      this.getChannel(name).close();
+    }
+  }
+
+  /** Close every channel — a teardown backstop so no reader is left waiting. */
+  closeAllChannels(): void {
+    for (const channel of this._channels.values()) {
+      channel.close();
+    }
+  }
+
+  /** Whether any Set Variable node was registered as writing to `name`. */
+  hasChannelWriters(name: string): boolean {
+    return (this._channelWriters.get(name) ?? 0) > 0;
+  }
+
+  async storeStepResult(key: string, value: unknown): Promise<string> {
+    this._variables[key] = value;
+    return "";
+  }
+
+  async loadStepResult<T = unknown>(key: string, defaultValue?: T): Promise<T> {
+    if (Object.prototype.hasOwnProperty.call(this._variables, key)) {
+      return this._variables[key] as T;
+    }
+    return defaultValue as T;
+  }
+
+  // -----------------------------------------------------------------------
+  // Node result cache helpers
+  // -----------------------------------------------------------------------
+
+  generateNodeCacheKey(nodeType: string, nodeProps: unknown): string {
+    // Deep, deterministic serialization: keys are sorted at EVERY nesting
+    // level. The previous `JSON.stringify(props, sortedTopLevelKeys)` form used
+    // the key array as a recursive replacer allow-list, which silently dropped
+    // every nested value — so nodes differing only in a nested prop collided on
+    // the same key and returned each other's cached (wrong) results.
+    return `${this.userId}:${nodeType}:${stableStringifyDeep(nodeProps ?? null)}`;
+  }
+
+  async getCachedResult(
+    nodeType: string,
+    nodeProps: unknown
+  ): Promise<unknown> {
+    const key = this.generateNodeCacheKey(nodeType, nodeProps);
+    return this.cache.get(key);
+  }
+
+  async cacheResult(
+    nodeType: string,
+    nodeProps: unknown,
+    result: unknown,
+    ttlSeconds = 3600
+  ): Promise<void> {
+    const key = this.generateNodeCacheKey(nodeType, nodeProps);
+    await this.cache.set(key, result, ttlSeconds);
+  }
+
+  // -----------------------------------------------------------------------
+  // Message queue API
+  // -----------------------------------------------------------------------
+
+  addMessageListener(listener: (msg: ProcessingMessage) => void): () => void {
+    this._messageListeners.add(listener);
+    return () => {
+      this._messageListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Emit a processing message.
+   * Appended to the internal queue and forwarded to listeners if set.
+   */
+  emit(msg: ProcessingMessage): void {
+    if (this._retainMessageQueue) {
+      this._messages.push(msg);
+    }
+    this._notifyMessage();
+    if (msg.type === "node_update" && msg.node_id) {
+      this._nodeStatuses.set(msg.node_id, msg);
+    }
+    if (msg.type === "edge_update" && msg.edge_id) {
+      this._edgeStatuses.set(msg.edge_id, msg);
+    }
+    for (const listener of this._messageListeners) {
+      try {
+        listener(msg);
+      } catch {
+        // Listeners are observers and must not interrupt workflow execution.
+      }
+    }
+  }
+
+  postMessage(msg: ProcessingMessage): void {
+    this.emit(msg);
+  }
+
+  post_message(msg: ProcessingMessage): void {
+    this.emit(msg);
+  }
+
+  /** Record actual provider charge for the current node run (attached to completed NodeUpdate). */
+  setProviderCost(
+    provider: string,
+    amount: number,
+    unit: string,
+    details?: Pick<
+      ProviderCost,
+      | "model"
+      | "billing_unit"
+      | "quantity"
+      | "unit_price"
+      | "currency"
+      | "provider_request_id"
+    >
+  ): void {
+    this._providerCost = { provider, amount, unit, ...details };
+    recordInvocationCost(amount);
+  }
+
+  getProviderCost(): ProviderCost | null {
+    return this._providerCost;
+  }
+
+  clearProviderCost(): void {
+    this._providerCost = null;
+  }
+
+  getMessages(): ReadonlyArray<ProcessingMessage> {
+    return this._messages;
+  }
+
+  hasMessages(): boolean {
+    return this._messages.length > 0;
+  }
+
+  popMessage(): ProcessingMessage | undefined {
+    return this._messages.shift();
+  }
+
+  private _messageWaiters: Array<() => void> = [];
+
+  /** Notify that a new message has been pushed. */
+  private _notifyMessage(): void {
+    const waiters = this._messageWaiters;
+    this._messageWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  async popMessageAsync(): Promise<ProcessingMessage> {
+    while (this._messages.length === 0) {
+      await new Promise<void>((r) => {
+        this._messageWaiters.push(r);
+      });
+    }
+    return this._messages.shift() as ProcessingMessage;
+  }
+
+  async pop_message_async(): Promise<ProcessingMessage> {
+    return this.popMessageAsync();
+  }
+
+  getNodeStatuses(): Readonly<Record<string, ProcessingMessage>> {
+    return Object.fromEntries(this._nodeStatuses);
+  }
+
+  getEdgeStatuses(): Readonly<Record<string, ProcessingMessage>> {
+    return Object.fromEntries(this._edgeStatuses);
+  }
+
+  clearMessages(): void {
+    this._messages = [];
+  }
+
+  clear_messages(): void {
+    this.clearMessages();
+  }
+
+  trackOperationCost(
+    operation: string,
+    cost: number,
+    metadata?: Record<string, unknown>
+  ): void {
+    const safeCost = Number.isFinite(cost) ? cost : 0;
+    this._totalCost += safeCost;
+    this._operationCosts.push({
+      operation,
+      cost: safeCost,
+      timestamp: new Date().toISOString(),
+      ...(metadata ?? {})
+    });
+  }
+
+  addToTotalCost(cost: number): void {
+    const safeCost = Number.isFinite(cost) ? cost : 0;
+    this._totalCost += safeCost;
+  }
+
+  resetTotalCost(): void {
+    this._totalCost = 0;
+    this._operationCosts = [];
+  }
+
+  getTotalCost(): number {
+    return this._totalCost;
+  }
+
+  getOperationCosts(): ReadonlyArray<Record<string, unknown>> {
+    return this._operationCosts;
+  }
+
+  // -----------------------------------------------------------------------
+  // Memory cache helpers
+  // -----------------------------------------------------------------------
+
+  clearMemory(pattern?: string): void {
+    if (!pattern) {
+      this._memory.clear();
+      return;
+    }
+    for (const key of this._memory.keys()) {
+      if (key.includes(pattern)) {
+        this._memory.delete(key);
+      }
+    }
+  }
+
+  getMemoryStats(): { total: number; byPrefix: Record<string, number> } {
+    const byPrefix: Record<string, number> = {};
+    for (const key of this._memory.keys()) {
+      const withoutScheme = key.replace(/^memory:\/\//, "");
+      const prefix = withoutScheme.includes("/")
+        ? withoutScheme.split("/")[0]
+        : withoutScheme;
+      byPrefix[prefix] = (byPrefix[prefix] ?? 0) + 1;
+    }
+    return { total: this._memory.size, byPrefix };
+  }
+
+  // -----------------------------------------------------------------------
+  // HTTP helpers
+  // -----------------------------------------------------------------------
+
+  private async httpRequestWithRetries(
+    method: string,
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    const retry = opts.retry ?? {};
+    const maxRetries = retry.maxRetries ?? 3;
+    const backoffMs = retry.backoffMs ?? 500;
+    const retryStatuses = retry.retryStatuses ?? [
+      408, 425, 429, 500, 502, 503, 504
+    ];
+    const headers = {
+      "User-Agent": "nodetool-ts-runtime/0.1",
+      Accept: "*/*",
+      ...(opts.headers ?? {})
+    };
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < maxRetries; attempt += 1) {
+      try {
+        const response = await this._fetch(url, {
+          ...opts,
+          method,
+          headers
+        });
+        if (
+          retryStatuses.includes(response.status) &&
+          attempt < maxRetries - 1
+        ) {
+          const retryAfter = response.headers.get("Retry-After");
+          const retryDelay = retryAfter ? Number(retryAfter) * 1000 : NaN;
+          const delayMs = Number.isFinite(retryDelay)
+            ? Math.min(Math.max(0, retryDelay), 30_000)
+            : backoffMs * 2 ** attempt;
+          // Drain/cancel the unconsumed body before retrying, or under undici
+          // the socket stays checked out of the connection pool (leaked until
+          // GC) and emits a "body not consumed" warning.
+          await response.body?.cancel().catch(() => {});
+          await waitForRetry(Math.max(0, delayMs), opts.signal);
+          continue;
+        }
+        if (!response.ok) {
+          // Non-retryable HTTP error (status not in retryStatuses): fail fast.
+          // Throwing into the generic catch below would treat it like a network
+          // error and retry it, hammering 4xx responses maxRetries times.
+          const nonRetryable = new Error(
+            `HTTP ${response.status} ${response.statusText} for ${method} ${url}`
+          ) as Error & { nonRetryable?: boolean };
+          nonRetryable.nonRetryable = true;
+          await response.body?.cancel().catch(() => {});
+          throw nonRetryable;
+        }
+        return response;
+      } catch (error) {
+        lastError = error;
+        if (opts.signal?.aborted) break;
+        // A non-retryable HTTP error must not loop; only thrown fetch/network
+        // errors and retryable statuses are retried.
+        if ((error as { nonRetryable?: boolean })?.nonRetryable) break;
+        if (attempt >= maxRetries - 1) break;
+        const delayMs = backoffMs * 2 ** attempt;
+        await waitForRetry(delayMs, opts.signal);
+      }
+    }
+
+    throw lastError instanceof Error
+      ? lastError
+      : new Error(`HTTP request failed: ${method} ${url}`);
+  }
+
+  async httpGet(url: string, opts: HttpRequestOptions = {}): Promise<Response> {
+    return this.httpRequestWithRetries("GET", url, opts);
+  }
+
+  async httpPost(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpRequestWithRetries("POST", url, opts);
+  }
+
+  async httpPatch(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpRequestWithRetries("PATCH", url, opts);
+  }
+
+  async httpPut(url: string, opts: HttpRequestOptions = {}): Promise<Response> {
+    return this.httpRequestWithRetries("PUT", url, opts);
+  }
+
+  async httpDelete(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpRequestWithRetries("DELETE", url, opts);
+  }
+
+  async httpHead(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpRequestWithRetries("HEAD", url, opts);
+  }
+
+  async downloadFile(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Uint8Array> {
+    const response = await this.httpGet(url, opts);
+    const arr = await response.arrayBuffer();
+    return new Uint8Array(arr);
+  }
+
+  async downloadText(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<string> {
+    const response = await this.httpGet(url, opts);
+    return response.text();
+  }
+
+  async http_get(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpGet(url, opts);
+  }
+
+  async http_post(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpPost(url, opts);
+  }
+
+  async http_patch(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpPatch(url, opts);
+  }
+
+  async http_put(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpPut(url, opts);
+  }
+
+  async http_delete(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpDelete(url, opts);
+  }
+
+  async http_head(
+    url: string,
+    opts: HttpRequestOptions = {}
+  ): Promise<Response> {
+    return this.httpHead(url, opts);
+  }
+
+  private requireModelInterface<
+    K extends keyof ProcessingContextModelInterfaces
+  >(name: K): NonNullable<ProcessingContextModelInterfaces[K]> {
+    const fn = this._modelInterfaces?.[name];
+    if (!fn) {
+      throw new Error(
+        `ProcessingContext model interface '${String(name)}' is not configured`
+      );
+    }
+    return fn as NonNullable<ProcessingContextModelInterfaces[K]>;
+  }
+
+  async getJob(jobId: string): Promise<unknown | null> {
+    const fn = this.requireModelInterface("getJob");
+    return fn({ userId: this.userId, jobId });
+  }
+
+  async get_job(jobId: string): Promise<unknown | null> {
+    return this.getJob(jobId);
+  }
+
+  async createAsset(args: {
+    name: string;
+    contentType: string;
+    content?: Uint8Array | null;
+    parentId?: string | null;
+    instructions?: Uint8Array | null;
+    nodeId?: string | null;
+  }): Promise<unknown> {
+    const fn = this.requireModelInterface("createAsset");
+    const content = args.content ?? args.instructions;
+    if (!content) {
+      throw new Error("Asset content is required");
+    }
+    recordInvocationAsset();
+    return fn({
+      userId: this.userId,
+      workflowId: this.workflowId,
+      jobId: this.jobId,
+      name: args.name,
+      contentType: args.contentType,
+      content,
+      parentId: args.parentId ?? null,
+      nodeId: args.nodeId ?? null
+    });
+  }
+
+  async create_asset(args: {
+    name: string;
+    contentType: string;
+    content?: Uint8Array | null;
+    parentId?: string | null;
+    instructions?: Uint8Array | null;
+    nodeId?: string | null;
+  }): Promise<unknown> {
+    return this.createAsset(args);
+  }
+
+  /** Load a persisted sketch (image document) owned by the current user. */
+  async getImageDocument(id: string): Promise<unknown | null> {
+    const fn = this.requireModelInterface("getImageDocument");
+    return fn({ userId: this.userId, id });
+  }
+
+  /** Create a persisted sketch (image document) owned by the current user. */
+  async createImageDocument(args: {
+    name: string;
+    projectId?: string;
+    width: number;
+    height: number;
+    document: unknown;
+  }): Promise<unknown> {
+    const fn = this.requireModelInterface("createImageDocument");
+    return fn({ userId: this.userId, ...args });
+  }
+
+  /** Load a persisted timeline sequence owned by the current user. */
+  async getTimelineSequence(id: string): Promise<unknown | null> {
+    const fn = this.requireModelInterface("getTimelineSequence");
+    return fn({ userId: this.userId, id });
+  }
+
+  /** Create a persisted timeline sequence owned by the current user. */
+  async createTimelineSequence(sequence: unknown): Promise<unknown> {
+    const fn = this.requireModelInterface("createTimelineSequence");
+    return fn({ userId: this.userId, sequence });
+  }
+
+  /** Replace a persisted timeline sequence's document. */
+  async updateTimelineSequence(
+    id: string,
+    sequence: unknown
+  ): Promise<unknown | null> {
+    const fn = this.requireModelInterface("updateTimelineSequence");
+    return fn({ userId: this.userId, id, sequence });
+  }
+
+  /** Load a persisted script owned by the current user. */
+  async getScript(id: string): Promise<unknown | null> {
+    const fn = this.requireModelInterface("getScript");
+    return fn({ userId: this.userId, id });
+  }
+
+  /** Create a persisted script owned by the current user. */
+  async createScript(args: {
+    name?: string;
+    projectId?: string;
+    document: unknown;
+  }): Promise<unknown> {
+    const fn = this.requireModelInterface("createScript");
+    return fn({ userId: this.userId, ...args });
+  }
+
+  /** Replace a persisted script's document (and optional timeline link). */
+  async updateScript(
+    id: string,
+    args: {
+      document?: unknown;
+      timelineId?: string | null;
+      baseUpdatedAt?: string;
+    }
+  ): Promise<unknown | null> {
+    const fn = this.requireModelInterface("updateScript");
+    return fn({ userId: this.userId, id, ...args });
+  }
+
+  /**
+   * Recursively list the non-folder assets in `folderId`, or `null` when the id
+   * is not a folder. Backed by the optional `listFolderAssets` model interface;
+   * returns `null` when that interface is not configured.
+   */
+  async listFolderAssets(folderId: string): Promise<FolderAssetEntry[] | null> {
+    const fn = this._modelInterfaces?.listFolderAssets;
+    if (!fn) {
+      return null;
+    }
+    try {
+      return await fn({ userId: this.userId, folderId });
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Look up one owned asset's identity + metadata, or `null` when missing /
+   * not owned. Backed by the optional `getAssetInfo` model interface; returns
+   * `null` when that interface is not configured.
+   */
+  async getAssetInfo(assetId: string): Promise<AssetInfoEntry | null> {
+    const fn = this._modelInterfaces?.getAssetInfo;
+    if (!fn) {
+      return null;
+    }
+    try {
+      return await fn({ userId: this.userId, assetId });
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveSandboxFilePath(path: string): string {
+    if (this.workspaceDir == null || this.workspaceDir === "") {
+      throw new Error("workspaceDir is required for sandbox file operations");
+    }
+    const workspaceRoot = resolve(this.workspaceDir);
+    const normalizedPath = path.replaceAll("\\", "/");
+    if (
+      (isAbsolute(normalizedPath) || /^[A-Za-z]:\//.test(normalizedPath)) &&
+      isWithinRoot(workspaceRoot, resolve(normalizedPath))
+    ) {
+      return resolve(normalizedPath);
+    }
+    return resolveWorkspacePath(this.workspaceDir, path);
+  }
+
+  private static guessMimeFromPath(path: string): string {
+    const ext = extname(path).toLowerCase();
+    const byExt: Record<string, string> = {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".webp": "image/webp",
+      ".gif": "image/gif",
+      ".bmp": "image/bmp",
+      ".svg": "image/svg+xml",
+      ".wav": "audio/wav",
+      ".mp3": "audio/mpeg",
+      ".ogg": "audio/ogg",
+      ".flac": "audio/flac",
+      ".m4a": "audio/mp4",
+      ".mp4": "video/mp4",
+      ".webm": "video/webm",
+      ".mov": "video/quicktime",
+      ".txt": "text/plain",
+      ".md": "text/markdown",
+      ".json": "application/json",
+      ".pdf": "application/pdf",
+      ".csv": "text/csv"
+    };
+    return byExt[ext] ?? "application/octet-stream";
+  }
+
+  private static assetTypeForMime(mime: string): AssetRef["type"] {
+    if (mime.startsWith("image/")) return "image";
+    if (mime.startsWith("audio/")) return "audio";
+    if (mime.startsWith("video/")) return "video";
+    if (mime.startsWith("text/")) return "text";
+    if (mime === "application/pdf") return "document";
+    return "asset";
+  }
+
+  private parseAssetIdCandidates(assetId: string): string[] {
+    const trimmed = assetId.trim();
+    if (!trimmed) {
+      return [];
+    }
+    // Strip a leading reference prefix down to the bare storage key. `asset://`
+    // is the ref scheme; `/api/storage/` (and its slash-less variant) is the
+    // browser-facing storage route that older messages / callers still carry —
+    // treating that whole path as the id probes a bogus key and builds a
+    // double-prefixed, percent-encoded HTTP url that 404s.
+    let raw = trimmed;
+    if (raw.startsWith("asset://")) {
+      raw = raw.slice("asset://".length);
+    } else if (raw.startsWith("/api/storage/")) {
+      raw = raw.slice("/api/storage/".length);
+    } else if (raw.startsWith("api/storage/")) {
+      raw = raw.slice("api/storage/".length);
+    }
+    // Preserve sub-paths: `asset://user-1/image.png` -> primary `user-1/image.png`,
+    // so storage keys with hierarchical layouts still resolve. Drop any
+    // `?query`/`#hash` before deriving the key.
+    const primary = raw.split(/[?#]/)[0];
+    if (!primary) {
+      return [];
+    }
+    // Strip the extension from the LAST path segment only. A `.` in an earlier
+    // segment (`folder.v2/img`) is part of the id, not an extension — slicing
+    // across `/` would yield a wrong-bytes candidate (`folder`).
+    const slash = primary.lastIndexOf("/");
+    const dir = slash >= 0 ? primary.slice(0, slash + 1) : "";
+    const lastSegment = slash >= 0 ? primary.slice(slash + 1) : primary;
+    const withoutExt = dir + lastSegment.replace(/\.[^.]+$/, "");
+    return Array.from(new Set([primary, withoutExt].filter(Boolean)));
+  }
+
+  /**
+   * Resolve an `asset://<id>[.ext]` reference (or bare id / storage URI) to its
+   * raw bytes.
+   *
+   * Server-uploaded assets are stored under the key `<id>.<ext>` and served at
+   * `/api/storage/<id>.<ext>`; runtime-materialized refs live under `assets/`.
+   * Resolution order: the in-process storage adapter (file/s3/supabase/memory),
+   * a prefix listing that tolerates extension mismatches, then an HTTP download
+   * from the server's `/api/storage` route. Returns the bytes plus an `attempts`
+   * trail for callers that build detailed errors; `null` bytes means unresolved.
+   */
+  async resolveAssetBytes(
+    assetId: string
+  ): Promise<{ bytes: Uint8Array | null; attempts: string[] }> {
+    const idCandidates = this.parseAssetIdCandidates(assetId);
+    const trimmed = assetId.trim();
+    const attempts: string[] = [];
+
+    const tryStorageUri = async (uri: string): Promise<Uint8Array | null> => {
+      if (!this.storage) {
+        return null;
+      }
+      try {
+        const retrieved = await this.storage.retrieve(uri);
+        if (retrieved) {
+          return retrieved;
+        }
+        attempts.push(`storage miss: ${uri}`);
+      } catch (error) {
+        attempts.push(
+          `storage error: ${uri} (${error instanceof Error ? error.message : String(error)})`
+        );
+      }
+      return null;
+    };
+
+    // Constant package assets (`package://<pkg>/<path>`) ship with the install
+    // — they have stable URIs and don't live in per-user storage. Resolve from
+    // the bundled package-assets dir when configured, else over HTTP from the
+    // server's package-asset route.
+    const packageRef = parsePackageAssetUri(trimmed);
+    if (packageRef) {
+      const root =
+        this.environment.NODETOOL_PACKAGE_ASSETS_DIR ??
+        safeProcessEnv().NODETOOL_PACKAGE_ASSETS_DIR;
+      if (root) {
+        const segments = `${packageRef.packageName}/${packageRef.path}`
+          .split("/")
+          .filter((s) => s && s !== ".");
+        if (!segments.some((s) => s === "..")) {
+          const filePath = resolve(join(root, ...segments));
+          const within = !relative(resolve(root), filePath).startsWith("..");
+          if (within) {
+            try {
+              const bytes = (await readFile(filePath)) as Uint8Array;
+              attempts.push(`package asset: ${filePath}`);
+              return { bytes, attempts };
+            } catch (error) {
+              attempts.push(
+                `package asset miss: ${filePath} (${error instanceof Error ? error.message : String(error)})`
+              );
+            }
+          }
+        }
+      }
+      const httpPath = packageAssetHttpPath(trimmed);
+      if (httpPath) {
+        let pkgBaseUrl =
+          this.environment.NODETOOL_API_URL ??
+          safeProcessEnv().NODETOOL_API_URL ??
+          "http://localhost:7777";
+        while (pkgBaseUrl.endsWith("/")) {
+          pkgBaseUrl = pkgBaseUrl.slice(0, -1);
+        }
+        const url = `${pkgBaseUrl}${httpPath}`;
+        try {
+          const bytes = await this.downloadFile(url, {
+            retry: { maxRetries: 1, backoffMs: 200 }
+          });
+          attempts.push(`downloaded: ${url}`);
+          return { bytes, attempts };
+        } catch (error) {
+          attempts.push(
+            `package asset http miss: ${url} (${error instanceof Error ? error.message : String(error)})`
+          );
+        }
+      }
+      return { bytes: null, attempts };
+    }
+
+    // A concrete storage URI / http URL handed in directly.
+    if (trimmed.includes("://") && !trimmed.startsWith("asset://")) {
+      const direct = await tryStorageUri(trimmed);
+      if (direct) {
+        return { bytes: direct, attempts };
+      }
+      if (/^https?:\/\//.test(trimmed)) {
+        try {
+          const bytes = await this.downloadFile(trimmed, {
+            retry: { maxRetries: 1, backoffMs: 200 }
+          });
+          attempts.push(`downloaded: ${trimmed}`);
+          return { bytes, attempts };
+        } catch (error) {
+          attempts.push(
+            `http error: ${trimmed} (${error instanceof Error ? error.message : String(error)})`
+          );
+        }
+      }
+    }
+
+    if (this.storage) {
+      // Keys assets are written under: `<userId>/<id>.<ext>` (uploads — the
+      // current owner-prefixed layout), `<id>.<ext>` (the flat legacy layout)
+      // and `assets/<id>` (runtime-materialized refs). The owner-prefixed key
+      // goes first: without it every reference misses all the exact lookups
+      // and falls through to the prefix listing below, which degrades to
+      // `list("")` — a full recursive walk / whole-bucket `listObjectsV2`
+      // across every tenant, on every asset reference.
+      for (const candidate of idCandidates) {
+        const keys = [candidate, `assets/${candidate}`];
+        if (this.userId && !candidate.startsWith(`${this.userId}/`)) {
+          keys.unshift(`${this.userId}/${candidate}`);
+        }
+        for (const key of keys) {
+          const bytes = await tryStorageUri(this.storage.uriForKey(key));
+          if (bytes) {
+            return { bytes, attempts };
+          }
+        }
+      }
+      // Extension-tolerant fallback: locate the stored file whose name starts
+      // with the id, since the URN extension may differ from the one on disk
+      // (e.g. jpeg vs jpg). Only reached when the exact-key lookups all miss.
+      //
+      // Try a narrow prefix first (S3 treats `list(bareId)` as a raw-string
+      // prefix match — bounded to a handful of entries) before falling back to
+      // a root listing for adapters that treat the prefix as a folder path
+      // (memory/supabase). Avoids `list("")` becoming a multi-thousand-object
+      // scan on production S3 backends.
+      const bareId = idCandidates[idCandidates.length - 1];
+      if (bareId) {
+        const tryListing = async (
+          prefix: string
+        ): Promise<Uint8Array | null> => {
+          try {
+            const listing = await this.storage!.list(prefix);
+            const bareEndsWithThumb = bareId.endsWith("_thumb");
+            const match = listing.entries.find((entry) => {
+              const key = entry.key;
+              const lastSegment = key.split("/").pop() ?? "";
+              // A hierarchical id (`user-1/image`) lives in the full key, a flat
+              // id in the last segment — match against whichever form fits.
+              const matches =
+                key.startsWith(`${bareId}.`) ||
+                lastSegment.startsWith(`${bareId}.`);
+              if (!matches) {
+                return false;
+              }
+              // Skip generated thumbnails (`<id>_thumb.<ext>`) — but only ones
+              // that aren't the id we're resolving, so a legit `banner_thumb`
+              // still matches instead of being dropped by a substring test.
+              const isThumb = /_thumb\.[^./]+$/.test(lastSegment);
+              return !isThumb || bareEndsWithThumb;
+            });
+            if (match) {
+              return await tryStorageUri(match.uri);
+            }
+          } catch (error) {
+            attempts.push(
+              `storage list error (${error instanceof Error ? error.message : String(error)})`
+            );
+          }
+          return null;
+        };
+        for (const prefix of [bareId, ""]) {
+          const bytes = await tryListing(prefix);
+          if (bytes) {
+            return { bytes, attempts };
+          }
+        }
+      }
+    }
+
+    // HTTP fallback: the server streams bytes at `/api/storage/<key>`.
+    let baseUrl =
+      this.environment.NODETOOL_API_URL ??
+      safeProcessEnv().NODETOOL_API_URL ??
+      "http://localhost:7777";
+    while (baseUrl.endsWith("/")) {
+      baseUrl = baseUrl.slice(0, -1);
+    }
+    for (const candidate of idCandidates) {
+      if (!candidate.includes(".")) {
+        continue; // the storage route is keyed by filename (`<id>.<ext>`)
+      }
+      const url = `${baseUrl}/api/storage/${encodeURIComponent(candidate)}`;
+      try {
+        const bytes = await this.downloadFile(url, {
+          retry: { maxRetries: 1, backoffMs: 200 }
+        });
+        attempts.push(`downloaded: ${url}`);
+        return { bytes, attempts };
+      } catch (error) {
+        attempts.push(
+          `http miss: ${url} (${error instanceof Error ? error.message : String(error)})`
+        );
+      }
+    }
+
+    // Last resort: ask the asset API for metadata and follow its `get_url`.
+    // Handles bare ids (no extension, so the storage route can't be addressed
+    // directly) and backends that expose a single-asset metadata endpoint.
+    for (const candidate of idCandidates) {
+      try {
+        const metaResponse = await this.httpGet(
+          `${baseUrl}/api/assets/${encodeURIComponent(candidate)}`
+        );
+        const metadata = (await metaResponse.json()) as Record<string, unknown>;
+        const getUrl = metadata.get_url;
+        if (typeof getUrl === "string" && getUrl) {
+          const downloadUrl = getUrl.startsWith("/")
+            ? `${baseUrl}${getUrl}`
+            : getUrl;
+          const bytes = await this.downloadFile(downloadUrl, {
+            retry: { maxRetries: 1, backoffMs: 200 }
+          });
+          attempts.push(`downloaded: ${downloadUrl}`);
+          return { bytes, attempts };
+        }
+        const uri = metadata.uri;
+        if (typeof uri === "string") {
+          const bytes = await tryStorageUri(uri);
+          if (bytes) {
+            return { bytes, attempts };
+          }
+        }
+      } catch (error) {
+        attempts.push(
+          `api lookup error for ${candidate}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+
+    return { bytes: null, attempts };
+  }
+
+  async assetToSandbox(assetId: string, path: string): Promise<string> {
+    const outputPath = this.resolveSandboxFilePath(path);
+    const { bytes, attempts } = await this.resolveAssetBytes(assetId);
+
+    if (!bytes) {
+      const details =
+        attempts.length > 0 ? ` Attempts: ${attempts.join("; ")}` : "";
+      throw new Error(
+        `Unable to resolve asset '${assetId}' to sandbox bytes.${details}`
+      );
+    }
+
+    await mkdir(dirname(outputPath), { recursive: true });
+    await writeFile(outputPath, bytes);
+    return outputPath;
+  }
+
+  async asset_to_sandbox(asset_id: string, path: string): Promise<string> {
+    return this.assetToSandbox(asset_id, path);
+  }
+
+  async sandboxToAsset(path: string): Promise<AssetRef> {
+    const filePath = this.resolveSandboxFilePath(path);
+    const bytes = (await readFile(filePath)) as Uint8Array;
+    const contentType = ProcessingContext.guessMimeFromPath(filePath);
+    const created = (await this.createAsset({
+      name: basename(filePath),
+      contentType,
+      content: bytes
+    })) as Record<string, unknown>;
+
+    const type = ProcessingContext.assetTypeForMime(contentType);
+    const assetId = typeof created.id === "string" ? created.id : null;
+    const uri =
+      assetId !== null
+        ? `asset://${assetId}`
+        : typeof created.uri === "string"
+          ? created.uri
+          : pathToFileURL(filePath).toString();
+
+    return {
+      type,
+      uri,
+      asset_id: assetId
+    };
+  }
+
+  async sandbox_to_asset(path: string): Promise<AssetRef> {
+    return this.sandboxToAsset(path);
+  }
+
+  async createMessage(req: MessageCreateRequestLike): Promise<unknown> {
+    if (!req.thread_id) {
+      throw new Error("Thread ID is required");
+    }
+    const fn = this.requireModelInterface("createMessage");
+    return fn({ userId: this.userId, req });
+  }
+
+  async create_message(req: MessageCreateRequestLike): Promise<unknown> {
+    return this.createMessage(req);
+  }
+
+  async getThreadMessages(
+    threadId: string,
+    limit = 10,
+    startKey: string | null = null,
+    reverse = false
+  ): Promise<ThreadMessagesResultLike> {
+    const fn = this.requireModelInterface("getMessages");
+    return fn({
+      userId: this.userId,
+      threadId,
+      limit,
+      startKey,
+      reverse
+    });
+  }
+
+  async get_messages(
+    thread_id: string,
+    limit = 10,
+    start_key: string | null = null,
+    reverse = false
+  ): Promise<ThreadMessagesResultLike> {
+    return this.getThreadMessages(thread_id, limit, start_key, reverse);
+  }
+
+  async assetsToDataUri(value: unknown): Promise<unknown> {
+    return this.normalizeOutputValue(value, "data_uri");
+  }
+
+  async assetsToStorageUrl(value: unknown): Promise<unknown> {
+    return this.normalizeOutputValue(value, "storage_url");
+  }
+
+  async assetsToWorkspaceFiles(value: unknown): Promise<unknown> {
+    return this.normalizeOutputValue(value, "workspace");
+  }
+
+  async uploadAssetsToTemp(value: unknown): Promise<unknown> {
+    return this.normalizeOutputValue(value, "temp_url");
+  }
+
+  // -----------------------------------------------------------------------
+  // Provider prediction pipeline
+  // -----------------------------------------------------------------------
+
+  private emitPrediction(
+    status: PredictionStatus,
+    req: ProviderPredictionRequest,
+    id: string,
+    data?: unknown,
+    error?: string,
+    startedAt?: number
+  ): void {
+    this.emit({
+      type: "prediction",
+      id,
+      user_id: this.userId,
+      node_id: req.nodeId ?? "",
+      workflow_id: req.workflowId ?? this.workflowId ?? null,
+      provider: req.provider,
+      model: req.model,
+      status,
+      params: req.params ?? {},
+      data: data ?? null,
+      error: error ?? null,
+      duration: startedAt ? Date.now() - startedAt : null
+    });
+  }
+
+  /**
+   * Retrieve raw bytes for a media URI referenced in message content. Handles
+   * the `asset://<id>` reference scheme (via {@link resolveAssetBytes}) as well
+   * as opaque storage URIs (memory/file/s3) via the storage adapter.
+   */
+  private async retrieveMediaBytes(uri: string): Promise<Uint8Array | null> {
+    // `/api/storage/<key>` (and its slash-less `api/storage/<key>` form) is the
+    // browser-facing route, not a storage-adapter uri — the InMemory/S3 adapters
+    // only accept `memory://`/`s3://`, so route it through resolveAssetBytes
+    // (which parses the key) like `asset://`.
+    if (
+      uri.startsWith("asset://") ||
+      uri.startsWith("/api/storage/") ||
+      uri.startsWith("api/storage/")
+    ) {
+      const { bytes } = await this.resolveAssetBytes(uri);
+      return bytes;
+    }
+    return this.storage ? await this.storage.retrieve(uri) : null;
+  }
+
+  /**
+   * Resolve non-data, non-http media URIs in message content to data URIs so
+   * providers can consume them directly. Covers `/api/storage/` and other
+   * storage URIs as well as the `asset://<id>` reference scheme (assets
+   * mentioned inline in a prompt). Text parts that contain `asset://<id>.<ext>`
+   * image / audio tokens are first split into proper blocks via
+   * {@link expandAssetReferences} so the same provider path handles chat
+   * surfaces (where the user typed / dropped a reference) and workflow node
+   * surfaces (where the agent node builds the message). Text document mentions
+   * (`asset://doc.md`, `.txt`, `.csv`, …) are inlined as their decoded
+   * contents in place of the token.
+   */
+  async resolveMessageMediaUris(messages: Message[]): Promise<Message[]> {
+    const IMAGE_MIME: Record<string, string> = {
+      png: "image/png",
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      gif: "image/gif",
+      webp: "image/webp"
+    };
+    const AUDIO_MIME: Record<string, string> = {
+      mp3: "audio/mpeg",
+      wav: "audio/wav",
+      ogg: "audio/ogg",
+      m4a: "audio/mp4",
+      flac: "audio/flac"
+    };
+
+    // Strict, anchored sanitizer for the URIs that may flow into the asset /
+    // storage retrieval path. Two schemes are recognized — `asset://<id>.<ext>`
+    // (the user-mentioned-asset scheme) and the legacy `/api/storage/<key>`
+    // browser-facing path that older DB messages still carry. The character
+    // class matches the one in `prompt-asset-refs`' parser regex, so a
+    // hand-typed token and an inline expansion behave identically. Everything
+    // else (data URIs, external http(s), arbitrary or attacker-supplied
+    // strings) is rejected and the part passes through untouched — so the
+    // storage adapter never sees an unrecognized URI shape.
+    const RESOLVABLE_URI_RE =
+      /^(?:asset:\/\/|\/api\/storage\/)[A-Za-z0-9._~\-/]+$/;
+    const isResolvableUri = (uri: string): boolean =>
+      RESOLVABLE_URI_RE.test(uri);
+
+    const resolvePart = async (
+      part: MessageContent
+    ): Promise<MessageContent[]> => {
+      if (
+        part.type === "image_url" &&
+        part.image.uri &&
+        isResolvableUri(part.image.uri)
+      ) {
+        const bytes = await this.retrieveMediaBytes(part.image.uri);
+        if (bytes) {
+          const ext = part.image.uri.split(".").pop()?.toLowerCase() ?? "png";
+          const mimeType =
+            IMAGE_MIME[ext] ?? part.image.mimeType ?? "image/png";
+          const b64 = Buffer.from(bytes).toString("base64");
+          return [
+            {
+              type: "image_url",
+              image: { uri: `data:${mimeType};base64,${b64}`, mimeType }
+            }
+          ];
+        }
+        return [part];
+      }
+      if (
+        part.type === "audio" &&
+        part.audio.uri &&
+        isResolvableUri(part.audio.uri)
+      ) {
+        const bytes = await this.retrieveMediaBytes(part.audio.uri);
+        if (bytes) {
+          const ext = part.audio.uri.split(".").pop()?.toLowerCase() ?? "mp3";
+          const mimeType =
+            AUDIO_MIME[ext] ?? part.audio.mimeType ?? "audio/mpeg";
+          const b64 = Buffer.from(bytes).toString("base64");
+          return [
+            {
+              type: "audio",
+              audio: { uri: `data:${mimeType};base64,${b64}`, mimeType }
+            }
+          ];
+        }
+        return [part];
+      }
+      if (part.type === "text" && part.text.includes("asset://")) {
+        // First split out image / audio mentions into their own blocks; what
+        // stays as text is then run through the document inliner so any
+        // .md/.txt/.csv mentions become their decoded contents. The image and
+        // audio blocks fall through to the URI-resolution branches above on a
+        // second pass so the provider receives data URIs.
+        const expanded = expandAssetReferences(part.text);
+        const out: MessageContent[] = [];
+        for (const sub of expanded) {
+          if (sub.type === "text") {
+            const inlined = await inlineTextAssetRefs(sub.text, this);
+            if (inlined) out.push({ type: "text", text: inlined });
+          } else {
+            const resolved = await resolvePart(sub);
+            out.push(...resolved);
+          }
+        }
+        return out;
+      }
+      return [part];
+    };
+
+    const resolved: Message[] = [];
+    for (const msg of messages) {
+      if (!Array.isArray(msg.content)) {
+        resolved.push(msg);
+        continue;
+      }
+      const parts: MessageContent[] = [];
+      for (const part of msg.content) {
+        parts.push(...(await resolvePart(part)));
+      }
+      resolved.push({ ...msg, content: parts });
+    }
+    return resolved;
+  }
+
+  private async dispatchCapability(
+    provider: BaseProvider,
+    req: ProviderPredictionRequest
+  ): Promise<unknown> {
+    const params = req.params ?? {};
+    switch (req.capability) {
+      case "generate_message":
+        return provider.generateMessageTraced({
+          messages: await this.resolveMessageMediaUris(
+            (params.messages as Message[]) ?? []
+          ),
+          model: req.model,
+          tools: params.tools as Parameters<
+            BaseProvider["generateMessage"]
+          >[0]["tools"],
+          toolChoice: params.tool_choice as string | undefined,
+          maxTokens: params.max_tokens as number | undefined,
+          temperature: params.temperature as number | undefined,
+          topP: params.top_p as number | undefined,
+          presencePenalty: params.presence_penalty as number | undefined,
+          frequencyPenalty: params.frequency_penalty as number | undefined
+        });
+      case "text_to_image":
+        return provider.textToImage({
+          prompt: String(params.prompt ?? ""),
+          entities: await coerceEntityList(params, this),
+          model: { id: req.model, name: req.model, provider: req.provider },
+          width: params.width as number | undefined,
+          height: params.height as number | undefined,
+          aspectRatio: params.aspect_ratio as string | undefined,
+          resolution: params.resolution as string | undefined,
+          negativePrompt: params.negative_prompt as string | undefined,
+          quality: params.quality as string | undefined
+        });
+      case "image_to_image":
+        return provider.imageToImage(coerceImageList(params), {
+          prompt: String(params.prompt ?? ""),
+          entities: await coerceEntityList(params, this),
+          model: { id: req.model, name: req.model, provider: req.provider },
+          negativePrompt: params.negative_prompt as string | undefined,
+          targetWidth: params.target_width as number | undefined,
+          targetHeight: params.target_height as number | undefined,
+          aspectRatio: params.aspect_ratio as string | undefined,
+          resolution: params.resolution as string | undefined,
+          strength: params.strength as number | undefined,
+          quality: params.quality as string | undefined
+        });
+      case "inpainting":
+        return provider.inpaint(coerceImageList(params), {
+          prompt: String(params.prompt ?? ""),
+          entities: await coerceEntityList(params, this),
+          model: { id: req.model, name: req.model, provider: req.provider },
+          mask: params.mask as Uint8Array,
+          negativePrompt: params.negative_prompt as string | undefined,
+          targetWidth: params.target_width as number | undefined,
+          targetHeight: params.target_height as number | undefined,
+          aspectRatio: params.aspect_ratio as string | undefined,
+          resolution: params.resolution as string | undefined,
+          strength: params.strength as number | undefined,
+          quality: params.quality as string | undefined
+        });
+      case "text_to_video":
+        return provider.textToVideo({
+          prompt: String(params.prompt ?? ""),
+          entities: await coerceEntityList(params, this),
+          model: { id: req.model, name: req.model, provider: req.provider },
+          negativePrompt: params.negative_prompt as string | undefined,
+          numFrames: params.num_frames as number | undefined,
+          durationSeconds: params.duration_seconds as number | undefined,
+          aspectRatio: params.aspect_ratio as string | undefined,
+          resolution: params.resolution as string | undefined,
+          timeoutSeconds: params.timeout_seconds as number | undefined
+        });
+      case "image_to_video":
+        return provider.imageToVideo(coerceImageList(params), {
+          prompt: params.prompt as string | undefined,
+          entities: await coerceEntityList(params, this),
+          model: { id: req.model, name: req.model, provider: req.provider },
+          negativePrompt: params.negative_prompt as string | undefined,
+          numFrames: params.num_frames as number | undefined,
+          durationSeconds: params.duration_seconds as number | undefined,
+          aspectRatio: params.aspect_ratio as string | undefined,
+          resolution: params.resolution as string | undefined,
+          timeoutSeconds: params.timeout_seconds as number | undefined
+        });
+      case "upscale_image":
+        return provider.upscaleImage(params.image as Uint8Array, {
+          model: { id: req.model, name: req.model, provider: req.provider },
+          scale: params.scale as number | undefined,
+          prompt: params.prompt as string | undefined,
+          creativity: params.creativity as number | undefined,
+          seed: params.seed as number | undefined
+        });
+      case "remove_background":
+        return provider.removeBackground(params.image as Uint8Array, {
+          model: { id: req.model, name: req.model, provider: req.provider }
+        });
+      case "relight_image":
+        return provider.relightImage(params.image as Uint8Array, {
+          model: { id: req.model, name: req.model, provider: req.provider },
+          prompt: params.prompt as string | undefined,
+          negativePrompt: params.negative_prompt as string | undefined,
+          seed: params.seed as number | undefined
+        });
+      case "vectorize_image":
+        return provider.vectorizeImage(params.image as Uint8Array, {
+          model: { id: req.model, name: req.model, provider: req.provider }
+        });
+      case "video_to_video":
+        return provider.videoToVideo(params.video as Uint8Array, {
+          model: { id: req.model, name: req.model, provider: req.provider },
+          prompt: params.prompt as string | undefined,
+          entities: await coerceEntityList(params, this),
+          negativePrompt: params.negative_prompt as string | undefined,
+          strength: params.strength as number | undefined,
+          durationSeconds: params.duration_seconds as number | undefined,
+          resolution: params.resolution as string | undefined,
+          seed: params.seed as number | undefined
+        });
+      case "lip_sync":
+        return provider.lipSync(params.video as Uint8Array, {
+          model: { id: req.model, name: req.model, provider: req.provider },
+          audio: params.audio as Uint8Array,
+          seed: params.seed as number | undefined
+        });
+      case "text_to_music":
+        return provider.textToMusic({
+          prompt: String(params.prompt ?? ""),
+          model: { id: req.model, name: req.model, provider: req.provider },
+          lyrics: params.lyrics as string | undefined,
+          durationSeconds: params.duration_seconds as number | undefined,
+          seed: params.seed as number | undefined,
+          audioFormat: params.audioFormat as string | undefined,
+          timeoutSeconds: params.timeout_seconds as number | undefined
+        });
+      case "automatic_speech_recognition":
+        return provider.automaticSpeechRecognition({
+          audio: params.audio as Uint8Array,
+          model: req.model,
+          language: params.language as string | undefined,
+          prompt: params.prompt as string | undefined,
+          temperature: params.temperature as number | undefined
+        });
+      case "generate_embedding":
+        return provider.generateEmbedding({
+          text: (params.text as string | string[]) ?? "",
+          model: req.model,
+          dimensions: params.dimensions as number | undefined
+        });
+      default:
+        throw new Error(
+          `Capability '${req.capability}' requires streaming API`
+        );
+    }
+  }
+
+  async runProviderPrediction(
+    req: ProviderPredictionRequest
+  ): Promise<unknown> {
+    const id = randomUUID();
+    const startedAt = Date.now();
+    this.emitPrediction("running", req, id, null, undefined, startedAt);
+    try {
+      const provider = await this.getProvider(req.provider);
+      const output = await this.dispatchCapability(provider, req);
+      this.emitPrediction("completed", req, id, output, undefined, startedAt);
+      return output;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emitPrediction("failed", req, id, null, message, startedAt);
+      throw error;
+    }
+  }
+
+  /**
+   * Whether a provider streams raw PCM for text-to-speech. When false, the
+   * caller should use {@link textToSpeechEncoded} (the provider returns an
+   * encoded audio file rather than samples).
+   */
+  async providerSupportsStreamingTTS(providerId: string): Promise<boolean> {
+    const provider = await this.getProvider(providerId);
+    return provider.supportsStreamingTextToSpeech();
+  }
+
+  /**
+   * Generate speech as an encoded audio file (mp3/wav/…). Returns null when the
+   * provider doesn't implement the encoded path. Used for providers (FAL, KIE,
+   * ElevenLabs) that return audio files instead of streaming PCM.
+   */
+  async textToSpeechEncoded(
+    req: ProviderPredictionRequest
+  ): Promise<EncodedAudioResult | null> {
+    const id = randomUUID();
+    const startedAt = Date.now();
+    this.emitPrediction("running", req, id, null, undefined, startedAt);
+    try {
+      const provider = await this.getProvider(req.provider);
+      const params = req.params ?? {};
+      const result = await provider.textToSpeechEncoded({
+        text: String(params.text ?? ""),
+        model: req.model,
+        voice: params.voice as string | undefined,
+        speed: params.speed as number | undefined,
+        audioFormat: params.audioFormat as string | undefined
+      });
+      this.emitPrediction("completed", req, id, null, undefined, startedAt);
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emitPrediction("failed", req, id, null, message, startedAt);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate music as an encoded audio file (mp3/wav/flac). Mirrors
+   * {@link textToSpeechEncoded} for the `text_to_music` capability — the
+   * provider returns a fully-encoded audio file rather than streaming PCM.
+   */
+  async textToMusic(
+    req: ProviderPredictionRequest
+  ): Promise<EncodedAudioResult> {
+    const id = randomUUID();
+    const startedAt = Date.now();
+    this.emitPrediction("running", req, id, null, undefined, startedAt);
+    try {
+      const provider = await this.getProvider(req.provider);
+      const params = req.params ?? {};
+      const result = await provider.textToMusic({
+        prompt: String(params.prompt ?? ""),
+        model: { id: req.model, name: req.model, provider: req.provider },
+        lyrics: params.lyrics as string | undefined,
+        durationSeconds: params.duration_seconds as number | undefined,
+        seed: params.seed as number | undefined,
+        audioFormat: params.audioFormat as string | undefined,
+        timeoutSeconds: params.timeout_seconds as number | undefined
+      });
+      this.emitPrediction("completed", req, id, null, undefined, startedAt);
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emitPrediction("failed", req, id, null, message, startedAt);
+      throw error;
+    }
+  }
+
+  async *streamProviderPrediction(
+    req: ProviderPredictionRequest
+  ): AsyncGenerator<ProviderStreamItem | unknown> {
+    const id = randomUUID();
+    const startedAt = Date.now();
+    this.emitPrediction("running", req, id, null, undefined, startedAt);
+    let terminalStatusEmitted = false;
+    try {
+      const provider = await this.getProvider(req.provider);
+      const params = req.params ?? {};
+
+      if (req.capability === "generate_messages") {
+        for await (const item of provider.generateMessagesTraced({
+          messages: await this.resolveMessageMediaUris(
+            (params.messages as Message[]) ?? []
+          ),
+          model: req.model,
+          tools: params.tools as Parameters<
+            BaseProvider["generateMessages"]
+          >[0]["tools"],
+          maxTokens: params.max_tokens as number | undefined,
+          temperature: params.temperature as number | undefined,
+          topP: params.top_p as number | undefined,
+          presencePenalty: params.presence_penalty as number | undefined,
+          frequencyPenalty: params.frequency_penalty as number | undefined,
+          audio: params.audio as Record<string, unknown> | undefined,
+          threadId: params.thread_id as string | undefined
+        })) {
+          yield item;
+        }
+      } else if (req.capability === "text_to_speech") {
+        for await (const item of provider.textToSpeech({
+          text: String(params.text ?? ""),
+          model: req.model,
+          voice: params.voice as string | undefined,
+          speed: params.speed as number | undefined
+        })) {
+          yield item;
+        }
+      } else {
+        throw new Error(`Capability '${req.capability}' is not streamable`);
+      }
+
+      this.emitPrediction("completed", req, id, null, undefined, startedAt);
+      terminalStatusEmitted = true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.emitPrediction("failed", req, id, null, message, startedAt);
+      terminalStatusEmitted = true;
+      throw error;
+    } finally {
+      if (!terminalStatusEmitted) {
+        this.emitPrediction("completed", req, id, null, undefined, startedAt);
+      }
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Output normalization
+  // -----------------------------------------------------------------------
+
+  /**
+   * Sanitize memory URIs from output values before sending to client.
+   * Replaces internal memory:// URIs with safe placeholders.
+   *
+   * Port of sanitize_memory_uris_for_client() from types.py.
+   */
+  static sanitizeForClient(value: unknown): unknown {
+    if (value === null || value === undefined) return value;
+    const binary = ProcessingContext.toClientBytes(value);
+    if (binary) return binary;
+    if (Array.isArray(value)) {
+      return value.map((v) => ProcessingContext.sanitizeForClient(v));
+    }
+    if (typeof value !== "object") return value;
+
+    const obj = value as Record<string, unknown>;
+    const uri = obj.uri;
+    const isAssetLike = "type" in obj && typeof uri === "string";
+
+    if (isAssetLike && uri.startsWith("memory://")) {
+      const sanitized: Record<string, unknown> = { ...obj };
+      if (sanitized.data !== undefined && sanitized.data !== null) {
+        sanitized.uri = "";
+      } else if (sanitized.asset_id) {
+        sanitized.uri = `asset://${String(sanitized.asset_id)}`;
+      } else {
+        sanitized.uri = "";
+      }
+
+      const result: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(sanitized)) {
+        if (k === "uri" || k === "data" || k === "asset_id") {
+          result[k] = v;
+        } else {
+          result[k] = ProcessingContext.sanitizeForClient(v);
+        }
+      }
+      return result;
+    }
+
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      result[k] = ProcessingContext.sanitizeForClient(v);
+    }
+    return result;
+  }
+
+  private static toClientBytes(value: unknown): Record<string, unknown> | null {
+    if (value instanceof Uint8Array) {
+      return { type: "bytes", length: value.length };
+    }
+    if (value instanceof ArrayBuffer) {
+      return { type: "bytes", length: value.byteLength };
+    }
+    return null;
+  }
+
+  /**
+   * Resolve a file path against the configured workspace root.
+   */
+  resolveWorkspacePath(path: string): string {
+    return resolveWorkspacePath(this.workspaceDir, path);
+  }
+
+  private static isAssetLike(value: unknown): value is Record<string, unknown> {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return false;
+    const v = value as Record<string, unknown>;
+    return "type" in v && ("uri" in v || "data" in v || "asset_id" in v);
+  }
+
+  private static guessAssetMime(asset: Record<string, unknown>): string {
+    const explicit = asset.mime_type ?? asset.content_type;
+    if (typeof explicit === "string" && explicit) return explicit;
+
+    const type = String(asset.type ?? "").toLowerCase();
+    if (type.includes("image")) return "image/png";
+    if (type.includes("audio")) return "audio/wav";
+    if (type.includes("video")) return "video/mp4";
+    if (type.includes("text")) return "text/plain";
+    if (type.includes("model3d")) return "model/gltf-binary";
+    return "application/octet-stream";
+  }
+
+  private static extForMime(mime: string): string {
+    const map: Record<string, string> = {
+      "image/png": "png",
+      "image/jpeg": "jpg",
+      "image/webp": "webp",
+      "audio/wav": "wav",
+      "audio/mpeg": "mp3",
+      "video/mp4": "mp4",
+      "text/plain": "txt",
+      "application/json": "json",
+      "model/gltf-binary": "glb"
+    };
+    return map[mime] ?? "bin";
+  }
+
+  private static decodeAssetData(data: unknown): Uint8Array | null {
+    if (data === null || data === undefined) return null;
+    if (data instanceof Uint8Array) return data;
+    if (Array.isArray(data) && data.every((v) => Number.isInteger(v))) {
+      return new Uint8Array(data as number[]);
+    }
+    if (typeof data === "string") {
+      return Uint8Array.from(Buffer.from(data, "base64"));
+    }
+    return null;
+  }
+
+  private static isClientFetchableResolvedAssetUri(
+    sourceUri: string,
+    resolvedUri: string
+  ): boolean {
+    return (
+      resolvedUri.startsWith("/api/storage/") ||
+      resolvedUri.startsWith("api/storage/") ||
+      (/^(memory|file|s3|supabase):\/\//.test(sourceUri) &&
+        resolvedUri !== sourceUri &&
+        /^https?:\/\//.test(resolvedUri))
+    );
+  }
+
+  private async getAssetBytes(
+    asset: Record<string, unknown>
+  ): Promise<Uint8Array | null> {
+    const decoded = ProcessingContext.decodeAssetData(asset.data);
+    if (decoded) return decoded;
+
+    const uri = asset.uri;
+    if (typeof uri === "string" && this.storage) {
+      const stored = await this.storage.retrieve(uri);
+      if (stored) return stored;
+    }
+    if (
+      typeof uri === "string" &&
+      (uri.startsWith("asset://") ||
+        uri.startsWith("/api/storage/") ||
+        uri.startsWith("api/storage/"))
+    ) {
+      const { bytes } = await this.resolveAssetBytes(uri);
+      if (bytes) return bytes;
+    }
+    // No usable uri but an asset_id is present: resolve directly by id.
+    // resolveAssetBytes has its own HTTP fallback, so this works even without a
+    // storage adapter (which the early `!this.storage` return used to preclude).
+    const assetId = asset.asset_id;
+    if (typeof assetId === "string" && assetId) {
+      const { bytes } = await this.resolveAssetBytes(`asset://${assetId}`);
+      if (bytes) return bytes;
+    }
+    return null;
+  }
+
+  private async materializeAsset(
+    rawAsset: Record<string, unknown>,
+    mode: AssetOutputMode
+  ): Promise<Record<string, unknown>> {
+    if (mode === "native" || mode === "raw") {
+      // In-process consumers handle the raw asset as-is (incl. raw RGBA).
+      return rawAsset;
+    }
+
+    // A fetchable reference with no inline bytes is already materialized for
+    // an HTTP client. Reuse it instead of downloading the asset into this
+    // process and writing an identical second temp object. This is especially
+    // important for SDK pass-through workflows: their large input was already
+    // uploaded once and should not be copied again on output.
+    if (mode === "temp_url") {
+      const uri = typeof rawAsset.uri === "string" ? rawAsset.uri : "";
+      const hasInlineBytes =
+        ProcessingContext.decodeAssetData(rawAsset.data) !== null;
+      const isStorageRoute =
+        uri.startsWith("/api/storage/") || uri.startsWith("api/storage/");
+      const isAdapterUri = /^(file|s3|supabase):\/\//.test(uri);
+      if (uri && !hasInlineBytes && (isStorageRoute || isAdapterUri)) {
+        const resolvedUri = this._tempUrlResolver
+          ? await this._tempUrlResolver(uri)
+          : uri;
+        if (
+          ProcessingContext.isClientFetchableResolvedAssetUri(uri, resolvedUri)
+        ) {
+          return {
+            ...rawAsset,
+            uri: resolvedUri,
+            data: undefined
+          };
+        }
+      }
+    }
+
+    // Raw in-flight RGBA → encode to PNG up front so every downstream mode
+    // treats it as an ordinary image (correct mime, extension, and bytes).
+    const asset = (await encodeRawImageRef(rawAsset)) as Record<
+      string,
+      unknown
+    >;
+
+    const bytes = await this.getAssetBytes(asset);
+    if (!bytes) return asset;
+
+    const mime = ProcessingContext.guessAssetMime(asset);
+
+    if (mode === "data_uri") {
+      const base64 = Buffer.from(bytes).toString("base64");
+      return {
+        ...asset,
+        uri: `data:${mime};base64,${base64}`
+      };
+    }
+
+    if (mode === "storage_url") {
+      if (!this.storage) return asset;
+      const key = `assets/${randomUUID()}.${ProcessingContext.extForMime(mime)}`;
+      const uri = await this.storage.store(key, bytes, mime);
+      return {
+        ...asset,
+        uri,
+        data: undefined
+      };
+    }
+
+    if (mode === "temp_url") {
+      if (!this.storage) return asset;
+      const key = `temp/${randomUUID()}.${ProcessingContext.extForMime(mime)}`;
+      const storedUri = await this.storage.store(key, bytes, mime);
+      return {
+        ...asset,
+        uri: await this.resolveTempUrl(storedUri),
+        data: undefined
+      };
+    }
+
+    if (mode === "workspace") {
+      if (!this.workspaceDir) {
+        throw new Error("workspace_dir is required for workspace asset output");
+      }
+      const workspaceAssets = new FileStorageAdapter(
+        resolveWorkspacePath(this.workspaceDir, "assets")
+      );
+      const key = `${randomUUID()}.${ProcessingContext.extForMime(mime)}`;
+      const uri = await workspaceAssets.store(key, bytes, mime);
+      return {
+        ...asset,
+        uri,
+        data: undefined
+      };
+    }
+
+    return asset;
+  }
+
+  /**
+   * Recursively normalize workflow outputs, materializing asset-like values
+   * according to the selected output mode.
+   */
+  async normalizeOutputValue(
+    value: unknown,
+    mode: AssetOutputMode = this.assetOutputMode
+  ): Promise<unknown> {
+    if (value === null || value === undefined) return value;
+    const binary = ProcessingContext.toClientBytes(value);
+    if (binary) return binary;
+
+    if (Array.isArray(value)) {
+      return Promise.all(
+        value.map((item) => this.normalizeOutputValue(item, mode))
+      );
+    }
+
+    if (ProcessingContext.isAssetLike(value)) {
+      let byMode = this._normalizedOutputAssets.get(value);
+      if (!byMode) {
+        byMode = new Map();
+        this._normalizedOutputAssets.set(value, byMode);
+      }
+      let normalized = byMode.get(mode);
+      if (!normalized) {
+        normalized = this.materializeAsset(value, mode);
+        byMode.set(mode, normalized);
+      }
+      try {
+        return await normalized;
+      } catch (error) {
+        // A transient storage failure must remain retryable.
+        if (byMode.get(mode) === normalized) byMode.delete(mode);
+        throw error;
+      }
+    }
+
+    if (typeof value === "object") {
+      const entries = Object.entries(value as Record<string, unknown>);
+      const normalized = await Promise.all(
+        entries.map(
+          async ([k, v]) =>
+            [k, await this.normalizeOutputValue(v, mode)] as const
+        )
+      );
+      return Object.fromEntries(normalized);
+    }
+
+    return value;
+  }
+}

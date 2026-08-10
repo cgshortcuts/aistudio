@@ -1,0 +1,733 @@
+/**
+ * Tests for BaseProvider utility methods and default behaviors.
+ */
+
+import { describe, it, expect } from "vitest";
+import {
+  BaseProvider,
+  toolResultToText
+} from "../../src/providers/base-provider.js";
+import { isProviderMessageEvent } from "../../src/providers/types.js";
+import type {
+  Message,
+  MessageContent,
+  ProviderStreamItem,
+  ProviderTool,
+  ToolCall
+} from "../../src/providers/types.js";
+
+/**
+ * Concrete subclass that exposes protected methods for testing.
+ */
+class TestProvider extends BaseProvider {
+  constructor() {
+    super("test");
+  }
+
+  public testParseToolCallArgs(raw: unknown): Record<string, unknown> {
+    return this.parseToolCallArgs(raw);
+  }
+
+  public testBuildToolCall(id: string, name: string, args: unknown): ToolCall {
+    return this.buildToolCall(id, name, args);
+  }
+
+  async generateMessage(_args: {
+    messages: Message[];
+    model: string;
+    tools?: ProviderTool[];
+    maxTokens?: number;
+    temperature?: number;
+    topP?: number;
+    presencePenalty?: number;
+    frequencyPenalty?: number;
+  }): Promise<Message> {
+    return { role: "assistant", content: "ok" };
+  }
+
+  async *generateMessages(_args: {
+    messages: Message[];
+    model: string;
+    tools?: ProviderTool[];
+    maxTokens?: number;
+    temperature?: number;
+    topP?: number;
+    presencePenalty?: number;
+    frequencyPenalty?: number;
+    audio?: Record<string, unknown>;
+  }): AsyncGenerator<ProviderStreamItem> {
+    yield { type: "chunk", content: "ok", done: true };
+  }
+}
+
+describe("BaseProvider – parseToolCallArgs", () => {
+  const provider = new TestProvider();
+
+  it("parses valid JSON string into object", () => {
+    const result = provider.testParseToolCallArgs('{"key": "value", "n": 42}');
+    expect(result).toEqual({ key: "value", n: 42 });
+  });
+
+  it("returns {} for non-string/non-object input", () => {
+    expect(provider.testParseToolCallArgs(123)).toEqual({});
+    expect(provider.testParseToolCallArgs(null)).toEqual({});
+    expect(provider.testParseToolCallArgs(undefined)).toEqual({});
+  });
+
+  it("returns object as-is for object input", () => {
+    expect(provider.testParseToolCallArgs({ key: "val" })).toEqual({
+      key: "val"
+    });
+  });
+
+  it("returns {} for invalid JSON", () => {
+    expect(provider.testParseToolCallArgs("not json")).toEqual({});
+    expect(provider.testParseToolCallArgs("{broken")).toEqual({});
+  });
+
+  it("returns {} for JSON that parses to array", () => {
+    expect(provider.testParseToolCallArgs("[1, 2, 3]")).toEqual({});
+  });
+
+  it("returns {} for JSON that parses to primitive", () => {
+    expect(provider.testParseToolCallArgs('"hello"')).toEqual({});
+    expect(provider.testParseToolCallArgs("42")).toEqual({});
+    expect(provider.testParseToolCallArgs("true")).toEqual({});
+    expect(provider.testParseToolCallArgs("null")).toEqual({});
+  });
+});
+
+describe("BaseProvider – buildToolCall", () => {
+  const provider = new TestProvider();
+
+  it("builds ToolCall with parsed args from JSON string", () => {
+    const tc = provider.testBuildToolCall("call-1", "myTool", '{"foo": "bar"}');
+    expect(tc).toEqual({
+      id: "call-1",
+      name: "myTool",
+      args: { foo: "bar" }
+    });
+  });
+
+  it("handles string args", () => {
+    const tc = provider.testBuildToolCall("call-2", "tool", '{"x": 1}');
+    expect(tc.id).toBe("call-2");
+    expect(tc.name).toBe("tool");
+    expect(tc.args).toEqual({ x: 1 });
+  });
+
+  it("handles non-string args (returns empty args)", () => {
+    const tc = provider.testBuildToolCall("call-3", "tool", 999);
+    expect(tc.args).toEqual({});
+  });
+});
+
+describe("BaseProvider – isContextLengthError", () => {
+  const provider = new TestProvider();
+
+  it('returns true for "context length exceeded"', () => {
+    expect(
+      provider.isContextLengthError(
+        new Error("The context length exceeded the maximum allowed")
+      )
+    ).toBe(true);
+  });
+
+  it('returns true for "maximum context"', () => {
+    expect(provider.isContextLengthError("maximum context size reached")).toBe(
+      true
+    );
+  });
+
+  it("returns false for unrelated errors", () => {
+    expect(provider.isContextLengthError(new Error("rate limit"))).toBe(false);
+    expect(provider.isContextLengthError("something else")).toBe(false);
+    expect(provider.isContextLengthError(42)).toBe(false);
+  });
+});
+
+describe("BaseProvider – isRateLimitError", () => {
+  const provider = new TestProvider();
+
+  it('returns true for messages containing "429"', () => {
+    expect(
+      provider.isRateLimitError(new Error("HTTP 429 Too Many Requests"))
+    ).toBe(true);
+    expect(provider.isRateLimitError("status 429")).toBe(true);
+  });
+
+  it('returns true for messages containing "rate limit" (case-insensitive)', () => {
+    expect(provider.isRateLimitError(new Error("rate limit exceeded"))).toBe(
+      true
+    );
+    expect(provider.isRateLimitError(new Error("Rate Limit"))).toBe(true);
+    expect(provider.isRateLimitError("rate_limit reached")).toBe(true);
+  });
+
+  it('returns true for messages containing "too many requests" (case-insensitive)', () => {
+    expect(provider.isRateLimitError(new Error("too many requests"))).toBe(
+      true
+    );
+    expect(provider.isRateLimitError(new Error("Too Many Requests"))).toBe(
+      true
+    );
+  });
+
+  it("returns false for unrelated errors", () => {
+    expect(provider.isRateLimitError(new Error("400 Bad Request"))).toBe(false);
+    expect(provider.isRateLimitError(new Error("not found"))).toBe(false);
+    expect(provider.isRateLimitError(new Error("timeout"))).toBe(false);
+    expect(provider.isRateLimitError("something else")).toBe(false);
+    expect(provider.isRateLimitError(42)).toBe(false);
+  });
+});
+
+describe("BaseProvider – isAuthError", () => {
+  const provider = new TestProvider();
+
+  it('returns true for messages containing "401"', () => {
+    expect(provider.isAuthError(new Error("HTTP 401"))).toBe(true);
+    expect(provider.isAuthError("status 401")).toBe(true);
+  });
+
+  it('returns true for messages containing "403"', () => {
+    expect(provider.isAuthError(new Error("HTTP 403 Forbidden"))).toBe(true);
+    expect(provider.isAuthError("403 error")).toBe(true);
+  });
+
+  it('returns true for messages containing "unauthorized" (case-insensitive)', () => {
+    expect(provider.isAuthError(new Error("unauthorized"))).toBe(true);
+    expect(provider.isAuthError(new Error("Unauthorized"))).toBe(true);
+  });
+
+  it('returns true for messages containing "forbidden" (case-insensitive)', () => {
+    expect(provider.isAuthError(new Error("forbidden"))).toBe(true);
+    expect(provider.isAuthError(new Error("Forbidden"))).toBe(true);
+  });
+
+  it('returns true for messages containing "invalid api key" (case-insensitive)', () => {
+    expect(provider.isAuthError(new Error("invalid api key"))).toBe(true);
+    expect(provider.isAuthError(new Error("Invalid API Key provided"))).toBe(
+      true
+    );
+  });
+
+  it('returns true for messages containing "authentication" (case-insensitive)', () => {
+    expect(provider.isAuthError(new Error("authentication failed"))).toBe(true);
+    expect(provider.isAuthError(new Error("Authentication required"))).toBe(
+      true
+    );
+  });
+
+  it("returns false for unrelated errors", () => {
+    expect(provider.isAuthError(new Error("400 Bad Request"))).toBe(false);
+    expect(provider.isAuthError(new Error("rate limit"))).toBe(false);
+    expect(provider.isAuthError(new Error("timeout"))).toBe(false);
+    expect(provider.isAuthError("something else")).toBe(false);
+    expect(provider.isAuthError(42)).toBe(false);
+  });
+});
+
+describe("BaseProvider – default method behaviors", () => {
+  const provider = new TestProvider();
+
+  it("hasToolSupport() returns true", async () => {
+    expect(await provider.hasToolSupport("any-model")).toBe(true);
+  });
+
+  it("textToImage() throws 'does not support'", async () => {
+    await expect(
+      provider.textToImage({
+        model: { id: "m", name: "m", provider: "test" },
+        prompt: "test"
+      })
+    ).rejects.toThrow("does not support");
+  });
+
+  it("imageToImage() throws 'does not support'", async () => {
+    await expect(
+      provider.imageToImage([new Uint8Array()], {
+        model: { id: "m", name: "m", provider: "test" },
+        prompt: "test"
+      })
+    ).rejects.toThrow("does not support");
+  });
+
+  it("textToSpeech() throws 'does not support'", async () => {
+    const gen = provider.textToSpeech({ text: "hi", model: "m" });
+    await expect(gen.next()).rejects.toThrow("does not support");
+  });
+
+  it("automaticSpeechRecognition() throws 'does not support'", async () => {
+    await expect(
+      provider.automaticSpeechRecognition({
+        audio: new Uint8Array(),
+        model: "m"
+      })
+    ).rejects.toThrow("does not support");
+  });
+
+  it("generateEmbedding() throws 'does not support'", async () => {
+    await expect(
+      provider.generateEmbedding({ text: "hi", model: "m" })
+    ).rejects.toThrow("does not support");
+  });
+
+  it("textToVideo() throws 'does not support'", async () => {
+    await expect(
+      provider.textToVideo({
+        model: { id: "m", name: "m", provider: "test" },
+        prompt: "test"
+      })
+    ).rejects.toThrow("does not support");
+  });
+
+  it("imageToVideo() throws 'does not support'", async () => {
+    await expect(
+      provider.imageToVideo([new Uint8Array()], {
+        model: { id: "m", name: "m", provider: "test" },
+        prompt: "test"
+      })
+    ).rejects.toThrow("does not support");
+  });
+});
+
+describe("BaseProvider – getCapabilities", () => {
+  it("defaults to message generation only when nothing is overridden", () => {
+    const caps = new TestProvider().getCapabilities();
+    expect(caps).toEqual(["generate_message", "generate_messages"]);
+  });
+
+  it("derives capabilities from overridden methods (heuristic path)", () => {
+    class ImageProvider extends TestProvider {
+      override async getAvailableImageModels() {
+        return [];
+      }
+    }
+    const caps = new ImageProvider().getCapabilities();
+    expect(caps).toContain("text_to_image");
+    expect(caps).toContain("image_to_image");
+  });
+
+  it("advertises text_to_music when getAvailableMusicModels is overridden", () => {
+    class MusicProvider extends TestProvider {
+      override async getAvailableMusicModels() {
+        return [];
+      }
+    }
+    const caps = new MusicProvider().getCapabilities();
+    expect(caps).toContain("text_to_music");
+    // Music override must not imply TTS / video.
+    expect(caps).not.toContain("text_to_speech");
+    expect(caps).not.toContain("text_to_video");
+  });
+
+  it("honors an explicit capability declaration (override seam)", () => {
+    class ExplicitProvider extends TestProvider {
+      protected override declaredCapabilities() {
+        return ["text_to_speech" as const];
+      }
+    }
+    const caps = new ExplicitProvider().getCapabilities();
+    // Explicit list is honored and message generation is always included.
+    expect(caps).toContain("text_to_speech");
+    expect(caps).toContain("generate_message");
+    expect(caps).toContain("generate_messages");
+  });
+});
+
+describe("BaseProvider – close lifecycle", () => {
+  it("default close() is a safe, idempotent no-op", async () => {
+    const provider = new TestProvider();
+    await expect(provider.close()).resolves.toBeUndefined();
+    await expect(provider.close()).resolves.toBeUndefined();
+  });
+});
+
+describe("toolResultToText", () => {
+  it("passes strings through", () => {
+    expect(toolResultToText("hi")).toBe("hi");
+  });
+
+  it("joins text blocks and drops images", () => {
+    const content: MessageContent[] = [
+      { type: "text", text: "a shot" },
+      { type: "image_url", image: { data: "QUJD", mimeType: "image/png" } }
+    ];
+    expect(toolResultToText(content)).toBe("a shot");
+  });
+
+  it("falls back to a placeholder when only images are present", () => {
+    expect(
+      toolResultToText([
+        { type: "image_url", image: { data: "QUJD", mimeType: "image/png" } }
+      ])
+    ).toBe("[image result]");
+  });
+});
+
+describe("BaseProvider.generateLoop – turn boundary", () => {
+  /**
+   * Mirrors what every real provider does: tool calls are yielded first, then a
+   * terminal `done: true` chunk closing THAT completion. Anthropic, OpenAI,
+   * Gemini, Ollama and the rest all emit this per round, not per turn.
+   */
+  class TwoRoundProvider extends BaseProvider {
+    private called = false;
+    constructor() {
+      super("test");
+    }
+    async *generateMessages(): AsyncGenerator<ProviderStreamItem> {
+      if (!this.called) {
+        this.called = true;
+        yield { type: "chunk", content: "thinking", done: false };
+        yield { id: "call_1", name: "noop", args: {} } as ToolCall;
+        yield { type: "chunk", content: "", done: true };
+        return;
+      }
+      yield { type: "chunk", content: "answer", done: true };
+    }
+  }
+
+  it("emits done:true only once, at the end of the whole turn", async () => {
+    const provider = new TwoRoundProvider();
+    const chunks: { content?: unknown; done?: boolean }[] = [];
+    for await (const item of provider.generateLoop({
+      messages: [{ role: "user", content: "go" }],
+      model: "m",
+      executeTool: async () => "ok"
+    })) {
+      if (
+        typeof item === "object" &&
+        item !== null &&
+        (item as { type?: string }).type === "chunk"
+      ) {
+        chunks.push(item as { content?: unknown; done?: boolean });
+      }
+    }
+
+    // The mid-loop done chunk is what makes the composer flip Stop → Run while
+    // tools are still running; only the final completion may close the turn.
+    const doneChunks = chunks.filter((c) => c.done === true);
+    expect(doneChunks).toHaveLength(1);
+    expect(doneChunks[0]?.content).toBe("answer");
+  });
+
+  it("still forwards non-terminal content chunks from every round", async () => {
+    const provider = new TwoRoundProvider();
+    const text: string[] = [];
+    for await (const item of provider.generateLoop({
+      messages: [{ role: "user", content: "go" }],
+      model: "m",
+      executeTool: async () => "ok"
+    })) {
+      if (
+        typeof item === "object" &&
+        item !== null &&
+        (item as { type?: string }).type === "chunk"
+      ) {
+        const c = (item as { content?: unknown }).content;
+        if (typeof c === "string" && c) text.push(c);
+      }
+    }
+    expect(text).toEqual(["thinking", "answer"]);
+  });
+});
+
+describe("BaseProvider.generateLoop – non-text chunks", () => {
+  class AudioProvider extends BaseProvider {
+    constructor() {
+      super("test");
+    }
+    async *generateMessages(): AsyncGenerator<ProviderStreamItem> {
+      yield { type: "chunk", content: "Here it is.", done: false };
+      yield {
+        type: "chunk",
+        content: "QUJDREVG",
+        content_type: "audio",
+        done: false
+      } as ProviderStreamItem;
+      yield { type: "chunk", content: "", done: true };
+    }
+  }
+
+  it("keeps base64 audio out of the assistant message text", async () => {
+    const provider = new AudioProvider();
+    const messages: Message[] = [];
+    for await (const item of provider.generateLoop({
+      messages: [{ role: "user", content: "speak" }],
+      model: "m"
+    })) {
+      if ((item as { type?: string }).type === "message") {
+        messages.push((item as { message: Message }).message);
+      }
+    }
+    expect(messages.at(-1)?.content).toBe("Here it is.");
+  });
+});
+
+describe("BaseProvider.generateLoop – image tool results", () => {
+  // Yields one tool call on the first turn, then finishes — the "real provider"
+  // path that emits ToolCall items (vs. the inline onToolCall callback).
+  class ToolOnceProvider extends BaseProvider {
+    public secondTurnMessages: Message[] | null = null;
+    private called = false;
+    constructor() {
+      super("test");
+    }
+    async *generateMessages(args: {
+      messages: Message[];
+    }): AsyncGenerator<ProviderStreamItem> {
+      if (!this.called) {
+        this.called = true;
+        yield { id: "call_1", name: "snap", args: {} } as ToolCall;
+        return;
+      }
+      this.secondTurnMessages = args.messages;
+      yield { type: "chunk", content: "done", done: true };
+    }
+  }
+
+  it("delivers image tool results via a user message, not the tool message", async () => {
+    const provider = new ToolOnceProvider();
+    const image: MessageContent[] = [
+      { type: "text", text: "viewport" },
+      { type: "image_url", image: { data: "QUJD", mimeType: "image/png" } }
+    ];
+    const events: ProviderStreamItem[] = [];
+    for await (const item of provider.generateLoop({
+      messages: [{ role: "user", content: "look" }],
+      model: "m",
+      executeTool: async () => image
+    })) {
+      events.push(item);
+    }
+
+    // The tool message carries only the text note — putting an image here would
+    // make OpenAI stringify it into a giant base64 text blob.
+    const toolEvent = events.find(
+      (e) => isProviderMessageEvent(e) && e.message.role === "tool"
+    );
+    expect(
+      isProviderMessageEvent(toolEvent!) && toolEvent!.message.content
+    ).toBe("viewport");
+
+    // The pixels are never yielded (so never persisted or echoed)...
+    const yieldedUser = events.find(
+      (e) => isProviderMessageEvent(e) && e.message.role === "user"
+    );
+    expect(yieldedUser).toBeUndefined();
+
+    // ...but they DO ride the in-flight messages into the next model turn.
+    const userImg = provider.secondTurnMessages?.find(
+      (m) =>
+        m.role === "user" &&
+        Array.isArray(m.content) &&
+        (m.content as MessageContent[]).some((c) => c.type === "image_url")
+    );
+    expect(userImg).toBeTruthy();
+    const imgPart = (userImg!.content as MessageContent[]).find(
+      (c) => c.type === "image_url"
+    );
+    expect(imgPart).toMatchObject({
+      type: "image_url",
+      image: { data: "QUJD" }
+    });
+  });
+
+  it("appends all sibling tool results before image follow-up messages", async () => {
+    class TwoToolProvider extends BaseProvider {
+      secondTurnMessages: Message[] = [];
+      private called = false;
+      constructor() {
+        super("test");
+      }
+      async *generateMessages(args: { messages: Message[] }) {
+        if (!this.called) {
+          this.called = true;
+          yield { id: "image", name: "image", args: {} } as ToolCall;
+          yield { id: "text", name: "text", args: {} } as ToolCall;
+          return;
+        }
+        this.secondTurnMessages = args.messages;
+        yield { type: "chunk" as const, content: "done", done: true };
+      }
+    }
+
+    const provider = new TwoToolProvider();
+    for await (const _item of provider.generateLoop({
+      messages: [{ role: "user", content: "go" }],
+      model: "m",
+      executeTool: async (toolCall) =>
+        toolCall.id === "image"
+          ? [{ type: "image_url", image: { data: "QUJD" } }]
+          : "ok"
+    })) {
+      // drain
+    }
+
+    expect(
+      provider.secondTurnMessages.map((message) => message.role).slice(0, 5)
+    ).toEqual(["user", "assistant", "tool", "tool", "user"]);
+  });
+
+  it("does not dispatch parallel tools after the turn is aborted", async () => {
+    const controller = new AbortController();
+    let executions = 0;
+    class AbortingProvider extends BaseProvider {
+      constructor() {
+        super("test");
+      }
+      async *generateMessages() {
+        yield { id: "call", name: "write", args: {} } as ToolCall;
+        controller.abort();
+      }
+    }
+
+    for await (const _item of new AbortingProvider().generateLoop({
+      messages: [{ role: "user", content: "go" }],
+      model: "m",
+      signal: controller.signal,
+      executeTool: async () => {
+        executions++;
+        return "done";
+      }
+    })) {
+      // drain
+    }
+    expect(executions).toBe(0);
+  });
+
+  it("isolates a throwing tool in parallel execution — every tool_use gets a tool_result", async () => {
+    // Regression: Promise.all rejected on one thrown tool, discarding sibling
+    // results and leaving a dangling tool_use (rejected by the API next turn).
+    class TwoToolsProvider extends BaseProvider {
+      public secondTurnMessages: Message[] | null = null;
+      private called = false;
+      constructor() {
+        super("test");
+      }
+      async *generateMessages(args: {
+        messages: Message[];
+      }): AsyncGenerator<ProviderStreamItem> {
+        if (!this.called) {
+          this.called = true;
+          yield { id: "c1", name: "ok_tool", args: {} } as ToolCall;
+          yield { id: "c2", name: "bad_tool", args: {} } as ToolCall;
+          return;
+        }
+        this.secondTurnMessages = args.messages;
+        yield { type: "chunk", content: "done", done: true };
+      }
+    }
+    const provider = new TwoToolsProvider();
+    const events: ProviderStreamItem[] = [];
+    for await (const item of provider.generateLoop({
+      messages: [{ role: "user", content: "go" }],
+      model: "m",
+      // Not sequential ⇒ parallel Promise.all path.
+      sequentialTools: false,
+      executeTool: async (tc: ToolCall) => {
+        if (tc.name === "bad_tool") throw new Error("boom");
+        return "ok result";
+      }
+    })) {
+      events.push(item);
+    }
+
+    const toolMsgs = events.filter(
+      (e) => isProviderMessageEvent(e) && e.message.role === "tool"
+    );
+    // Both tool_use ids got a matching tool_result — no dangling tool_use.
+    expect(toolMsgs).toHaveLength(2);
+    const contents = toolMsgs.map((e) =>
+      isProviderMessageEvent(e) ? String(e.message.content) : ""
+    );
+    expect(contents).toContain("ok result");
+    expect(
+      contents.some((c) => /Error executing tool "bad_tool"/.test(c))
+    ).toBe(true);
+  });
+
+  it("dispatches a ProviderTool.execute and ends on terminal:true (no executeTool)", async () => {
+    // Provider yields a tool call on the first turn, then a final chunk.
+    class ToolThenDoneProvider extends BaseProvider {
+      public turns = 0;
+      constructor() {
+        super("test");
+      }
+      async generateMessage(): Promise<Message> {
+        return { role: "assistant", content: "ok" };
+      }
+      async *generateMessages(): AsyncGenerator<ProviderStreamItem> {
+        this.turns++;
+        if (this.turns === 1) {
+          yield {
+            id: "call_1",
+            name: "finish",
+            args: { value: 42 }
+          } as ToolCall;
+          return;
+        }
+        // Should never run — the terminal tool ends the loop after turn 1.
+        yield { type: "chunk", content: "second turn", done: true };
+      }
+    }
+
+    const provider = new ToolThenDoneProvider();
+    let executed: Record<string, unknown> | null = null;
+    const tool: ProviderTool = {
+      name: "finish",
+      terminal: true,
+      execute: async (a) => {
+        executed = a;
+        return "finished";
+      }
+    };
+
+    const events: ProviderStreamItem[] = [];
+    for await (const item of provider.generateLoop({
+      messages: [{ role: "user", content: "go" }],
+      model: "m",
+      tools: [tool]
+      // NOTE: no executeTool callback — the tool's own execute drives it.
+    })) {
+      events.push(item);
+    }
+
+    // The provider-supplied execute ran with the tool-call args.
+    expect(executed).toEqual({ value: 42 });
+    // The loop stopped after the terminal tool — generateMessages ran once.
+    expect(provider.turns).toBe(1);
+    // Its result landed in a tool message.
+    const toolEvent = events.find(
+      (e) => isProviderMessageEvent(e) && e.message.role === "tool"
+    );
+    expect(
+      isProviderMessageEvent(toolEvent!) && toolEvent!.message.content
+    ).toBe("finished");
+  });
+
+  it("leaves plain string tool results in the tool message", async () => {
+    const provider = new ToolOnceProvider();
+    const events: ProviderStreamItem[] = [];
+    for await (const item of provider.generateLoop({
+      messages: [{ role: "user", content: "x" }],
+      model: "m",
+      executeTool: async () => "plain text"
+    })) {
+      events.push(item);
+    }
+    const toolEvent = events.find(
+      (e) => isProviderMessageEvent(e) && e.message.role === "tool"
+    );
+    expect(
+      isProviderMessageEvent(toolEvent!) && toolEvent!.message.content
+    ).toBe("plain text");
+    expect(
+      provider.secondTurnMessages?.some(
+        (m) => m.role === "user" && Array.isArray(m.content)
+      )
+    ).toBeFalsy();
+  });
+});

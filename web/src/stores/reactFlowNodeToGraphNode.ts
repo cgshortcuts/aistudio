@@ -1,0 +1,93 @@
+import { Node } from "@xyflow/react";
+import { Node as GraphNode } from "./ApiTypes";
+import { NodeData } from "./NodeData";
+import { normalizeDynamicSlots } from "../utils/dynamicSlots";
+import { NodeUIProperties, DEFAULT_NODE_WIDTH } from "./nodeUiDefaults";
+import { NODE_COLLAPSED_STRIP_HEIGHT_PX } from "./collapseNodeLayout";
+import {
+  GROUP_NODE_TYPE,
+  COMMENT_NODE_TYPE,
+  PREVIEW_NODE_TYPE
+} from "../constants/nodeTypes";
+
+export function reactFlowNodeToGraphNode(node: Node<NodeData>): GraphNode {
+  const ui_properties: NodeUIProperties = {
+    selected: node.selected,
+    position: node.position,
+    zIndex: node.zIndex || 0,
+    width: node.measured?.width || DEFAULT_NODE_WIDTH,
+    height: undefined,
+    title: node.data.title,
+    color: node.data.color,
+    selectable: true,
+    bypassed: node.data.bypassed || false,
+    model_id: node.data.model_id,
+    endpoint_id: node.data.endpoint_id,
+    selected_generation: node.data.selected_generation,
+    selected_generations: node.data.selected_generations
+  };
+
+  if (node.data.collapsed) {
+    ui_properties.collapsed = true;
+  }
+
+  // Persist explicit user resize dimensions
+  // ReactFlow's applyNodeChanges sets node.width/height (top-level) when user resizes via NodeResizeControl
+  // Also check node.style.width/height for initial load values from graphNodeToReactFlowNode
+  if (typeof node.width === "number") {
+    ui_properties.width = node.width;
+  } else if (
+    node.style &&
+    "width" in node.style &&
+    typeof node.style.width === "number"
+  ) {
+    ui_properties.width = node.style.width;
+  }
+
+  const strip = NODE_COLLAPSED_STRIP_HEIGHT_PX;
+  if (
+    node.data.collapsed &&
+    typeof node.data.expandedHeightPx === "number" &&
+    node.data.expandedHeightPx > strip
+  ) {
+    ui_properties.height = node.data.expandedHeightPx;
+  } else if (typeof node.height === "number") {
+    ui_properties.height = node.height;
+  } else if (
+    node.style &&
+    "height" in node.style &&
+    typeof node.style.height === "number"
+  ) {
+    ui_properties.height = node.style.height;
+  }
+
+  if (node.type === "nodetool.group.Loop") {
+    ui_properties.selectable = false;
+    if (ui_properties.height === undefined) {
+      ui_properties.height = node.measured?.height;
+    }
+  }
+
+  if (
+    node.type === COMMENT_NODE_TYPE ||
+    node.type === GROUP_NODE_TYPE ||
+    node.type === PREVIEW_NODE_TYPE
+  ) {
+    if (ui_properties.height === undefined) {
+      ui_properties.height = node.measured?.height;
+    }
+  }
+
+  const dynamic_inputs = normalizeDynamicSlots(node.data?.dynamic_inputs);
+
+  return {
+    id: node.id,
+    type: node.type || "",
+    data: node.data?.properties,
+    parent_id: node.parentId,
+    ui_properties: ui_properties,
+    dynamic_properties: node.data?.dynamic_properties || {},
+    ...(Object.keys(dynamic_inputs).length > 0 ? { dynamic_inputs } : {}),
+    dynamic_outputs: node.data?.dynamic_outputs || {}
+  };
+}

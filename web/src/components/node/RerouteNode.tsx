@@ -1,0 +1,278 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { NodeProps, Handle, Position } from "@xyflow/react";
+import type { NodeStoreState } from "../../stores/NodeStore";
+import { NodeData } from "../../stores/NodeData";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import isEqual from "../../utils/isEqual";
+import {
+  Tooltip,
+  Container,
+  MOTION,
+  BORDER_RADIUS,
+  SPACING,
+  getSpacingPx
+} from "../ui_primitives";
+import useMetadataStore from "../../stores/MetadataStore";
+import { useNodes } from "../../contexts/NodeContext";
+import { DATA_TYPES } from "../../config/data_types";
+import { findOutputHandle } from "../../utils/handleUtils";
+import { useSyncEdgeSelection } from "../../hooks/nodes/useSyncEdgeSelection";
+import { TOOLTIP_ENTER_DELAY } from "../../config/constants";
+import { hexToRgba } from "../../utils/ColorUtils";
+
+const rerouteBackground = (theme: Theme, alpha: number): string =>
+  theme.palette.mode === "dark"
+    ? `rgba(30 30 30 / ${alpha})`
+    : `rgba(255 255 255 / ${alpha})`;
+
+const styles = (theme: Theme) =>
+  css({
+    position: "relative",
+    display: "flex",
+    width: "60px !important",
+    height: "20px !important",
+    minWidth: "60px !important",
+    minHeight: "20px !important",
+    overflow: "visible",
+    border: `1px solid ${theme.vars.palette.grey[400]}`,
+    backgroundColor: rerouteBackground(theme, 0.8),
+    backdropFilter: theme.vars.palette.glass.blur,
+    WebkitBackdropFilter: theme.vars.palette.glass.blur,
+    borderRadius: BORDER_RADIUS.circle,
+    cursor: "grab",
+    transition: MOTION.all
+  });
+
+const titleStyles = (theme: Theme) =>
+  css({
+    position: "absolute",
+    top: "calc(100% + 6px)",
+    left: "50%",
+    transform: "translateX(-50%)",
+    width: "max-content",
+    whiteSpace: "normal",
+    wordBreak: "break-word",
+    fontSize: "var(--fontSizeSmaller)",
+    lineHeight: 1.3,
+    color: theme.vars.palette.text.secondary,
+    background: hexToRgba(theme.vars.palette.c_node_bg as string, 0.85),
+    backdropFilter: theme.vars.palette.glass.blur,
+    WebkitBackdropFilter: theme.vars.palette.glass.blur,
+    padding: `${getSpacingPx(SPACING.micro)} ${getSpacingPx(SPACING.sm)}`,
+    borderRadius: BORDER_RADIUS.sm,
+    border: `1px solid ${theme.vars.palette.divider}`,
+    cursor: "default",
+    userSelect: "none",
+    maxWidth: "130px",
+    textAlign: "center",
+
+    "& input": {
+      width: "100px",
+      border: "none",
+      outline: "none",
+      background: "transparent",
+      color: theme.vars.palette.text.primary,
+      fontSize: "var(--fontSizeSmaller)",
+      lineHeight: 1.3,
+      fontFamily: "inherit",
+      padding: 0,
+      textAlign: "center"
+    }
+  });
+
+interface RerouteNodeProps extends NodeProps {
+  data: NodeData;
+  id: string;
+}
+
+const RerouteNode: React.FC<RerouteNodeProps> = (props) => {
+  const theme = useTheme();
+  const cssStyles = useMemo(() => styles(theme), [theme]);
+  const { selected, id, data } = props;
+  const [isEditing, setIsEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const updateNodeData = useNodes((state) => state.updateNodeData);
+
+  const title = data.title || "";
+
+  const commitTitle = useCallback(
+    (value: string) => {
+      updateNodeData(id, { title: value });
+      setIsEditing(false);
+    },
+    [id, updateNodeData]
+  );
+
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsEditing(true);
+  }, []);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      e.stopPropagation();
+      if (e.key === "Enter") {
+        commitTitle(e.currentTarget.value);
+      } else if (e.key === "Escape") {
+        setIsEditing(false);
+      }
+    },
+    [commitTitle]
+  );
+
+  const handleBlur = useCallback(
+    (e: React.FocusEvent<HTMLInputElement>) => {
+      commitTitle(e.currentTarget.value);
+    },
+    [commitTitle]
+  );
+
+  const upstreamConnectionSelector = useMemo(() => {
+    let lastSourceType: string | undefined;
+    let lastSourceDynamicOutputs: Record<string, unknown> | undefined;
+    let lastSourceHandle: string | null | undefined;
+    let lastResult: { sourceType: string | undefined; sourceData: NodeData; sourceHandle: string | null | undefined } | null = null;
+    return (state: NodeStoreState) => {
+      const incoming = state.edges.find(
+        (e) => e.target === id && e.targetHandle === "input_value"
+      );
+      if (!incoming) {
+        if (lastResult === null) return lastResult;
+        lastResult = null;
+        return lastResult;
+      }
+      const sourceNode = state.findNode(incoming.source);
+      if (!sourceNode) {
+        if (lastResult === null) return lastResult;
+        lastResult = null;
+        return lastResult;
+      }
+      if (
+        lastResult !== null &&
+        sourceNode.type === lastSourceType &&
+        sourceNode.data.dynamic_outputs === lastSourceDynamicOutputs &&
+        incoming.sourceHandle === lastSourceHandle
+      ) {
+        return lastResult;
+      }
+      lastSourceType = sourceNode.type;
+      lastSourceDynamicOutputs = sourceNode.data.dynamic_outputs;
+      lastSourceHandle = incoming.sourceHandle;
+      lastResult = {
+        sourceType: sourceNode.type,
+        sourceData: sourceNode.data,
+        sourceHandle: incoming.sourceHandle
+      };
+      return lastResult;
+    };
+  }, [id]);
+  const upstreamConnection = useNodes(upstreamConnectionSelector);
+
+  const { slug: upstreamSlug, color: upstreamColor } = useMemo(() => {
+    const anyType = DATA_TYPES.find((dt) => dt.slug === "any");
+    const fallback = {
+      slug: anyType?.slug || "any",
+      color: anyType?.color || "#888"
+    };
+
+    if (!upstreamConnection) {
+      return fallback;
+    }
+
+    const { sourceType, sourceData, sourceHandle } = upstreamConnection;
+
+    const sourceMeta = useMetadataStore
+      .getState()
+      .getMetadata(sourceType || "");
+    if (!sourceMeta) {
+      return fallback;
+    }
+
+    const sourceNode = { type: sourceType, data: sourceData, id: "", position: { x: 0, y: 0 } } as import("@xyflow/react").Node<NodeData>;
+
+    const outHandle = findOutputHandle(
+      sourceNode,
+      sourceHandle || "",
+      sourceMeta
+    );
+    const typeStr = outHandle?.type?.type;
+    const match = DATA_TYPES.find(
+      (dt) => dt.value === typeStr || dt.name === typeStr || dt.slug === typeStr
+    );
+    if (match) {
+      return { slug: match.slug, color: match.color };
+    }
+    return fallback;
+  }, [upstreamConnection]);
+
+  useSyncEdgeSelection(id, Boolean(selected));
+
+  const titleCssStyles = useMemo(() => titleStyles(theme), [theme]);
+  const containerSx = useMemo(() => ({
+    boxShadow: selected
+      ? `0 0 12px ${theme.vars.palette.primary.main}60`
+      : "0 0 24px -22px rgba(0,0,0,.65)",
+    borderColor: selected
+      ? theme.vars.palette.primary.main
+      : theme.vars.palette.grey[400]
+  }), [selected, theme.vars.palette.primary.main, theme.vars.palette.grey]);
+  const handleStyle = useMemo<React.CSSProperties>(() => ({
+    top: "50%",
+    backgroundColor: upstreamColor
+  }), [upstreamColor]);
+
+  return (
+    <Tooltip
+      title="Double-click to add a label"
+      delay={TOOLTIP_ENTER_DELAY * 2}
+      placement="top"
+    >
+      <Container
+        css={cssStyles}
+        className={`node-drag-handle node-body reroute-node ${
+          selected ? "selected" : ""
+        }`}
+        onDoubleClick={handleDoubleClick}
+        sx={containerSx}
+      >
+        <Handle
+          id="input_value"
+          type="target"
+          position={Position.Left}
+          className={upstreamSlug}
+          style={handleStyle}
+        />
+        <Handle
+          id="output"
+          type="source"
+          position={Position.Right}
+          className={upstreamSlug}
+          style={handleStyle}
+        />
+
+        {(isEditing || title) && (
+          <div css={titleCssStyles}>
+            {isEditing ? (
+              <input
+                ref={inputRef}
+                defaultValue={title}
+                autoFocus
+                aria-label="Reroute label"
+                placeholder="label"
+                onKeyDown={handleKeyDown}
+                onBlur={handleBlur}
+              />
+            ) : (
+              <span>{title}</span>
+            )}
+          </div>
+        )}
+      </Container>
+    </Tooltip>
+  );
+};
+
+export default memo(RerouteNode, isEqual);

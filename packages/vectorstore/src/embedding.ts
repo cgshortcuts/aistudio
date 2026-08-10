@@ -1,0 +1,498 @@
+/**
+ * Provider-based embedding functions.
+ *
+ * Implements the EmbeddingFunction interface using provider APIs
+ * (OpenAI, Ollama, Gemini, Mistral, Cohere, Voyage AI, Jina AI).
+ */
+
+import { createLogger } from "@nodetool-ai/config";
+import { getSecret } from "@nodetool-ai/models";
+import type { EmbeddingFunction } from "./sqlite-vec-store.js";
+
+const log = createLogger("nodetool.vectorstore.embedding");
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type EmbeddingProvider =
+  | "openai"
+  | "ollama"
+  | "gemini"
+  | "mistral"
+  | "cohere"
+  | "voyage"
+  | "jina";
+
+export interface ProviderEmbeddingOptions {
+  provider: EmbeddingProvider;
+  model: string;
+  dimensions?: number;
+  /**
+   * User scope for secret resolution. Embedding API keys are looked up via
+   * `getSecret(envKey, userId)` so each user's stored credentials are used
+   * for their own embedding calls. Defaults to `"1"` (the legacy single-user
+   * scope) for backward compatibility, but multi-user contexts (chat
+   * sessions, agent runs scoped to a userId) MUST pass the real userId or
+   * recall/write will silently fail when the requested user has a different
+   * key than the global one.
+   */
+  userId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Provider embedding function
+// ---------------------------------------------------------------------------
+
+/**
+ * Embedding function that calls a remote provider API.
+ *
+ * Lazily resolves API keys from secrets / environment on first call.
+ */
+export class ProviderEmbeddingFunction implements EmbeddingFunction {
+  readonly name: string;
+  private provider: EmbeddingProvider;
+  private model: string;
+  private dimensions?: number;
+  private userId: string;
+  private _apiKey: string | null = null;
+  private _keyResolved = false;
+
+  constructor(opts: ProviderEmbeddingOptions) {
+    this.provider = opts.provider;
+    this.model = opts.model;
+    this.dimensions = opts.dimensions;
+    this.userId = opts.userId ?? "1";
+    this.name = `${opts.provider}/${opts.model}`;
+  }
+
+  private async resolveApiKey(): Promise<string | null> {
+    if (this._keyResolved) return this._apiKey;
+    this._keyResolved = true;
+
+    const envKeyMap: Record<EmbeddingProvider, string> = {
+      openai: "OPENAI_API_KEY",
+      ollama: "OLLAMA_API_URL",
+      gemini: "GEMINI_API_KEY",
+      mistral: "MISTRAL_API_KEY",
+      cohere: "COHERE_API_KEY",
+      voyage: "VOYAGE_API_KEY",
+      jina: "JINA_API_KEY"
+    };
+
+    const envKey = envKeyMap[this.provider];
+    // Per-user secret first; fall back to env. Do NOT fall back to a
+    // different user's secret — that would let one user's key power
+    // another user's embedding calls.
+    this._apiKey =
+      (await getSecret(envKey, this.userId).catch(() => null)) ??
+      process.env[envKey] ??
+      null;
+    return this._apiKey;
+  }
+
+  async generate(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
+
+    switch (this.provider) {
+      case "openai":
+        return this._generateOpenAI(texts);
+      case "ollama":
+        return this._generateOllama(texts);
+      case "gemini":
+        return this._generateGemini(texts);
+      case "mistral":
+        return this._generateMistral(texts);
+      case "cohere":
+        return this._generateCohere(texts);
+      case "voyage":
+        return this._generateVoyage(texts);
+      case "jina":
+        return this._generateJina(texts);
+      default:
+        throw new Error(`Unsupported embedding provider: ${this.provider}`);
+    }
+  }
+
+  // ── OpenAI ───────────────────────────────────────────────────────────
+
+  private async _generateOpenAI(texts: string[]): Promise<number[][]> {
+    const apiKey = await this.resolveApiKey();
+    if (!apiKey) throw new Error("OPENAI_API_KEY not configured");
+
+    const body: Record<string, unknown> = {
+      model: this.model,
+      input: texts
+    };
+    if (this.dimensions) body.dimensions = this.dimensions;
+
+    const resp = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => "");
+      throw new Error(`OpenAI embedding failed (${resp.status}): ${err}`);
+    }
+
+    const data = (await resp.json()) as {
+      data: Array<{ embedding: number[] }>;
+    };
+
+    // Sort by index to guarantee order
+    return data.data
+      .sort((a: any, b: any) => (a.index ?? 0) - (b.index ?? 0))
+      .map((d) => d.embedding);
+  }
+
+  // ── Ollama ───────────────────────────────────────────────────────────
+
+  private async _generateOllama(texts: string[]): Promise<number[][]> {
+    const baseUrl = (await this.resolveApiKey()) || "http://127.0.0.1:11434";
+
+    const resp = await fetch(`${baseUrl}/api/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: this.model, input: texts })
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => "");
+      throw new Error(`Ollama embedding failed (${resp.status}): ${err}`);
+    }
+
+    const data = (await resp.json()) as { embeddings: number[][] };
+    return data.embeddings;
+  }
+
+  // ── Gemini ───────────────────────────────────────────────────────────
+
+  private async _generateGemini(texts: string[]): Promise<number[][]> {
+    const apiKey = await this.resolveApiKey();
+    if (!apiKey) throw new Error("GEMINI_API_KEY not configured");
+
+    // Gemini embedContent only handles one text at a time
+    const embeddings: number[][] = [];
+    for (const text of texts) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent?key=${apiKey}`;
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: { parts: [{ text }] }
+        })
+      });
+
+      if (!resp.ok) {
+        const err = await resp.text().catch(() => "");
+        throw new Error(`Gemini embedding failed (${resp.status}): ${err}`);
+      }
+
+      const data = (await resp.json()) as {
+        embedding?: { values?: number[] };
+      };
+      embeddings.push(data.embedding?.values ?? []);
+    }
+    return embeddings;
+  }
+
+  // ── Mistral ──────────────────────────────────────────────────────────
+
+  private async _generateMistral(texts: string[]): Promise<number[][]> {
+    const apiKey = await this.resolveApiKey();
+    if (!apiKey) throw new Error("MISTRAL_API_KEY not configured");
+
+    const resp = await fetch("https://api.mistral.ai/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: this.model,
+        input: texts
+      })
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => "");
+      throw new Error(`Mistral embedding failed (${resp.status}): ${err}`);
+    }
+
+    const data = (await resp.json()) as {
+      data: Array<{ embedding: number[] }>;
+    };
+    return data.data
+      .sort((a: any, b: any) => (a.index ?? 0) - (b.index ?? 0))
+      .map((d) => d.embedding);
+  }
+
+  // ── Cohere ───────────────────────────────────────────────────────────
+
+  private async _generateCohere(texts: string[]): Promise<number[][]> {
+    const apiKey = await this.resolveApiKey();
+    if (!apiKey) throw new Error("COHERE_API_KEY not configured");
+
+    const body: Record<string, unknown> = {
+      model: this.model,
+      texts,
+      input_type: "search_document",
+      embedding_types: ["float"]
+    };
+    if (this.dimensions) body.output_dimension = this.dimensions;
+
+    const resp = await fetch("https://api.cohere.com/v2/embed", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => "");
+      throw new Error(`Cohere embedding failed (${resp.status}): ${err}`);
+    }
+
+    const data = (await resp.json()) as {
+      embeddings?: { float?: number[][] } | number[][];
+    };
+
+    if (Array.isArray(data.embeddings)) return data.embeddings;
+    const floats = data.embeddings?.float;
+    if (!Array.isArray(floats)) {
+      throw new Error("Cohere embedding response missing float embeddings");
+    }
+    return floats;
+  }
+
+  // ── Voyage AI ────────────────────────────────────────────────────────
+
+  private async _generateVoyage(texts: string[]): Promise<number[][]> {
+    const apiKey = await this.resolveApiKey();
+    if (!apiKey) throw new Error("VOYAGE_API_KEY not configured");
+
+    const body: Record<string, unknown> = {
+      model: this.model,
+      input: texts,
+      input_type: "document"
+    };
+    if (this.dimensions) body.output_dimension = this.dimensions;
+
+    const resp = await fetch("https://api.voyageai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => "");
+      throw new Error(`Voyage embedding failed (${resp.status}): ${err}`);
+    }
+
+    const data = (await resp.json()) as {
+      data: Array<{ embedding: number[]; index?: number }>;
+    };
+    return data.data
+      .sort((a: any, b: any) => (a.index ?? 0) - (b.index ?? 0))
+      .map((d) => d.embedding);
+  }
+
+  // ── Jina AI ──────────────────────────────────────────────────────────
+
+  private async _generateJina(texts: string[]): Promise<number[][]> {
+    const apiKey = await this.resolveApiKey();
+    if (!apiKey) throw new Error("JINA_API_KEY not configured");
+
+    const body: Record<string, unknown> = {
+      model: this.model,
+      input: texts
+    };
+    if (this.model.startsWith("jina-embeddings-v3")) {
+      body.task = "retrieval.passage";
+    }
+    if (this.dimensions) body.dimensions = this.dimensions;
+
+    const resp = await fetch("https://api.jina.ai/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text().catch(() => "");
+      throw new Error(`Jina embedding failed (${resp.status}): ${err}`);
+    }
+
+    const data = (await resp.json()) as {
+      data: Array<{ embedding: number[]; index?: number }>;
+    };
+    return data.data
+      .sort((a: any, b: any) => (a.index ?? 0) - (b.index ?? 0))
+      .map((d) => d.embedding);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Convenience classes
+// ---------------------------------------------------------------------------
+
+/**
+ * OpenAI embedding function.
+ *
+ * @param model      Defaults to `text-embedding-3-small`.
+ * @param dimensions Optional output dimensions for text-embedding-3-* models.
+ */
+export class OpenAIEmbeddingFunction extends ProviderEmbeddingFunction {
+  constructor(model = "text-embedding-3-small", dimensions?: number, userId?: string) {
+    super({ provider: "openai", model, dimensions, userId });
+  }
+}
+
+/**
+ * Ollama embedding function.
+ *
+ * @param model Defaults to `nomic-embed-text`.
+ */
+export class OllamaEmbeddingFunction extends ProviderEmbeddingFunction {
+  constructor(model = "nomic-embed-text", userId?: string) {
+    super({ provider: "ollama", model, userId });
+  }
+}
+
+/**
+ * Gemini embedding function.
+ *
+ * @param model Defaults to `gemini-embedding-2`.
+ */
+export class GeminiEmbeddingFunction extends ProviderEmbeddingFunction {
+  constructor(model = "gemini-embedding-2", userId?: string) {
+    super({ provider: "gemini", model, userId });
+  }
+}
+
+/**
+ * Mistral embedding function.
+ *
+ * @param model Defaults to `mistral-embed`.
+ */
+export class MistralEmbeddingFunction extends ProviderEmbeddingFunction {
+  constructor(model = "mistral-embed", userId?: string) {
+    super({ provider: "mistral", model, userId });
+  }
+}
+
+/**
+ * Cohere embedding function.
+ *
+ * @param model Defaults to `embed-v4.0`.
+ */
+export class CohereEmbeddingFunction extends ProviderEmbeddingFunction {
+  constructor(model = "embed-v4.0", dimensions?: number, userId?: string) {
+    super({ provider: "cohere", model, dimensions, userId });
+  }
+}
+
+/**
+ * Voyage AI embedding function.
+ *
+ * @param model Defaults to `voyage-3.5`.
+ */
+export class VoyageEmbeddingFunction extends ProviderEmbeddingFunction {
+  constructor(model = "voyage-3.5", dimensions?: number, userId?: string) {
+    super({ provider: "voyage", model, dimensions, userId });
+  }
+}
+
+/**
+ * Jina AI embedding function.
+ *
+ * @param model Defaults to `jina-embeddings-v3`.
+ */
+export class JinaEmbeddingFunction extends ProviderEmbeddingFunction {
+  constructor(model = "jina-embeddings-v3", dimensions?: number, userId?: string) {
+    super({ provider: "jina", model, dimensions, userId });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve an embedding function from a model name and optional provider.
+ *
+ * When provider is omitted, the model name is used to infer the provider:
+ * - `text-embedding-*` → OpenAI
+ * - Otherwise → Ollama (if OLLAMA_API_URL is set)
+ * - Fallback → null (caller should handle)
+ *
+ * @param embeddingModel  Model identifier.
+ * @param provider        Optional explicit provider name.
+ */
+export function getProviderEmbeddingFunction(
+  embeddingModel: string,
+  provider?: string | null,
+  opts?: { userId?: string }
+): EmbeddingFunction | null {
+  const userId = opts?.userId;
+  if (provider) {
+    return new ProviderEmbeddingFunction({
+      provider: provider as EmbeddingProvider,
+      model: embeddingModel,
+      userId
+    });
+  }
+
+  // Keep the retired text-embedding-004 prefix for saved collection metadata.
+  if (
+    embeddingModel.startsWith("text-embedding-004") ||
+    embeddingModel.startsWith("gemini-embedding-")
+  ) {
+    return new GeminiEmbeddingFunction(embeddingModel, userId);
+  }
+
+  if (embeddingModel.startsWith("text-embedding-")) {
+    return new OpenAIEmbeddingFunction(embeddingModel, undefined, userId);
+  }
+
+  if (embeddingModel.startsWith("mistral-embed")) {
+    return new MistralEmbeddingFunction(embeddingModel, userId);
+  }
+
+  if (embeddingModel.startsWith("embed-")) {
+    return new CohereEmbeddingFunction(embeddingModel, undefined, userId);
+  }
+
+  if (embeddingModel.startsWith("voyage-")) {
+    return new VoyageEmbeddingFunction(embeddingModel, undefined, userId);
+  }
+
+  if (embeddingModel.startsWith("jina-")) {
+    return new JinaEmbeddingFunction(embeddingModel, undefined, userId);
+  }
+
+  // Default to Ollama for local models (nomic-embed-text, all-minilm, mxbai-embed-large, etc.)
+  const ollamaUrl = process.env.OLLAMA_API_URL;
+  if (ollamaUrl) {
+    return new OllamaEmbeddingFunction(embeddingModel, userId);
+  }
+
+  log.warn(
+    `Could not determine provider for embedding model '${embeddingModel}'. ` +
+      `Set OLLAMA_API_URL or pass an explicit provider.`
+  );
+  return null;
+}

@@ -1,0 +1,30 @@
+{
+  "graph": {
+    "nodes": [
+      {
+        "id": "src",
+        "type": "nodetool.input.StringInput",
+        "name": "text",
+        "data": {
+          "name": "text"
+        }
+      },
+      {
+        "id": "sink",
+        "type": "nodetool.control.Reroute",
+        "name": "output"
+      }
+    ],
+    "edges": [
+      {
+        "source": "src",
+        "sourceHandle": "output",
+        "target": "sink",
+        "targetHandle": "input_value"
+      }
+    ]
+  },
+  "params": {
+    "text": "hello from TS workflow runner"
+  }
+}

@@ -1,0 +1,55 @@
+import { useCallback } from "react";
+import { useNodes } from "../../contexts/NodeContext";
+import { TypeMetadata } from "../../stores/ApiTypes";
+import { shallow } from "zustand/shallow";
+
+export interface UseDynamicOutputResult {
+  handleDeleteOutput: (outputName: string) => void;
+  handleAddOutput: (outputName: string, typeMetadata: TypeMetadata) => void;
+  handleRenameOutput: (oldName: string, newName: string) => void;
+}
+
+export const useDynamicOutput = (
+  nodeId: string,
+  dynamicOutputs: Record<string, TypeMetadata> = {}
+): UseDynamicOutputResult => {
+  const { updateNodeData } = useNodes((state) => ({
+    updateNodeData: state.updateNodeData
+  }), shallow);
+
+  const handleDeleteOutput = useCallback(
+    (outputName: string) => {
+      const updated = { ...dynamicOutputs };
+      delete updated[outputName];
+      updateNodeData(nodeId, { dynamic_outputs: updated });
+    },
+    [dynamicOutputs, nodeId, updateNodeData]
+  );
+
+  const handleAddOutput = useCallback(
+    (outputName: string, typeMetadata: TypeMetadata) => {
+      const updated = { ...dynamicOutputs };
+      updated[outputName] = typeMetadata;
+      updateNodeData(nodeId, { dynamic_outputs: updated });
+    },
+    [dynamicOutputs, nodeId, updateNodeData]
+  );
+
+  const handleRenameOutput = useCallback(
+    (oldName: string, newName: string) => {
+      const updated = { ...dynamicOutputs };
+      updated[newName] = updated[oldName];
+      delete updated[oldName];
+      updateNodeData(nodeId, { dynamic_outputs: updated });
+    },
+    [dynamicOutputs, nodeId, updateNodeData]
+  );
+
+  return {
+    handleDeleteOutput,
+    handleAddOutput,
+    handleRenameOutput
+  };
+};
+
+export default useDynamicOutput;

@@ -1,0 +1,59 @@
+---
+description: Fork extension architecture — keep custom code isolated from upstream
+alwaysApply: true
+---
+
+# Fork architecture
+
+This repo is a **fork** of upstream NodeTool. Upstream is pulled regularly. Custom features, UI tweaks, and business logic must sit on top of base code so merges stay clean.
+
+## Where custom code lives
+
+- Put all fork-only code under **`web/src/custom/`** (UI / web) or **`electron/src/custom/`** (desktop shell).
+- Group by feature: `web/src/custom/<feature-name>/` with an `index.ts` barrel.
+- Prefer new files in `custom/` over editing upstream files.
+
+## Do not edit core unless required
+
+Avoid changing upstream files for feature work. Allowed core touches are thin **mount points** only, for example:
+
+- Importing and rendering a custom wrapper
+- Registering a route, plugin, or hook
+- One-line prop / composition seams
+
+If a core edit is required, wrap it in comment boundaries:
+
+```tsx
+// === CUSTOM FORK START: [Feature Name] ===
+import { ExpandableRailToolbar } from "../../custom/rail-hover-labels";
+// === CUSTOM FORK END ===
+```
+
+```tsx
+{/* === CUSTOM FORK START: [Feature Name] === */}
+<ExpandableRailToolbar {...props} />
+{/* === CUSTOM FORK END === */}
+```
+
+Use the same feature name in START and in the `custom/<feature>/` folder.
+
+## Preferred extension patterns
+
+- **Wrappers** — wrap or replace a base component from `custom/`; mount the wrapper at one core call site.
+- **Registries / maps** — register nodes, routes, menu items, or panels from `custom/` instead of patching lists in core.
+- **Hooks / events** — put fork behavior in custom hooks; call them from a marked mount point.
+- **Style overlays** — keep fork CSS/emotion in `custom/`; do not permanently rewrite upstream style blocks when an overlay works.
+
+## Forbidden patterns
+
+- Large feature logic left inline inside upstream components
+- Unmarked edits scattered across core files
+- Copy-paste forks of whole upstream modules when a wrapper will do
+- Editing upstream design tokens / constants for fork-only values — keep those under `custom/` (and ignore `src/custom/**` in design-token lint when needed)
+
+## Checklist before finishing a fork change
+
+1. New behavior lives under `web/src/custom/<feature>/` (or equivalent).
+2. Core diffs are minimal and wrapped in `CUSTOM FORK` markers.
+3. Tests for the feature live next to the custom module (`custom/<feature>/__tests__/`).
+4. Upstream files still look upstream outside the marked mount points.

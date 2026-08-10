@@ -1,0 +1,413 @@
+"use client";
+import React, { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import dynamic from "next/dynamic";
+import {
+  Cpu,
+  Shield,
+  WifiOff,
+  Code2,
+  HardDrive,
+  Zap,
+  Github,
+  Download,
+} from "lucide-react";
+import { SmartDownloadButton } from "../SmartDownloadButton";
+import SiteHeader from "../../components/SiteHeader";
+import CanvasScreenshot from "../../components/CanvasScreenshot";
+import SiteFooter from "../../components/SiteFooter";
+
+const ModelSupportSection = dynamic(
+  () => import("../../components/ModelSupportSection"),
+  { ssr: true }
+);
+const ModelManagerSection = dynamic(
+  () => import("../../components/ModelManagerSection"),
+  { ssr: true }
+);
+const FeaturesSection = dynamic(
+  () => import("../../components/FeaturesSection"),
+  { ssr: true }
+);
+const EditionsCompareSection = dynamic(
+  () => import("../../components/EditionsCompareSection"),
+  { ssr: true }
+);
+const CommunitySection = dynamic(
+  () => import("../../components/CommunitySection"),
+  { ssr: true }
+);
+const ContactSection = dynamic(
+  () => import("../../components/ContactSection"),
+  { ssr: true }
+);
+
+const sectionContainer = "mx-auto max-w-7xl px-6 lg:px-8";
+
+function usePrefersReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const m = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReduced(m.matches);
+    const onChange = (e: MediaQueryListEvent) => setReduced(e.matches);
+    m.addEventListener?.("change", onChange);
+    return () => m.removeEventListener?.("change", onChange);
+  }, []);
+  return reduced;
+}
+
+const proPoints = [
+  {
+    icon: WifiOff,
+    title: "Works fully offline",
+    body: "Once your local models are downloaded you can disconnect from the internet and keep working, whether you are travelling or on a machine with no network at all.",
+  },
+  {
+    icon: Shield,
+    title: "Your data never leaves the device",
+    body: "Workflows, files, prompts, and results stay on your disk. Nothing is reported back to us, and nothing leaves the machine unless you call a remote provider on purpose.",
+  },
+  {
+    icon: Cpu,
+    title: "Run open models on your machine",
+    body: "Ollama, MLX for Apple Silicon, llama.cpp, and Hugging Face all work with the same building blocks. Pick any open model and pay no usage fees.",
+  },
+  {
+    icon: Zap,
+    title: "Use your GPU to the fullest",
+    body: "NVIDIA graphics cards on Windows and Linux, Apple Silicon on macOS. Image, video, and audio work runs on your own hardware.",
+  },
+  {
+    icon: HardDrive,
+    title: "Own your model library",
+    body: "The built-in model manager downloads and organizes model files and shares them across workflows, so you keep exactly the models you want.",
+  },
+  {
+    icon: Code2,
+    title: "The agent lives here too",
+    body: "The chat agent drives every editor through the same tools you click, and the whole toolbelt speaks MCP — point Claude Desktop or Claude Code at Studio and they can build and run workflows on your machine.",
+  },
+];
+
+const consPoints = [
+  {
+    title: "Hardware matters",
+    body: "Local models need memory and ideally a graphics card. For serious local work we suggest 16GB or more of RAM and at least 4GB of graphics memory.",
+  },
+  {
+    title: "You manage updates",
+    body: "When a new release comes out, you install it. Builds are signed and notarized for macOS and Windows, so updating stays simple.",
+  },
+  {
+    title: "Disk space",
+    body: "Local models are large. Allow around 20GB for a small starter set, and considerably more for image and video models.",
+  },
+];
+
+export default function StudioPage() {
+  const [stars, setStars] = useState<number | null>(null);
+  const parallaxRef = useRef<HTMLDivElement>(null);
+  const reducedMotion = usePrefersReducedMotion();
+
+  useEffect(() => {
+    fetch("https://api.github.com/repos/nodetool-ai/nodetool")
+      .then((r) => r.json())
+      .then((j) => setStars(j.stargazers_count))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (reducedMotion) return;
+    let ticking = false;
+    const handleScroll = () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        if (parallaxRef.current) {
+          const yOffset = window.scrollY * 0.5;
+          parallaxRef.current.style.transform = `translate3d(0, ${yOffset}px, 0)`;
+        }
+        ticking = false;
+      });
+    };
+    handleScroll();
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [reducedMotion]);
+
+  return (
+    <main className="relative min-h-screen overflow-hidden text-white">
+      {/* Background — warm amber/orange tones to differentiate from Cloud */}
+      <div className="absolute inset-0 -z-10 overflow-hidden">
+        <motion.div
+          className="pointer-events-none absolute -top-40 left-1/2 h-[28rem] w-[28rem] -translate-x-1/2 rounded-full bg-amber-500/20 blur-3xl"
+          style={{
+            WebkitMaskImage:
+              "radial-gradient(circle at center, black 0%, transparent 65%)",
+            maskImage:
+              "radial-gradient(circle at center, black 0%, transparent 65%)",
+          }}
+          animate={reducedMotion ? undefined : { y: [0, 10, 0] }}
+          transition={
+            reducedMotion
+              ? undefined
+              : { duration: 18, repeat: Infinity, ease: "easeInOut" }
+          }
+        />
+        <motion.div
+          className="pointer-events-none absolute -bottom-48 right-8 h-[26rem] w-[26rem] rounded-full bg-orange-500/20 blur-3xl"
+          style={{
+            WebkitMaskImage:
+              "radial-gradient(circle at center, black 0%, transparent 65%)",
+            maskImage:
+              "radial-gradient(circle at center, black 0%, transparent 65%)",
+          }}
+          animate={reducedMotion ? undefined : { x: [0, -12, 0], y: [0, 4, 0] }}
+          transition={
+            reducedMotion
+              ? undefined
+              : { duration: 22, repeat: Infinity, ease: "easeInOut" }
+          }
+        />
+        <div
+          aria-hidden="true"
+          className="absolute inset-0"
+          style={{ background: "rgba(0,0,0,0.7)", backdropFilter: "blur(2px)" }}
+        />
+        <div
+          ref={parallaxRef}
+          aria-hidden="true"
+          className="h-full w-full will-change-transform bg-grid-pattern"
+          style={{ transform: "translate3d(0,0,0)" }}
+        />
+      </div>
+
+      <SiteHeader />
+
+      <div
+        id="content"
+        className="relative isolate overflow-hidden pt-24 sm:pt-36 md:pt-24"
+      >
+        {/* Hero */}
+        <section aria-labelledby="studio-hero-title" className="pt-2 relative">
+          <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
+            <div className="absolute -top-32 left-1/3 h-[28rem] w-[28rem] rounded-full bg-amber-500/15 blur-[120px]" />
+            <div className="absolute -bottom-40 right-0 h-[26rem] w-[26rem] rounded-full bg-orange-500/10 blur-[120px]" />
+            <div className="absolute top-1/2 -right-20 h-[20rem] w-[20rem] rounded-full bg-rose-500/10 blur-[120px]" />
+          </div>
+          <div className={sectionContainer}>
+            <div className="grid grid-cols-1 items-center gap-10 lg:grid-cols-12 lg:gap-12 py-12 md:py-20">
+              <div className="lg:col-span-5">
+                <span className="inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-amber-200">
+                  <Cpu className="h-3.5 w-3.5" />
+                  Studio · Desktop · Open source
+                </span>
+                <h1
+                  id="studio-hero-title"
+                  className="mt-6 text-4xl md:text-6xl font-bold tracking-tight text-white leading-[1.05]"
+                >
+                  An agent-first studio that
+                  <br />
+                  <span className="text-transparent bg-clip-text bg-gradient-to-r from-amber-300 to-orange-300">
+                    runs on your machine.
+                  </span>
+                </h1>
+                <p className="mt-6 text-lg text-slate-300 leading-relaxed max-w-xl">
+                  NodeTool Studio is the desktop app for people who want their
+                  models, data — and their agent — on their own machine. Tell
+                  the agent what you want and it builds and runs the workflow
+                  with free local models via Ollama and MLX, or with your own
+                  keys for a cloud provider whenever you need one.
+                </p>
+                <div className="mt-8 flex flex-col gap-3">
+                  <SmartDownloadButton
+                    icon={<Download className="h-5 w-5" />}
+                    classNameOverride="inline-flex w-fit items-center justify-center gap-2 rounded-xl bg-amber-500 px-6 py-3.5 text-sm font-semibold text-slate-950 shadow-lg shadow-amber-900/40 transition-all hover:bg-amber-400 hover:shadow-amber-900/60"
+                  />
+                  <p className="text-xs text-slate-400">
+                    Free · AGPL-3.0 · macOS, Windows, Linux · No account
+                    required ·{" "}
+                    <a
+                      href="https://github.com/nodetool-ai/nodetool/releases/latest"
+                      className="underline underline-offset-2 hover:text-slate-200"
+                    >
+                      All downloads
+                    </a>
+                  </p>
+                </div>
+                <div className="mt-6 inline-flex items-center gap-2 text-sm text-slate-400">
+                  <span>Prefer the browser?</span>
+                  <a
+                    href="/cloud"
+                    className="text-blue-300 hover:text-blue-200 underline underline-offset-2 font-medium"
+                  >
+                    Try NodeTool Cloud →
+                  </a>
+                </div>
+              </div>
+              <div className="relative lg:col-span-7">
+                <div
+                  aria-hidden
+                  className="absolute -inset-6 -z-10 rounded-[2rem] opacity-70 blur-3xl"
+                  style={{
+                    background:
+                      "radial-gradient(60% 60% at 50% 0%, rgba(251,191,36,0.30), transparent 60%), radial-gradient(50% 60% at 100% 100%, rgba(244,114,182,0.22), transparent 60%), radial-gradient(50% 60% at 0% 100%, rgba(249,115,22,0.22), transparent 60%)",
+                  }}
+                />
+                <div className="rounded-2xl border border-slate-700/60 bg-slate-900/80 p-1.5 shadow-2xl shadow-black/60 ring-1 ring-white/5 backdrop-blur">
+                  <CanvasScreenshot alt="NodeTool Studio workflow editor" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Why Studio (Pros) */}
+        <section
+          id="why-local"
+          aria-labelledby="why-studio-title"
+          className="rhythm-section py-20 scroll-mt-24"
+        >
+          <div className={sectionContainer}>
+            <header className="mb-12 max-w-3xl">
+              <div className="mb-3 flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-amber-300/80">
+                <span className="h-px w-8 bg-amber-300/60" />
+                Why run locally
+              </div>
+              <h2
+                id="why-studio-title"
+                className="text-3xl md:text-5xl font-bold tracking-tight text-white"
+              >
+                Privacy, speed, and no usage fees.
+              </h2>
+              <p className="mt-4 text-lg text-slate-400 leading-relaxed max-w-2xl">
+                Everything Studio does, it can do without a network connection.
+                Your prompts, your files, and your models all stay on your own
+                hardware.
+              </p>
+            </header>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-px rounded-2xl overflow-hidden bg-white/5 ring-1 ring-white/5">
+              {proPoints.map((p) => (
+                <div
+                  key={p.title}
+                  className="group relative h-full flex flex-col p-7 bg-slate-950 hover:bg-slate-900/60 transition-colors"
+                >
+                  <div className="mb-5 inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-amber-300">
+                    <p.icon className="h-5 w-5" strokeWidth={1.5} />
+                  </div>
+                  <h3 className="mb-2 text-base font-semibold tracking-tight text-white">
+                    {p.title}
+                  </h3>
+                  <p className="text-sm leading-relaxed text-slate-400">
+                    {p.body}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* Honest tradeoffs */}
+        <section
+          aria-labelledby="studio-tradeoffs-title"
+          className="rhythm-section py-20"
+        >
+          <div className={sectionContainer}>
+            <header className="mb-10 max-w-3xl">
+              <div className="mb-3 flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">
+                <span className="h-px w-8 bg-slate-500/60" />
+                Honest tradeoffs
+              </div>
+              <h2
+                id="studio-tradeoffs-title"
+                className="text-3xl md:text-4xl font-bold tracking-tight text-white"
+              >
+                What Studio asks of you.
+              </h2>
+              <p className="mt-4 text-base text-slate-400 leading-relaxed max-w-2xl">
+                Running everything on your own machine means taking on a few jobs
+                the cloud would otherwise handle. If any of these feel like too
+                much,{" "}
+                <a
+                  href="/cloud"
+                  className="text-blue-300 hover:text-blue-200 underline underline-offset-2"
+                >
+                  NodeTool Cloud
+                </a>{" "}
+                runs the same workflows in your browser.
+              </p>
+            </header>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {consPoints.map((c) => (
+                <div
+                  key={c.title}
+                  className="rounded-xl border border-slate-800/80 bg-slate-950/60 p-6"
+                >
+                  <h3 className="text-base font-semibold text-white mb-2">
+                    {c.title}
+                  </h3>
+                  <p className="text-sm text-slate-400 leading-relaxed">
+                    {c.body}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* Local model support */}
+        <div id="models">
+          <ModelSupportSection reducedMotion={reducedMotion} />
+        </div>
+
+        {/* Model manager */}
+        <ModelManagerSection />
+
+        {/* Generic features (still relevant for Studio) */}
+        <FeaturesSection />
+
+        {/* Editions compare — Studio highlighted */}
+        <EditionsCompareSection
+          reducedMotion={reducedMotion}
+          highlight="studio"
+        />
+
+        {/* Open source reassurance */}
+        <section className="rhythm-section py-16">
+          <div className={sectionContainer}>
+            <div className="mx-auto max-w-3xl rounded-2xl border border-slate-800/80 bg-slate-950/60 p-8 text-center">
+              <Github className="mx-auto h-8 w-8 text-slate-300 mb-4" />
+              <h2 className="text-2xl md:text-3xl font-bold text-white">
+                100% open source. Always.
+              </h2>
+              <p className="mt-4 text-slate-400 leading-relaxed">
+                Studio is released under AGPL-3.0. Every building block, every
+                provider, and every line that runs it is on GitHub. Read it, copy
+                it, or host it yourself. There is no separate paid version.
+              </p>
+              <a
+                href="https://github.com/nodetool-ai/nodetool"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-6 inline-flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-100 hover:border-slate-500 hover:bg-slate-800 transition-colors"
+              >
+                <Github className="h-4 w-4" />
+                View source on GitHub
+              </a>
+            </div>
+          </div>
+        </section>
+
+        {/* Community */}
+        <CommunitySection stars={stars} />
+
+        <div className="mx-auto my-16 h-px max-w-6xl bg-gradient-to-r from-transparent via-amber-800/20 to-transparent" />
+
+        <ContactSection />
+      </div>
+
+      <SiteFooter />
+    </main>
+  );
+}

@@ -1,0 +1,545 @@
+{
+  "name": "nodetool-base",
+  "description": "Nodetool Base nodes",
+  "version": "0.6.3-rc.41",
+  "authors": [
+    "Matthias Georgi <matti.georgi@gmail.com>"
+  ],
+  "repo_id": "",
+  "nodes": [],
+  "assets": [
+    {
+      "package_name": "nodetool-base",
+      "name": "Image to Video Animation.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Summarize Newsletters.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Transcribe Audio.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Concept Art Iteration Board.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Research Paper Summarizer.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "AI Product Launch Video Generator.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Brand Asset Generator.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Movie Posters.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Learning Path Generator.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "ChromaDB Research Agent.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Wikipedia Agent.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Conditional Logic Engine.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Music Video Visualizer.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "thumbnail_prompts.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Fetch Papers.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Color Boost Video.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Image Enhance.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Autonomous Research Agent.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Hacker News Agent.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Flashcard Generator.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Summarize RSS.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Meeting Transcript Summarizer.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Pokemon Maker.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Audio To Image.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Image To Audio Story.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Agent Google Search.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Categorize Mails.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Product Mockup Generator.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "AI Workflows on Reddit.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Creative Story Ideas.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Data Generator.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "YouTube Thumbnail Pipeline.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Social Media Calendar Filler.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Photo Enhancement Suite.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Chat with Docs.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Movie Trailer Generator.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Script to Screen.jpg",
+      "path": ""
+    },
+    {
+      "package_name": "nodetool-base",
+      "name": "Directed Film to Timeline.jpg",
+      "path": ""
+    }
+  ],
+  "examples": [
+    {
+      "id": "data_generator",
+      "name": "Data Generator",
+      "description": "Generate structured data using AI agents",
+      "tags": [
+        "agents"
+      ]
+    },
+    {
+      "id": "004a7fd2-4492-485d-8bdb-ea1ba61f7bdf",
+      "name": "Photo Enhancement Suite",
+      "description": "Batch enhance photos with AI-powered improvements including color correction and upscaling.",
+      "tags": [
+        "image",
+        "photo",
+        "batch processing"
+      ]
+    },
+    {
+      "id": "music_video_visualizer_001",
+      "name": "Music Video Visualizer",
+      "description": "Create reactive visuals from audio tracks with mood-matched imagery. Transcribes audio, analyzes mood/energy, and generates visual frames synced to the music.",
+      "tags": [
+        "video",
+        "audio",
+        "music",
+        "visualization"
+      ]
+    },
+    {
+      "id": "",
+      "name": "Conditional Logic Engine",
+      "description": "Workflow that demonstrates multi-branch decision logic with value routing.",
+      "tags": [
+        "boolean"
+      ]
+    },
+    {
+      "id": "310d885a341811f0942e0000191c0ba5",
+      "name": "Color Boost Video",
+      "description": "",
+      "tags": [
+        "video",
+        "start"
+      ]
+    },
+    {
+      "id": "agent-google-search-example",
+      "name": "Agent Google Search",
+      "description": "Demonstrates an Agent using dynamic outputs to perform Google searches and display results.",
+      "tags": [
+        "agent",
+        "google",
+        "search",
+        "dynamic-outputs"
+      ]
+    },
+    {
+      "id": "summarize-audio",
+      "name": "Summarize Audio",
+      "description": "Transcribe an audio file and summarize the text.",
+      "tags": [
+        "audio",
+        "start",
+        "huggingface",
+        "example"
+      ]
+    },
+    {
+      "id": "fac89302-e7ea-4415-b0a5-da2205da59d7",
+      "name": "Concept Art Iteration Board",
+      "description": "Turn a creative brief, style, and mood into concept art variations. An agent sets the art direction, then a batch of images is generated.",
+      "tags": [
+        "concept-art",
+        "planning",
+        "example"
+      ]
+    },
+    {
+      "id": "0b43765f-3ad4-47f4-bfdc-818100b458fd",
+      "name": "Wikipedia Agent",
+      "description": "Wikipedia style research and documentation agent.",
+      "tags": [
+        "wikipedia",
+        "research",
+        "writing"
+      ]
+    },
+    {
+      "id": "",
+      "name": "Social Media Calendar Filler",
+      "description": "Generate a month's worth of social media content with images, captions, and hashtags. Plans content based on monthly themes and brand guidelines.",
+      "tags": [
+        "content",
+        "social media",
+        "marketing",
+        "planning",
+        "example"
+      ]
+    },
+    {
+      "id": "3527dcf2a7a811f09339000078c92dc5",
+      "name": "Meeting Transcript Summarizer",
+      "description": "Automatically transcribe a meeting recording and generate concise notes.",
+      "tags": [
+        "audio",
+        "llm"
+      ]
+    },
+    {
+      "id": "pokemon-maker",
+      "name": "Pokemon Maker",
+      "description": "",
+      "tags": [
+        "example"
+      ]
+    },
+    {
+      "id": "",
+      "name": "Product Mockup Generator",
+      "description": "Generate product mockups for a given product.",
+      "tags": [
+        "product-mockup",
+        "mockup",
+        "design",
+        "example"
+      ]
+    },
+    {
+      "id": "",
+      "name": "Brand Asset Generator",
+      "description": "Generate brand assets for a given brand.",
+      "tags": [
+        "brand-asset",
+        "branding",
+        "design",
+        "example"
+      ]
+    },
+    {
+      "id": "9ad58a63-abec-4196-bd53-9262bc1e7eb7",
+      "name": "Hacker News Agent",
+      "description": "Scrape and analyze the front page of Hacker News.",
+      "tags": [
+        "hackernews",
+        "news",
+        "analysis"
+      ]
+    },
+    {
+      "id": "4fd373a0a7a711f08ffb0000744cb0d1",
+      "name": "Transcribe Audio",
+      "description": "Convert speech to text using Whisper model with word-level timestamps",
+      "tags": [
+        "start",
+        "audio",
+        "huggingface"
+      ]
+    },
+    {
+      "id": "",
+      "name": "Learning Path Generator",
+      "description": "Create a comprehensive learning path for a topic.",
+      "tags": [
+        "education",
+        "planning",
+        "example"
+      ]
+    },
+    {
+      "id": "creative-story-ideas",
+      "name": "Creative Story Ideas",
+      "description": "A beginner-friendly template demonstrating core NodeTool concepts: inputs, templates, LLM agents, streaming, and outputs. Generate creative story ideas based on your preferences.",
+      "tags": [
+        "start",
+        "beginner",
+        "tutorial",
+        "template",
+        "example"
+      ]
+    },
+    {
+      "id": "audio-to-image",
+      "name": "Audio To Image",
+      "description": "Transform spoken descriptions into images with this workflow. Record or upload audio, which is transcribed by Whisper and then visualized by Stable Diffusion. Perfect for quickly generating images from verbal ideas without typing.",
+      "tags": [
+        "huggingface",
+        "multimodal",
+        "start",
+        "example"
+      ]
+    },
+    {
+      "id": "8c588b4cf3c711efb8fd000014c2afa2",
+      "name": "Fetch Papers",
+      "description": "This workflow automatically fetches and downloads research papers from the Awesome Transformers GitHub repository. It extracts paper links from the README.md file, filters for actual papers, and downloads them to a specified folder. Ideal for researchers and AI enthusiasts who want to stay updated with the latest transformer model papers.",
+      "tags": [
+        "automation"
+      ]
+    },
+    {
+      "id": "flashcard_generator",
+      "name": "Flashcard Generator",
+      "description": "Generate study flashcards using AI and store them persistently in a database. Enter any topic and get instant flashcards that are saved for future review.",
+      "tags": [
+        "education",
+        "database",
+        "ai",
+        "flashcards",
+        "learning"
+      ]
+    },
+    {
+      "id": "add_subtitles_to_video",
+      "name": "Add Subtitles To Video",
+      "description": "This workflow automatically transcribes speech in videos and adds subtitles. It extracts audio from the input video, uses OpenAI's Whisper model to generate word-level timestamps and transcriptions, and then renders the subtitles back onto the original video. Perfect for creating accessible content, adding captions to social media videos, or transcribing presentations.",
+      "tags": [
+        "start",
+        "video",
+        "huggingface"
+      ]
+    },
+    {
+      "id": "image_enhance",
+      "name": "Image Enhance",
+      "description": "Improve image quality with basic enhancement tools like sharpening, contrast and color adjustment",
+      "tags": [
+        "image",
+        "start",
+        "example"
+      ]
+    },
+    {
+      "id": "bcbefdbea78311f09c5e000014a97b82",
+      "name": "Summarize RSS",
+      "description": "",
+      "tags": []
+    },
+    {
+      "id": "movie-posters",
+      "name": "Movie Posters",
+      "description": "Create cinematic movie posters using AI image generation",
+      "tags": [
+        "start",
+        "image",
+        "example"
+      ]
+    },
+    {
+      "id": "830163fea2fc11f0b02700001a475e0e",
+      "name": "Image To Audio Story",
+      "description": "Generate and narrate creative stories from images using AI",
+      "tags": [
+        "start",
+        "multimodal"
+      ]
+    },
+    {
+      "id": "research_paper_summarizer",
+      "name": "Research Paper Summarizer",
+      "description": "Extract and summarize key findings from research papers and technical documents.",
+      "tags": [
+        "research"
+      ]
+    },
+    {
+      "id": "youtube_thumbnail_pipeline_001",
+      "name": "YouTube Thumbnail Pipeline",
+      "description": "Generate multiple eye-catching YouTube thumbnail variations from video scripts. Creates bold text overlays, dramatic styling, and batch processes variations for A/B testing.",
+      "tags": [
+        "image",
+        "youtube",
+        "content creation",
+        "thumbnails"
+      ]
+    },
+    {
+      "id": "youtube-research-claude-agent",
+      "name": "YouTube Research with Claude Agent",
+      "description": "Search YouTube using SerpAPI and analyze results with Claude Agent for deep research insights.",
+      "tags": [
+        "youtube",
+        "research",
+        "serpapi",
+        "claude",
+        "agent",
+        "search",
+        "analysis"
+      ]
+    },
+    {
+      "id": "",
+      "name": "Image to Video Animation",
+      "description": "Generate a high-quality still from text, then animate it into a short cinematic clip.",
+      "tags": [
+        "image",
+        "video",
+        "example"
+      ]
+    },
+    {
+      "id": "",
+      "name": "AI Product Launch Video Generator",
+      "description": "Create a realistic 16:9 marketing video for a new product launch using the TextToVideo node.",
+      "tags": [
+        "business",
+        "data",
+        "video",
+        "example"
+      ]
+    },
+    {
+      "id": "movie_trailer_generator",
+      "name": "Movie Trailer Generator",
+      "description": "Type a single logline and get back a cinematic teaser. The Director node writes the storyboard — a screenplay of shots with camera direction and one style bible — Screenplay Shots turns each shot into an image prompt, and the frames are rendered, animated, and cut together.",
+      "tags": [
+        "video",
+        "generation",
+        "ai",
+        "storytelling",
+        "creative",
+        "trailer",
+        "storyboard",
+        "example"
+      ]
+    },
+    {
+      "id": "script_to_screen",
+      "name": "Script to Screen",
+      "description": "Full production spine: a Director agent turns your brief into a direction document (characters, style bible, shot list, narration, music). A style frame anchors every keyframe for consistency, keyframes form a cheap storyboard you can approve before video spend, then each shot is animated, cut together, and mixed with voiceover and music.",
+      "tags": [
+        "video",
+        "generation",
+        "ai",
+        "storytelling",
+        "creative",
+        "director",
+        "storyboard",
+        "example"
+      ]
+    }
+  ]
+}

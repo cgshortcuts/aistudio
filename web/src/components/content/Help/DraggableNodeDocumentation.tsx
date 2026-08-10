@@ -1,0 +1,182 @@
+/** @jsxImportSource @emotion/react */
+import React, { useMemo, useCallback } from "react";
+import NodeInfo from "../../node_menu/NodeInfo";
+import { css } from "@emotion/react";
+import { useDraggable } from "../../../hooks/useDraggable";
+import {
+  EditorButton,
+  BORDER_RADIUS,
+  SPACING,
+  getSpacingPx
+} from "../../ui_primitives";
+import { useReactFlow } from "@xyflow/react";
+import useNodeMenuStore from "../../../stores/NodeMenuStore";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import useMetadataStore from "../../../stores/MetadataStore";
+import { usePanelStore } from "../../../stores/PanelStore";
+import { useNodes } from "../../../contexts/NodeContext";
+import { shallow } from "zustand/shallow";
+
+// Above every tier on the shared Z_INDEX scale, so it keeps its own value.
+const DOCUMENTATION_PANEL_Z_INDEX = 1000;
+
+const styles = (theme: Theme) => css`
+  position: absolute;
+  z-index: ${DOCUMENTATION_PANEL_Z_INDEX};
+  background-color: ${theme.vars.palette.background.paper};
+  border: 1px solid ${theme.vars.palette.divider};
+  border-radius: ${BORDER_RADIUS.sm};
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  padding: 0;
+  max-width: 400px;
+  min-width: 300px;
+
+  .handle {
+    cursor: move;
+    min-height: 2rem;
+    margin-bottom: ${getSpacingPx(SPACING.md)};
+    background-color: ${theme.vars.palette.background.default};
+    border-bottom: 1px solid ${theme.vars.palette.divider};
+  }
+
+  h1 {
+    font-size: var(--fontSizeBig);
+    margin-bottom: ${getSpacingPx(SPACING.xl)};
+    color: ${theme.vars.palette.primary.main};
+  }
+
+  .loading {
+    font-size: var(--fontSizeNormal);
+    color: ${theme.vars.palette.text.secondary};
+  }
+
+  .warning {
+    font-size: var(--fontSizeNormal);
+    color: ${theme.vars.palette.warning.main};
+  }
+  .content {
+    padding: ${getSpacingPx(SPACING.lg)};
+  }
+
+  .close-button {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: none;
+    border: none;
+    font-size: var(--fontSizeBig);
+    cursor: pointer;
+    color: ${theme.vars.palette.text.secondary};
+  }
+
+  .open-node-menu-button {
+    color: ${theme.vars.palette.primary.main};
+    margin-top: ${getSpacingPx(SPACING.lg)};
+    margin-right: ${getSpacingPx(SPACING.lg)};
+  }
+`;
+
+interface DraggableNodeDocumentationProps {
+  nodeType: string;
+  position: { x: number; y: number };
+  onClose: () => void;
+}
+
+const DraggableNodeDocumentation: React.FC<DraggableNodeDocumentationProps> = ({
+  nodeType,
+  position,
+  onClose
+}) => {
+  const nodeMetadata = useMetadataStore((state) =>
+    state.getMetadata(nodeType ?? "")
+  );
+  const nodeRef = useDraggable<HTMLDivElement>({
+    handle: ".handle",
+    defaultPosition: position
+  });
+  const { createNode, addNode } = useNodes((state) => ({
+    createNode: state.createNode,
+    addNode: state.addNode
+  }), shallow);
+  const reactFlowInstance = useReactFlow();
+  const openNodeMenu = useNodeMenuStore((state) => state.openNodeMenu);
+  const panelSize = usePanelStore((state) => state.panel.panelSize);
+  const theme = useTheme();
+  const cssStyles = useMemo(() => styles(theme), [theme]);
+  const handleAddNode = useCallback(() => {
+    if (nodeMetadata && nodeRef.current) {
+      const rect = nodeRef.current.getBoundingClientRect();
+      const newPosition = reactFlowInstance.screenToFlowPosition({
+        x: rect.right + 20,
+        y: rect.top
+      });
+
+      const newNode = createNode(nodeMetadata, newPosition);
+      newNode.selected = true;
+      addNode(newNode);
+      onClose();
+    }
+  }, [nodeMetadata, nodeRef, createNode, addNode, reactFlowInstance, onClose]);
+
+  const handleOpenNodeMenu = useCallback(() => {
+    if (nodeType) {
+      openNodeMenu({
+        x: panelSize,
+        y: 100
+      });
+    }
+  }, [nodeType, openNodeMenu, panelSize]);
+
+  const content = useMemo(() => {
+    if (!nodeMetadata)
+      {return (
+        <div className="warning">
+          {nodeType} <br />
+          <span style={{ color: theme.vars.palette.grey[100] }}>
+            Sorry, this node does not exist.
+          </span>
+          <EditorButton
+            variant="outlined"
+            density="compact"
+            className="open-node-menu-button"
+            onClick={handleOpenNodeMenu}
+            sx={{ marginTop: getSpacingPx(SPACING.lg) }}
+          >
+            Search for similar nodes
+          </EditorButton>
+        </div>
+      );}
+    return (
+      <>
+        <NodeInfo nodeMetadata={nodeMetadata} />
+        <EditorButton
+          variant="contained"
+          density="normal"
+          onClick={handleAddNode}
+          sx={{ marginTop: getSpacingPx(SPACING.lg), marginRight: getSpacingPx(SPACING.lg) }}
+        >
+          Add Node
+        </EditorButton>
+      </>
+    );
+  }, [
+    nodeMetadata,
+    nodeType,
+    handleAddNode,
+    handleOpenNodeMenu,
+    theme.vars.palette.grey
+  ]);
+
+  return (
+    <div css={cssStyles} ref={nodeRef}>
+      <div className="handle"></div>
+      <button type="button" className="close-button" onClick={onClose}>
+        ×
+      </button>
+      <div className="content">{content}</div>
+    </div>
+  );
+};
+
+export default React.memo(DraggableNodeDocumentation);

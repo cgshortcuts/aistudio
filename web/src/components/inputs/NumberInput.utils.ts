@@ -1,0 +1,121 @@
+
+import {
+  DRAG_SLOWDOWN_RAMP_PX,
+  MIN_SPEED_FACTOR,
+  SHIFT_MIN_SPEED_FACTOR,
+  SHIFT_SLOWDOWN_DIVIDER
+} from "./NumberInput";
+
+// Throttle repeated warnings for invalid bounds.
+let warnedInvalidBounds = false;
+
+export const calculateStep = (
+  min: number | undefined,
+  max: number | undefined,
+  inputType: "int" | "float"
+): number => {
+  let baseStep: number;
+  if (typeof min === "number" && typeof max === "number") {
+    const range = max - min;
+
+    if (inputType === "float") {
+      if (range <= 2) {baseStep = 0.01;}
+      else if (range <= 50) {baseStep = 0.1;}
+      else if (range <= 100) {baseStep = 0.5;}
+      else {baseStep = Math.pow(6, Math.floor(Math.log10(range)) - 2);}
+    } else {
+      if (range <= 20) {baseStep = 0.1;}
+      else if (range <= 1000) {baseStep = 1;}
+      else if (range > 1000 && range <= 5000) {baseStep = 16;}
+      else if (range > 5000 && range <= 10000) {baseStep = 32;}
+      else if (range > 10000) {baseStep = 64;}
+      else {baseStep = Math.pow(6, Math.floor(Math.log10(range)) - 1);}
+    }
+  } else {
+    baseStep = inputType === "float" ? 0.1 : 1;
+  }
+  return baseStep;
+};
+
+export const calculateDecimalPlaces = (baseStep: number): number => {
+  return Math.max(0, Math.ceil(Math.log10(1 / baseStep)));
+};
+
+export const calculateSpeedFactor = (
+  distanceOutside: number,
+  shiftKey: boolean
+): number => {
+  // t is 0 when the mouse is at the slider; 1 once it has moved the full ramp distance.
+  const t = Math.min(distanceOutside / DRAG_SLOWDOWN_RAMP_PX, 1);
+
+  // Interpolate exponentially between 1 (no slowdown) and MIN_SPEED_FACTOR (full slowdown).
+  // Using MIN_SPEED_FACTOR as the base ensures we can go below 10 % when the constant is set smaller.
+  let speedFactor = Math.pow(MIN_SPEED_FACTOR, t);
+
+  // Numerical stability guard (shouldn't be needed, but keeps us safe from NaNs).
+  speedFactor = Math.max(speedFactor, MIN_SPEED_FACTOR);
+
+  if (shiftKey) {
+    speedFactor = Math.max(
+      speedFactor / SHIFT_SLOWDOWN_DIVIDER,
+      SHIFT_MIN_SPEED_FACTOR
+    );
+  }
+
+  return speedFactor;
+};
+
+export const formatFloat = (value: number, minDecimalPlaces: number = 1): string => {
+  const s = value.toString();
+  const dotIndex = s.indexOf(".");
+  if (dotIndex === -1) {
+    return value.toFixed(minDecimalPlaces);
+  }
+  const decimals = s.length - dotIndex - 1;
+  return value.toFixed(Math.max(minDecimalPlaces, decimals));
+};
+
+export const applyValueConstraints = (
+  value: number,
+  min: number | undefined,
+  max: number | undefined,
+  inputType: "int" | "float",
+  decimalPlaces: number,
+  baseStep?: number
+): number => {
+  let constrainedValue = value;
+
+  if (typeof min === "number" && typeof max === "number" && min > max) {
+    if (!warnedInvalidBounds) {
+      console.warn(`Invalid bounds: min (${min}) > max (${max})`);
+      warnedInvalidBounds = true;
+    }
+    const temp = min;
+    min = max;
+    max = temp;
+  }
+
+  // Snap to step if baseStep is provided and greater than zero
+  if (baseStep && baseStep > 0) {
+    const reference = min ?? 0; // align step snapping relative to the minimum value
+    constrainedValue =
+      reference +
+      Math.round((constrainedValue - reference) / baseStep) * baseStep;
+  }
+
+  // Apply rounding based on the input type
+  if (inputType === "float") {
+    constrainedValue = parseFloat(constrainedValue.toFixed(decimalPlaces));
+  } else {
+    constrainedValue = Math.round(constrainedValue);
+  }
+
+  // Clamp to min/max bounds if they exist
+  if (typeof min === "number") {
+    constrainedValue = Math.max(min, constrainedValue);
+  }
+  if (typeof max === "number") {
+    constrainedValue = Math.min(max, constrainedValue);
+  }
+  return constrainedValue;
+};

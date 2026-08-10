@@ -1,0 +1,701 @@
+/**
+ * ResultsStore manages workflow execution results and streaming data.
+ *
+ * Keys are scoped by job: `${workflowId}:${jobId}:${id}` where `id` is a node
+ * id (or an edge id for the `edges` map). This lets concurrent same-workflow
+ * runs keep independent output/progress/edges while the canvas focuses one run
+ * at a time (see WorkflowRunsStore). For a single run the focused job is that
+ * run, so behavior is unchanged.
+ */
+
+import { create } from "zustand";
+import {
+  PlanningUpdate,
+  ProviderCost,
+  Task,
+  TerminalUpdate,
+  ToolCallUpdate
+} from "./ApiTypes";
+import { nodeKey, edgeKey, type NodeKey, type EdgeKey } from "./nodeKey";
+import type { Generation } from "../utils/nodeGenerations";
+
+/**
+ * Accumulated raw terminal stream (ANSI escapes included) for one node run,
+ * replayed into an xterm.js emulator in the node body. `version` increments
+ * whenever `buffer` is NOT a pure append (reset snapshot or overflow trim), so
+ * consumers know to reset the emulator and replay instead of writing a suffix.
+ */
+export type TerminalBuffer = {
+  buffer: string;
+  cols: number;
+  rows: number;
+  version: number;
+};
+
+/** Cap the replay buffer; on overflow keep the most recent half. Trimming can
+ * land mid-escape-sequence — the emulator recovers on the program's next full
+ * redraw (TUIs like Claude Code redraw continuously). */
+const TERMINAL_BUFFER_MAX = 512 * 1024;
+
+/** Rolling-window size for appended audio-chunk stream buffers (~20s of
+ * audio at the synth nodes' 512-frame / 24 kHz chunks). */
+const MAX_AUDIO_STREAM_CHUNKS = 1024;
+
+interface AudioStreamChunk {
+  type: "chunk";
+  content_type: "audio";
+  [key: string]: unknown;
+}
+
+const isAudioStreamChunk = (v: unknown): v is AudioStreamChunk => {
+  if (!v || typeof v !== "object") {
+    return false;
+  }
+  return (
+    "type" in v &&
+    v.type === "chunk" &&
+    "content_type" in v &&
+    v.content_type === "audio"
+  );
+};
+type ResultsStore = {
+  outputResults: Record<NodeKey, unknown>;
+  liveGenerations: Record<string, Generation[]>;
+  providerCosts: Record<NodeKey, ProviderCost>;
+  resultsVersion: number;
+  progress: Record<NodeKey, { progress: number; total: number; chunk?: string }>;
+  edges: Record<EdgeKey, { status: string; counter?: number }>;
+  chunks: Record<NodeKey, string>;
+  terminals: Record<NodeKey, TerminalBuffer>;
+  tasks: Record<NodeKey, Task>;
+  toolCalls: Record<NodeKey, ToolCallUpdate>;
+  toolResults: Record<NodeKey, unknown[]>;
+  planningUpdates: Record<NodeKey, PlanningUpdate>;
+  clearResults: (workflowId: string, nodeIds?: Set<string>) => void;
+  clearOutputResults: (workflowId: string, nodeIds?: Set<string>) => void;
+  clearProgress: (workflowId: string, nodeIds?: Set<string>) => void;
+  clearToolCalls: (workflowId: string, nodeIds?: Set<string>) => void;
+  clearTasks: (workflowId: string, nodeIds?: Set<string>) => void;
+  clearChunks: (workflowId: string, nodeIds?: Set<string>) => void;
+  clearPlanningUpdates: (workflowId: string, nodeIds?: Set<string>) => void;
+  clearEdges: (workflowId: string, edgeIds?: Set<string>) => void;
+  clearJobRunVisuals: (workflowId: string, jobId: string) => void;
+  setEdge: (
+    workflowId: string,
+    jobId: string,
+    edgeId: string,
+    status: string,
+    counter?: number
+  ) => void;
+  getEdge: (
+    workflowId: string,
+    jobId: string,
+    edgeId: string
+  ) => { status: string; counter?: number } | undefined;
+  upsertLiveGeneration: (
+    workflowId: string,
+    nodeId: string,
+    jobId: string,
+    patch: Partial<Generation> & { index?: number }
+  ) => void;
+  getLiveGenerations: (workflowId: string, nodeId: string) => Generation[];
+  getProviderCost: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string
+  ) => ProviderCost | undefined;
+  setProviderCost: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    cost: ProviderCost
+  ) => void;
+  getOutputResult: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string
+  ) => unknown;
+  setOutputResult: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    result: unknown,
+    append?: boolean
+  ) => void;
+  appendOutputResults: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    results: unknown[]
+  ) => void;
+  setTask: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    task: Task
+  ) => void;
+  getTask: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string
+  ) => Task | undefined;
+  addChunk: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    chunk: string
+  ) => void;
+  getChunk: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string
+  ) => string | undefined;
+  addTerminal: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    update: TerminalUpdate
+  ) => void;
+  getTerminal: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string
+  ) => TerminalBuffer | undefined;
+  setToolCall: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    toolCall: ToolCallUpdate
+  ) => void;
+  getToolCall: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string
+  ) => ToolCallUpdate | undefined;
+  appendToolResult: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    result: unknown
+  ) => void;
+  getToolResults: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string
+  ) => unknown[];
+  setProgress: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    progress: number,
+    total: number,
+    chunk?: string
+  ) => void;
+  getProgress: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string
+  ) => { progress: number; total: number; chunk?: string } | undefined;
+  getPlanningUpdate: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string
+  ) => PlanningUpdate | undefined;
+  setPlanningUpdate: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    planningUpdate: PlanningUpdate
+  ) => void;
+};
+
+/**
+ * Filter a record by removing entries matching the given workflow.
+ *
+ * Keys are `${wf}:${job}:${id}`, so the workflow is the leading prefix and the
+ * node/edge id is the final colon-segment.
+ *
+ * - No specificIds: remove every key with the `${workflowId}:` prefix (all jobs).
+ * - With specificIds: remove keys matching the workflow prefix AND ending in
+ *   `:${id}` for one of the ids (i.e. that node/edge across all of the
+ *   workflow's jobs).
+ */
+const filterRecord = <K extends string, T>(
+  record: Record<K, T>,
+  workflowId: string,
+  specificIds?: Set<string>
+): Record<K, T> => {
+  const prefix = `${workflowId}:`;
+  if (specificIds) {
+    const newRecord = { ...record };
+    for (const key in newRecord) {
+      if (key.startsWith(prefix)) {
+        // key format is typically wf:job:id or similar. The final segment is the id.
+        const lastColonIndex = key.lastIndexOf(':');
+        if (lastColonIndex !== -1) {
+          const id = key.substring(lastColonIndex + 1);
+          if (specificIds.has(id)) {
+            delete newRecord[key];
+          }
+        }
+      }
+    }
+    return newRecord;
+  }
+  // Optimization: Use for...in loop to avoid intermediate array allocation.
+  // Match on the colon boundary so workflow IDs that share a prefix don't collide.
+  const newRecord = {} as Record<K, T>;
+  for (const key in record) {
+    if (!key.startsWith(prefix)) {
+      newRecord[key] = record[key];
+    }
+  }
+  return newRecord;
+};
+
+const useResultsStore = create<ResultsStore>((set, get) => ({
+  outputResults: {},
+  liveGenerations: {},
+  providerCosts: {},
+  resultsVersion: 0,
+  progress: {},
+  chunks: {},
+  terminals: {},
+  tasks: {},
+  toolCalls: {},
+  toolResults: {},
+  edges: {},
+  planningUpdates: {},
+  clearEdges: (workflowId: string, edgeIds?: Set<string>) => {
+    set((state) => ({
+      edges: filterRecord(state.edges, workflowId, edgeIds)
+    }));
+  },
+  /**
+   * Drop one run's transient visuals — edge animations and node progress.
+   * Job-scoped (keys are `${workflowId}:${jobId}:…`), so concurrent sibling
+   * runs keep theirs. Outputs/generations are left intact so the cancelled
+   * run can still be focused and inspected.
+   */
+  clearJobRunVisuals: (workflowId: string, jobId: string) => {
+    const prefix = `${workflowId}:${jobId}:`;
+    const dropJobKeys = <K extends string, T>(
+      record: Record<K, T>
+    ): Record<K, T> => {
+      const next = { ...record };
+      for (const key in next) {
+        if (key.startsWith(prefix)) {
+          delete next[key];
+        }
+      }
+      return next;
+    };
+    set((state) => ({
+      edges: dropJobKeys(state.edges),
+      progress: dropJobKeys(state.progress),
+      resultsVersion: state.resultsVersion + 1
+    }));
+  },
+  setPlanningUpdate: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    planningUpdate: PlanningUpdate
+  ) => {
+    set((state) => ({
+      planningUpdates: {
+        ...state.planningUpdates,
+        [nodeKey(workflowId, jobId, nodeId)]: planningUpdate
+      }
+    }));
+  },
+  getPlanningUpdate: (workflowId: string, jobId: string, nodeId: string) => {
+    return get().planningUpdates[nodeKey(workflowId, jobId, nodeId)];
+  },
+  setEdge: (
+    workflowId: string,
+    jobId: string,
+    edgeId: string,
+    status: string,
+    counter?: number
+  ) => {
+    const key = edgeKey(workflowId, jobId, edgeId);
+    const existing = get().edges[key];
+    const newCounter = counter !== undefined ? counter : existing?.counter;
+    if (existing && existing.status === status && existing.counter === newCounter) return;
+    set((state) => ({
+      edges: {
+        ...state.edges,
+        [key]: { status, counter: newCounter }
+      }
+    }));
+  },
+  getEdge: (workflowId: string, jobId: string, edgeId: string) => {
+    return get().edges[edgeKey(workflowId, jobId, edgeId)];
+  },
+  setToolCall: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    toolCall: ToolCallUpdate
+  ) => {
+    set((state) => ({
+      toolCalls: {
+        ...state.toolCalls,
+        [nodeKey(workflowId, jobId, nodeId)]: toolCall
+      }
+    }));
+  },
+  getToolCall: (workflowId: string, jobId: string, nodeId: string) => {
+    return get().toolCalls[nodeKey(workflowId, jobId, nodeId)];
+  },
+  /**
+   * Append a tool result for a node.
+   * Tool results are artifacts of an agent's run (not its output value), so
+   * they accumulate in the toolResults map keyed per (workflow, job, node).
+   */
+  appendToolResult: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    result: unknown
+  ) => {
+    const key = nodeKey(workflowId, jobId, nodeId);
+    set((state) => ({
+      toolResults: {
+        ...state.toolResults,
+        [key]: [...(state.toolResults[key] ?? []), result]
+      }
+    }));
+  },
+  getToolResults: (workflowId: string, jobId: string, nodeId: string) => {
+    return get().toolResults[nodeKey(workflowId, jobId, nodeId)] ?? [];
+  },
+  setTask: (workflowId: string, jobId: string, nodeId: string, task: Task) => {
+    set((state) => ({
+      tasks: { ...state.tasks, [nodeKey(workflowId, jobId, nodeId)]: task }
+    }));
+  },
+  getTask: (workflowId: string, jobId: string, nodeId: string) => {
+    return get().tasks[nodeKey(workflowId, jobId, nodeId)];
+  },
+  /**
+   * Clear all per-node results for a workflow (or for specific nodes of it):
+   * provider costs, live generations, tool results, output results, progress,
+   * chunks, tasks, tool calls and planning updates. Edge status is keyed by
+   * edge id, not node id, so it is cleared separately via `clearEdges`.
+   */
+  clearResults: (workflowId: string, nodeIds?: Set<string>) => {
+    set((state) => ({
+      providerCosts: filterRecord(state.providerCosts, workflowId, nodeIds),
+      liveGenerations: filterRecord(state.liveGenerations, workflowId, nodeIds),
+      toolResults: filterRecord(state.toolResults, workflowId, nodeIds),
+      outputResults: filterRecord(state.outputResults, workflowId, nodeIds),
+      progress: filterRecord(state.progress, workflowId, nodeIds),
+      chunks: filterRecord(state.chunks, workflowId, nodeIds),
+      terminals: filterRecord(state.terminals, workflowId, nodeIds),
+      tasks: filterRecord(state.tasks, workflowId, nodeIds),
+      toolCalls: filterRecord(state.toolCalls, workflowId, nodeIds),
+      planningUpdates: filterRecord(state.planningUpdates, workflowId, nodeIds),
+      resultsVersion: state.resultsVersion + 1
+    }));
+  },
+  clearOutputResults: (workflowId: string, nodeIds?: Set<string>) => {
+    set((state) => ({
+      outputResults: filterRecord(state.outputResults, workflowId, nodeIds)
+    }));
+  },
+  clearProgress: (workflowId: string, nodeIds?: Set<string>) => {
+    set((state) => ({
+      progress: filterRecord(state.progress, workflowId, nodeIds)
+    }));
+  },
+  clearToolCalls: (workflowId: string, nodeIds?: Set<string>) => {
+    set((state) => ({
+      toolCalls: filterRecord(state.toolCalls, workflowId, nodeIds)
+    }));
+  },
+  clearTasks: (workflowId: string, nodeIds?: Set<string>) => {
+    set((state) => ({
+      tasks: filterRecord(state.tasks, workflowId, nodeIds)
+    }));
+  },
+  clearPlanningUpdates: (workflowId: string, nodeIds?: Set<string>) => {
+    set((state) => ({
+      planningUpdates: filterRecord(state.planningUpdates, workflowId, nodeIds)
+    }));
+  },
+  clearChunks: (workflowId: string, nodeIds?: Set<string>) => {
+    set((state) => ({
+      chunks: filterRecord(state.chunks, workflowId, nodeIds)
+    }));
+  },
+  /**
+   * Upsert a live generation slot for a node, keyed by `${workflowId}:${nodeId}`
+   * and grouped by `jobId`. Pure index routing — no job-class policy here (that
+   * lives in the workflowUpdates reducer).
+   *
+   * - `patch.index` present → set/replace the variant at that slot. Variant 0
+   *   keeps `id === jobId` for back-compat with `selected_generation`; variant k
+   *   gets `${jobId}#${k}`. Creates the slot if absent, else merges in place.
+   * - `patch.index` absent → merge onto the NEWEST slot for this job (running
+   *   heartbeats, error settles). Creates slot 0 if the job has no slot yet;
+   *   never spawns a phantom `#k` variant.
+   */
+  upsertLiveGeneration: (workflowId, nodeId, jobId, patch) => {
+    const key = `${workflowId}:${nodeId}`;
+    set((state) => {
+      const list = state.liveGenerations[key] ?? [];
+      // Strip the routing-only `index`: live generations recover their slot
+      // from the id scheme (`${jobId}#k`), so we deliberately don't store
+      // `index` on the live Generation even though the type permits it.
+      const { index, ...rest } = patch;
+
+      if (typeof index === "number") {
+        const id = index === 0 ? jobId : `${jobId}#${index}`;
+        const at = list.findIndex((g) => g.jobId === jobId && g.id === id);
+        if (at >= 0) {
+          const next: Generation = { ...list[at], ...rest, id, jobId };
+          return {
+            liveGenerations: {
+              ...state.liveGenerations,
+              [key]: list.map((g, i) => (i === at ? next : g))
+            }
+          };
+        }
+        const created: Generation = {
+          id,
+          jobId,
+          createdAt: rest.createdAt ?? Date.now(),
+          outputs: {},
+          status: "running",
+          ...rest
+        };
+        return {
+          liveGenerations: {
+            ...state.liveGenerations,
+            [key]: [...list, created]
+          }
+        };
+      }
+
+      // index-less → newest slot for this job, or create slot 0.
+      const idx = list.findLastIndex((g) => g.jobId === jobId);
+      if (idx < 0) {
+        const created: Generation = {
+          id: jobId,
+          jobId,
+          createdAt: rest.createdAt ?? Date.now(),
+          outputs: {},
+          status: "running",
+          ...rest
+        };
+        return {
+          liveGenerations: {
+            ...state.liveGenerations,
+            [key]: [...list, created]
+          }
+        };
+      }
+      const next: Generation = { ...list[idx], ...rest, id: list[idx].id, jobId };
+      return {
+        liveGenerations: {
+          ...state.liveGenerations,
+          [key]: list.map((g, i) => (i === idx ? next : g))
+        }
+      };
+    });
+  },
+
+  getLiveGenerations: (workflowId: string, nodeId: string) =>
+    get().liveGenerations[`${workflowId}:${nodeId}`] ?? [],
+
+  setProviderCost: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    cost: ProviderCost
+  ) => {
+    set((state) => ({
+      providerCosts: {
+        ...state.providerCosts,
+        [nodeKey(workflowId, jobId, nodeId)]: cost
+      }
+    }));
+  },
+
+  getProviderCost: (workflowId: string, jobId: string, nodeId: string) => {
+    return get().providerCosts[nodeKey(workflowId, jobId, nodeId)];
+  },
+
+  getOutputResult: (workflowId: string, jobId: string, nodeId: string) => {
+    return get().outputResults[nodeKey(workflowId, jobId, nodeId)];
+  },
+
+  setOutputResult: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    result: unknown,
+    append?: boolean
+  ) => {
+    const key = nodeKey(workflowId, jobId, nodeId);
+    set((state) => {
+      const currentResult = state.outputResults[key];
+      const nextVersion = state.resultsVersion + 1;
+      if (currentResult === undefined || !append) {
+        return {
+          outputResults: { ...state.outputResults, [key]: result },
+          resultsVersion: nextVersion
+        };
+      } else {
+        if (Array.isArray(currentResult)) {
+          let appended = [...currentResult, result];
+          // Realtime audio streams are infinite; without a cap the buffer
+          // (and the per-chunk array copy above) grows unboundedly and the
+          // resulting GC churn turns into audible scheduling jank. Keep a
+          // rolling window — playback tracks chunks by identity, so head
+          // trimming is safe. Text/other streams are left untouched.
+          if (
+            appended.length > MAX_AUDIO_STREAM_CHUNKS &&
+            isAudioStreamChunk(result)
+          ) {
+            appended = appended.slice(appended.length - MAX_AUDIO_STREAM_CHUNKS);
+          }
+          return {
+            outputResults: {
+              ...state.outputResults,
+              [key]: appended
+            },
+            resultsVersion: nextVersion
+          };
+        } else {
+          return {
+            outputResults: {
+              ...state.outputResults,
+              [key]: [currentResult, result]
+            },
+            resultsVersion: nextVersion
+          };
+        }
+      }
+    });
+  },
+
+  /**
+   * Append a batch of streamed results to a node's buffer in ONE store set.
+   *
+   * Realtime audio streams arrive at ~50 chunks/s per node; appending each
+   * chunk via setOutputResult would do one array copy + one subscriber
+   * notification per chunk. Callers coalesce chunks (workflowUpdates flushes
+   * on a timer) and land them here in a single copy/notify.
+   */
+  appendOutputResults: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    results: unknown[]
+  ) => {
+    if (results.length === 0) return;
+    const key = nodeKey(workflowId, jobId, nodeId);
+    set((state) => {
+      const current = state.outputResults[key];
+      let appended =
+        current === undefined
+          ? [...results]
+          : Array.isArray(current)
+            ? [...current, ...results]
+            : [current, ...results];
+      if (
+        appended.length > MAX_AUDIO_STREAM_CHUNKS &&
+        isAudioStreamChunk(results[results.length - 1])
+      ) {
+        appended = appended.slice(appended.length - MAX_AUDIO_STREAM_CHUNKS);
+      }
+      return {
+        outputResults: { ...state.outputResults, [key]: appended },
+        resultsVersion: state.resultsVersion + 1
+      };
+    });
+  },
+
+  setProgress: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    progress: number,
+    total: number,
+    chunk?: string
+  ) => {
+    const key = nodeKey(workflowId, jobId, nodeId);
+    set((state) => {
+      const currentChunk = state.progress[key]?.chunk || "";
+      return {
+        progress: {
+          ...state.progress,
+          [key]: { progress, total, chunk: currentChunk + (chunk || "") }
+        }
+      };
+    });
+  },
+
+  getProgress: (workflowId: string, jobId: string, nodeId: string) => {
+    return get().progress[nodeKey(workflowId, jobId, nodeId)];
+  },
+  addChunk: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    chunk: string
+  ) => {
+    const key = nodeKey(workflowId, jobId, nodeId);
+    set((state) => {
+      const currentChunk = state.chunks[key] || "";
+      return { chunks: { ...state.chunks, [key]: currentChunk + chunk } };
+    });
+  },
+  getChunk: (workflowId: string, jobId: string, nodeId: string) => {
+    const key = nodeKey(workflowId, jobId, nodeId);
+    return get().chunks[key];
+  },
+  /**
+   * Append a terminal_update to a node's terminal buffer. A `reset` update
+   * (full-screen snapshot) replaces the buffer instead of appending.
+   */
+  addTerminal: (
+    workflowId: string,
+    jobId: string,
+    nodeId: string,
+    update: TerminalUpdate
+  ) => {
+    const key = nodeKey(workflowId, jobId, nodeId);
+    set((state) => {
+      const current = state.terminals[key];
+      let buffer = update.reset
+        ? update.content
+        : (current?.buffer ?? "") + update.content;
+      let version = current?.version ?? 0;
+      if (update.reset) version += 1;
+      if (buffer.length > TERMINAL_BUFFER_MAX) {
+        buffer = buffer.slice(buffer.length - TERMINAL_BUFFER_MAX / 2);
+        version += 1;
+      }
+      return {
+        terminals: {
+          ...state.terminals,
+          [key]: {
+            buffer,
+            cols: update.cols ?? current?.cols ?? 80,
+            rows: update.rows ?? current?.rows ?? 24,
+            version
+          }
+        }
+      };
+    });
+  },
+  getTerminal: (workflowId: string, jobId: string, nodeId: string) => {
+    return get().terminals[nodeKey(workflowId, jobId, nodeId)];
+  }
+}));
+
+export default useResultsStore;

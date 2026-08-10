@@ -1,0 +1,887 @@
+/**
+ * MiniMax provider — exposes MiniMax's full multimodal stack through the
+ * standard BaseProvider interface.
+ *
+ * Chat inherits the OpenAI-compatible path (MiniMax-M2.x models), while image,
+ * video, and speech generation go through MiniMax's own REST endpoints. Video
+ * uses the async task + File API download pattern.
+ *
+ * Docs: https://platform.minimax.io/docs/api-reference/api-overview
+ */
+
+import {
+  OpenAICompatProvider,
+  type OpenAICompatProviderOptions
+} from "./openai-compat-provider.js";
+import type { OpenAIProvider } from "./openai-provider.js";
+import { createLogger } from "@nodetool-ai/config";
+import { safeFetch } from "./safe-url.js";
+import type {
+  ASRModel,
+  EmbeddingModel,
+  EncodedAudioResult,
+  ImageModel,
+  ImageToImageParams,
+  ImageToVideoParams,
+  LanguageModel,
+  MusicModel,
+  StreamingAudioChunk,
+  TextToImageParams,
+  TextToMusicParams,
+  TextToVideoParams,
+  TTSModel,
+  VideoModel
+} from "./types.js";
+
+const log = createLogger("nodetool.runtime.providers.minimax");
+
+const MINIMAX_BASE_URL = "https://api.minimax.io";
+const MINIMAX_OPENAI_BASE_URL = `${MINIMAX_BASE_URL}/v1`;
+
+/**
+ * Known voice IDs shipped with MiniMax speech models. This is a curated subset
+ * of the 300+ system voices — sufficient for UI voice pickers. Users can still
+ * pass any MiniMax voice_id (including cloned voices) through the API.
+ */
+const MINIMAX_VOICES: string[] = [
+  "English_Trustworth_Man",
+  "English_CalmWoman",
+  "English_UpsetGirl",
+  "English_Gentle-voiced_man",
+  "English_Whispering_girl_v3",
+  "English_Diligent_Man",
+  "English_Graceful_Lady",
+  "English_ReservedYoungMan",
+  "English_PlayfulGirl",
+  "English_ManWithDeepVoice",
+  "English_GentleTeacher",
+  "English_MaturePartner",
+  "English_FriendlyPerson",
+  "English_MatureBoss",
+  "English_Debator",
+  "English_LovelyGirl",
+  "English_Steadymentor",
+  "English_Deep-VoicedGentleman",
+  "English_DecentYoungMan",
+  "English_SentimentalLady",
+  "English_ImposingManner",
+  "English_SadTeen",
+  "English_Wiselady",
+  "English_CaptivatingStoryteller",
+  "English_AttractiveGirl",
+  "English_DescendPriest",
+  "English_ConfidentWoman",
+  "English_CuteElf",
+  "English_radiant_girl",
+  "English_Insightful_Speaker",
+  "Chinese (Mandarin)_Warm_Bestie",
+  "Chinese (Mandarin)_Gentleman",
+  "Chinese (Mandarin)_Kind-hearted_Antie",
+  "Chinese (Mandarin)_Lyrical_Voice",
+  "Chinese (Mandarin)_Straightforward_Boy",
+  "Chinese (Mandarin)_Stubborn_Friend",
+  "Chinese (Mandarin)_Sweet_Girl_2",
+  "Chinese (Mandarin)_Gentle_Youth",
+  "Chinese (Mandarin)_Warm_Girl",
+  "Chinese (Mandarin)_Male_Announcer"
+];
+
+const SUPPORTED_IMAGE_ASPECTS: readonly string[] = [
+  "1:1",
+  "16:9",
+  "4:3",
+  "3:2",
+  "2:3",
+  "3:4",
+  "9:16",
+  "21:9"
+];
+
+function chooseAspectRatio(
+  width?: number | null,
+  height?: number | null
+): string | null {
+  if (!width || !height || width <= 0 || height <= 0) return null;
+  const target = width / height;
+  let best: string | null = null;
+  let bestDiff = Number.POSITIVE_INFINITY;
+  for (const aspect of SUPPORTED_IMAGE_ASPECTS) {
+    const [a, b] = aspect.split(":").map(Number);
+    if (!a || !b) continue;
+    const diff = Math.abs(a / b - target);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = aspect;
+    }
+  }
+  return best;
+}
+
+function b64(data: Uint8Array): string {
+  return Buffer.from(data).toString("base64");
+}
+
+function hexToUint8(hex: string): Uint8Array {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  const len = Math.floor(clean.length / 2);
+  const out = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+}
+
+function toInt16Samples(bytes: Uint8Array): Int16Array {
+  const aligned =
+    bytes.length % 2 === 0 ? bytes : bytes.slice(0, bytes.length - 1);
+  return new Int16Array(
+    aligned.buffer,
+    aligned.byteOffset,
+    aligned.byteLength / 2
+  );
+}
+
+interface MinimaxBaseResp {
+  status_code?: number;
+  status_msg?: string;
+}
+
+/** Resolve the abort reason as an Error (mirrors the gemini provider). */
+function abortError(signal?: AbortSignal): Error {
+  return signal?.reason instanceof Error ? signal.reason : new Error("Aborted");
+}
+
+/** Sleep that rejects promptly when `signal` aborts instead of running full. */
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError(signal));
+      return;
+    }
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(abortError(signal));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** MiniMax embeds a `base_resp` on most responses; surface failures as errors. */
+function assertBaseResp(data: Record<string, unknown>, context: string): void {
+  const baseResp = data.base_resp as MinimaxBaseResp | undefined;
+  if (baseResp && baseResp.status_code && baseResp.status_code !== 0) {
+    throw new Error(
+      `MiniMax ${context} failed: ${baseResp.status_msg ?? "unknown error"} (code ${baseResp.status_code})`
+    );
+  }
+}
+
+export class MinimaxProvider extends OpenAICompatProvider {
+  static override requiredSecrets(): string[] {
+    return ["MINIMAX_API_KEY"];
+  }
+
+  private readonly _minimaxFetch: typeof fetch;
+
+  constructor(
+    secrets: { MINIMAX_API_KEY?: string },
+    options: OpenAICompatProviderOptions = {}
+  ) {
+    const apiKey = secrets.MINIMAX_API_KEY;
+    if (!apiKey) {
+      throw new Error("MINIMAX_API_KEY is required");
+    }
+
+    const fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
+
+    super(
+      {
+        providerId: "minimax",
+        apiKey,
+        baseURL: MINIMAX_OPENAI_BASE_URL
+      },
+      { ...options, fetchFn }
+    );
+
+    this._minimaxFetch = fetchFn;
+  }
+
+  override getContainerEnv(): Record<string, string> {
+    return { MINIMAX_API_KEY: this.apiKey };
+  }
+
+  override async hasToolSupport(_model: string): Promise<boolean> {
+    return true;
+  }
+
+  private headers(): Record<string, string> {
+    return {
+      Authorization: `Bearer ${this.apiKey}`,
+      "Content-Type": "application/json"
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Model catalogues
+  // ---------------------------------------------------------------------------
+
+  override async getAvailableLanguageModels(): Promise<LanguageModel[]> {
+    return [
+      { id: "MiniMax-M3", name: "MiniMax M3", provider: "minimax" },
+      { id: "MiniMax-M2.7", name: "MiniMax M2.7", provider: "minimax" },
+      {
+        id: "MiniMax-M2.7-highspeed",
+        name: "MiniMax M2.7 Highspeed",
+        provider: "minimax"
+      },
+      { id: "MiniMax-M2.5", name: "MiniMax M2.5", provider: "minimax" },
+      {
+        id: "MiniMax-M2.5-highspeed",
+        name: "MiniMax M2.5 Highspeed",
+        provider: "minimax"
+      },
+      { id: "MiniMax-M2.1", name: "MiniMax M2.1", provider: "minimax" },
+      {
+        id: "MiniMax-M2.1-highspeed",
+        name: "MiniMax M2.1 Highspeed",
+        provider: "minimax"
+      },
+      { id: "MiniMax-M2", name: "MiniMax M2", provider: "minimax" }
+    ];
+  }
+
+  override async getAvailableImageModels(): Promise<ImageModel[]> {
+    return [
+      {
+        id: "image-01",
+        name: "MiniMax Image-01",
+        provider: "minimax",
+        supportedTasks: ["text_to_image", "image_to_image"]
+      }
+    ];
+  }
+
+  override async getAvailableVideoModels(): Promise<VideoModel[]> {
+    const both = ["text_to_video", "image_to_video"];
+    return [
+      {
+        id: "MiniMax-Hailuo-2.3",
+        name: "MiniMax Hailuo 2.3",
+        provider: "minimax",
+        supportedTasks: both
+      },
+      {
+        id: "MiniMax-Hailuo-2.3-Fast",
+        name: "MiniMax Hailuo 2.3 Fast",
+        provider: "minimax",
+        supportedTasks: ["image_to_video"]
+      },
+      {
+        id: "MiniMax-Hailuo-02",
+        name: "MiniMax Hailuo 02",
+        provider: "minimax",
+        supportedTasks: both
+      },
+      {
+        id: "T2V-01-Director",
+        name: "MiniMax Video-01 Director",
+        provider: "minimax",
+        supportedTasks: ["text_to_video"]
+      },
+      {
+        id: "I2V-01-Director",
+        name: "MiniMax Video-01 Director (I2V)",
+        provider: "minimax",
+        supportedTasks: ["image_to_video"]
+      },
+      {
+        id: "S2V-01",
+        name: "MiniMax Video-01 Subject",
+        provider: "minimax",
+        supportedTasks: ["image_to_video"]
+      }
+    ];
+  }
+
+  override async getAvailableTTSModels(): Promise<TTSModel[]> {
+    return [
+      {
+        id: "speech-2.8-hd",
+        name: "MiniMax Speech 2.8 HD",
+        provider: "minimax",
+        voices: MINIMAX_VOICES
+      },
+      {
+        id: "speech-2.8-turbo",
+        name: "MiniMax Speech 2.8 Turbo",
+        provider: "minimax",
+        voices: MINIMAX_VOICES
+      },
+      {
+        id: "speech-2.6-hd",
+        name: "MiniMax Speech 2.6 HD",
+        provider: "minimax",
+        voices: MINIMAX_VOICES
+      },
+      {
+        id: "speech-2.6-turbo",
+        name: "MiniMax Speech 2.6 Turbo",
+        provider: "minimax",
+        voices: MINIMAX_VOICES
+      },
+      {
+        id: "speech-02-hd",
+        name: "MiniMax Speech 02 HD",
+        provider: "minimax",
+        voices: MINIMAX_VOICES
+      },
+      {
+        id: "speech-02-turbo",
+        name: "MiniMax Speech 02 Turbo",
+        provider: "minimax",
+        voices: MINIMAX_VOICES
+      }
+    ];
+  }
+
+  override async getAvailableMusicModels(): Promise<MusicModel[]> {
+    return [
+      { id: "music-2.6", name: "MiniMax Music 2.6", provider: "minimax" },
+      { id: "music-1.5", name: "MiniMax Music 1.5", provider: "minimax" },
+      { id: "music-01", name: "MiniMax Music 01", provider: "minimax" }
+    ];
+  }
+
+  /**
+   * Generate a full song from a style prompt and lyrics — POST
+   * /v1/music_generation. Returns the encoded audio file (mp3/wav). MiniMax
+   * music requires lyrics; when none are supplied an instrumental marker is
+   * used so the capability stays usable with a prompt alone.
+   */
+  override async textToMusic(
+    params: TextToMusicParams
+  ): Promise<EncodedAudioResult> {
+    if (!params.prompt) throw new Error("prompt must not be empty");
+
+    const fmt = (params.audioFormat ?? "mp3").toLowerCase() === "wav"
+      ? "wav"
+      : "mp3";
+    const body: Record<string, unknown> = {
+      model: params.model.id || "music-2.6",
+      prompt: params.prompt,
+      lyrics: params.lyrics?.trim() || "[Instrumental]",
+      audio_setting: {
+        sample_rate: 44100,
+        bitrate: 256000,
+        format: fmt
+      },
+      output_format: "hex"
+    };
+
+    log.debug("MiniMax textToMusic", { model: body.model, format: fmt });
+
+    const res = await this._minimaxFetch(
+      `${MINIMAX_BASE_URL}/v1/music_generation`,
+      {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body)
+      }
+    );
+    if (!res.ok) {
+      throw new Error(
+        `MiniMax music_generation failed: ${res.status} ${await res.text()}`
+      );
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    assertBaseResp(data, "music_generation");
+
+    const payload = data.data as Record<string, unknown> | undefined;
+    const audioHex = payload?.audio as string | undefined;
+    if (!audioHex) {
+      throw new Error(
+        `MiniMax music_generation returned no audio data: ${JSON.stringify(data)}`
+      );
+    }
+    return {
+      data: hexToUint8(audioHex),
+      mimeType: fmt === "wav" ? "audio/wav" : "audio/mpeg"
+    };
+  }
+
+  /** MiniMax does not expose a public ASR endpoint we support here. */
+  override async getAvailableASRModels(): Promise<ASRModel[]> {
+    return [];
+  }
+
+  /** Embeddings require a MiniMax GroupId we don't manage; leave disabled. */
+  override async getAvailableEmbeddingModels(): Promise<EmbeddingModel[]> {
+    return [];
+  }
+
+  override async automaticSpeechRecognition(
+    _args: Parameters<OpenAIProvider["automaticSpeechRecognition"]>[0]
+  ): Promise<import("./types.js").ASRResult> {
+    throw new Error("minimax does not support automaticSpeechRecognition");
+  }
+
+  override async generateEmbedding(
+    _args: Parameters<OpenAIProvider["generateEmbedding"]>[0]
+  ): Promise<number[][]> {
+    throw new Error("minimax does not support generateEmbedding");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Image generation — POST /v1/image_generation
+  // ---------------------------------------------------------------------------
+
+  override async textToImage(params: TextToImageParams): Promise<Uint8Array> {
+    const images = await this._generateImages(params, null, 1);
+    return images[0];
+  }
+
+  override async textToImages(
+    params: TextToImageParams,
+    numImages: number
+  ): Promise<Uint8Array[]> {
+    return this._generateImages(params, null, numImages);
+  }
+
+  override async imageToImage(
+    images: Uint8Array[],
+    params: ImageToImageParams
+  ): Promise<Uint8Array> {
+    const [first] = await this._generateImages(
+      this._imageToImageAsTextParams(params),
+      images,
+      1
+    );
+    return first;
+  }
+
+  override async imageToImages(
+    images: Uint8Array[],
+    params: ImageToImageParams,
+    numImages: number
+  ): Promise<Uint8Array[]> {
+    return this._generateImages(
+      this._imageToImageAsTextParams(params),
+      images,
+      numImages
+    );
+  }
+
+  private _imageToImageAsTextParams(
+    params: ImageToImageParams
+  ): TextToImageParams {
+    return {
+      model: params.model,
+      prompt: params.prompt,
+      negativePrompt: params.negativePrompt,
+      width: params.targetWidth ?? undefined,
+      height: params.targetHeight ?? undefined,
+      quality: params.quality,
+      guidanceScale: params.guidanceScale,
+      numInferenceSteps: params.numInferenceSteps,
+      seed: params.seed,
+      scheduler: params.scheduler
+    };
+  }
+
+  private async _generateImages(
+    params: TextToImageParams,
+    referenceImages: Uint8Array[] | null,
+    numImages: number
+  ): Promise<Uint8Array[]> {
+    if (!params.prompt) {
+      throw new Error("The input prompt cannot be empty.");
+    }
+
+    const prompt = params.negativePrompt
+      ? `${params.prompt.trim()}\n\nDo not include: ${params.negativePrompt.trim()}`
+      : params.prompt;
+
+    if (numImages > 9) {
+      throw new Error(
+        `MiniMax image_generation supports at most 9 images per request (got ${numImages})`
+      );
+    }
+
+    const body: Record<string, unknown> = {
+      model: params.model.id || "image-01",
+      prompt,
+      n: Math.max(1, numImages),
+      response_format: "base64",
+      prompt_optimizer: true
+    };
+
+    const aspect = chooseAspectRatio(
+      params.width ?? undefined,
+      params.height ?? undefined
+    );
+    if (aspect) body.aspect_ratio = aspect;
+    if (params.seed != null) body.seed = params.seed;
+
+    // MiniMax i2i accepts multiple subject/reference images via a
+    // subject_reference array; each entry carries a base64 Data URL. The first
+    // image is the primary subject, the rest are additional references. The API
+    // docs document no maximum count, so we forward all provided images.
+    if (referenceImages && referenceImages.length > 0) {
+      body.subject_reference = referenceImages.map((image) => ({
+        type: "character",
+        image_file: `data:image/png;base64,${b64(image)}`
+      }));
+    }
+
+    log.debug("MiniMax textToImage", { model: body.model, n: body.n });
+
+    const res = await this._minimaxFetch(
+      `${MINIMAX_BASE_URL}/v1/image_generation`,
+      {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body)
+      }
+    );
+    if (!res.ok) {
+      throw new Error(
+        `MiniMax image_generation failed: ${res.status} ${await res.text()}`
+      );
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    assertBaseResp(data, "image_generation");
+
+    const payload = data.data as Record<string, unknown> | undefined;
+    const b64List = payload?.image_base64 as string[] | undefined;
+    if (b64List && b64List.length > 0) {
+      return b64List.map(
+        (encoded) => new Uint8Array(Buffer.from(encoded, "base64"))
+      );
+    }
+
+    const urls = payload?.image_urls as string[] | undefined;
+    if (urls && urls.length > 0) {
+      const results: Uint8Array[] = [];
+      for (const url of urls) {
+        // safeFetch (not the raw API fetch): this URL comes from the provider
+        // response body, so block internal/link-local targets (SSRF). Route
+        // through the injected fetch so the guard stays testable.
+        const dl = await safeFetch(url, undefined, 5, this._minimaxFetch);
+        if (!dl.ok) {
+          throw new Error(`Failed to download MiniMax image from ${url}`);
+        }
+        results.push(new Uint8Array(await dl.arrayBuffer()));
+      }
+      return results;
+    }
+
+    throw new Error("MiniMax image_generation returned no image data");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Video generation — POST /v1/video_generation + async polling
+  // ---------------------------------------------------------------------------
+
+  override async textToVideo(params: TextToVideoParams): Promise<Uint8Array> {
+    return this._generateVideo(params.model.id, {
+      prompt: params.prompt,
+      durationSeconds: params.durationSeconds,
+      resolution: params.resolution,
+      signal: this._timeoutSignal(params.timeoutSeconds)
+    });
+  }
+
+  override async imageToVideo(
+    images: Uint8Array[],
+    params: ImageToVideoParams
+  ): Promise<Uint8Array> {
+    return this._generateVideo(params.model.id, {
+      prompt: params.prompt ?? undefined,
+      durationSeconds: params.durationSeconds,
+      resolution: params.resolution,
+      firstFrame: images[0],
+      signal: this._timeoutSignal(params.timeoutSeconds)
+    });
+  }
+
+  /**
+   * Per-call timeout signal (mirrors the gemini provider): threaded into the
+   * poll-loop fetch and sleep so an expired budget aborts the in-flight request
+   * promptly instead of leaking it until the fixed poll cap.
+   */
+  private _timeoutSignal(
+    timeoutSeconds?: number | null
+  ): AbortSignal | undefined {
+    return timeoutSeconds && timeoutSeconds > 0
+      ? AbortSignal.timeout(timeoutSeconds * 1000)
+      : undefined;
+  }
+
+  private async _generateVideo(
+    modelId: string,
+    opts: {
+      prompt?: string;
+      durationSeconds?: number | null;
+      resolution?: string | null;
+      firstFrame?: Uint8Array;
+      signal?: AbortSignal;
+    }
+  ): Promise<Uint8Array> {
+    const body: Record<string, unknown> = { model: modelId };
+    if (opts.prompt) body.prompt = opts.prompt;
+
+    // duration/resolution are Hailuo-only knobs; the 01-series models
+    // (T2V-01-Director, I2V-01-Director, S2V-01) are fixed at 6s/720P and
+    // reject the parameters outright.
+    const isHailuo = modelId.startsWith("MiniMax-Hailuo");
+    if (isHailuo) {
+      let duration: number | null = null;
+      if (opts.durationSeconds) {
+        // Hailuo models only render 6s or 10s clips.
+        duration = opts.durationSeconds >= 9 ? 10 : 6;
+        body.duration = duration;
+      }
+      if (opts.resolution) {
+        const r = opts.resolution.toLowerCase();
+        let resolution: string | null = null;
+        if (r.includes("1080")) resolution = "1080P";
+        else if (r.includes("768") || r.includes("720")) resolution = "768P";
+        else if (r.includes("512")) resolution = "512P";
+        // 512P only exists on Hailuo-02; 1080P only renders 6s clips. Keep the
+        // requested duration and fall back to 768P (the API default) rather
+        // than letting MiniMax reject the combination.
+        if (resolution === "512P" && modelId !== "MiniMax-Hailuo-02") {
+          resolution = "768P";
+        }
+        if (resolution === "1080P" && duration === 10) {
+          log.warn(
+            "MiniMax Hailuo renders 10s clips only at 768P; downgrading from 1080P"
+          );
+          resolution = "768P";
+        }
+        if (resolution) body.resolution = resolution;
+      }
+    }
+
+    if (opts.firstFrame) {
+      const dataUrl = `data:image/png;base64,${b64(opts.firstFrame)}`;
+      if (modelId === "S2V-01") {
+        // S2V-01 animates a character reference, not a first frame, and
+        // rejects first_frame_image.
+        body.subject_reference = [{ type: "character", image: [dataUrl] }];
+      } else {
+        body.first_frame_image = dataUrl;
+      }
+    }
+
+    log.debug("MiniMax textToVideo submit", { model: modelId });
+
+    const submit = await this._minimaxFetch(
+      `${MINIMAX_BASE_URL}/v1/video_generation`,
+      {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body),
+        signal: opts.signal
+      }
+    );
+    if (!submit.ok) {
+      throw new Error(
+        `MiniMax video_generation submit failed: ${submit.status} ${await submit.text()}`
+      );
+    }
+    const submitData = (await submit.json()) as Record<string, unknown>;
+    assertBaseResp(submitData, "video_generation submit");
+
+    const taskId = submitData.task_id as string | undefined;
+    if (!taskId) {
+      throw new Error(
+        `MiniMax video_generation returned no task_id: ${JSON.stringify(submitData)}`
+      );
+    }
+
+    const fileId = await this._pollVideoTask(taskId, 5000, 360, opts.signal);
+    return this._downloadFile(fileId, opts.signal);
+  }
+
+  private async _pollVideoTask(
+    taskId: string,
+    pollIntervalMs = 5000,
+    maxAttempts = 360,
+    signal?: AbortSignal
+  ): Promise<string> {
+    const url = `${MINIMAX_BASE_URL}/v1/query/video_generation?task_id=${encodeURIComponent(
+      taskId
+    )}`;
+    for (let i = 0; i < maxAttempts; i++) {
+      const res = await this._minimaxFetch(url, {
+        headers: this.headers(),
+        signal
+      });
+      if (!res.ok) {
+        throw new Error(
+          `MiniMax video status failed: ${res.status} ${await res.text()}`
+        );
+      }
+      const data = (await res.json()) as Record<string, unknown>;
+      // Surface API-level failures (expired task, auth, rate limit) instead of
+      // polling an empty status until the timeout.
+      assertBaseResp(data, "video status");
+      const status = String(data.status ?? "").toLowerCase();
+      if (status === "success") {
+        const fileId = data.file_id as string | undefined;
+        if (!fileId) {
+          throw new Error("MiniMax video task succeeded but returned no file_id");
+        }
+        return fileId;
+      }
+      if (status === "fail" || status === "failed") {
+        throw new Error(
+          `MiniMax video task failed: ${JSON.stringify(data.base_resp ?? data)}`
+        );
+      }
+      await abortableSleep(pollIntervalMs, signal);
+    }
+    throw new Error(
+      `MiniMax video task timed out after ${maxAttempts * pollIntervalMs}ms`
+    );
+  }
+
+  private async _downloadFile(
+    fileId: string,
+    signal?: AbortSignal
+  ): Promise<Uint8Array> {
+    const url = `${MINIMAX_BASE_URL}/v1/files/retrieve?file_id=${encodeURIComponent(
+      fileId
+    )}`;
+    const res = await this._minimaxFetch(url, {
+      headers: this.headers(),
+      signal
+    });
+    if (!res.ok) {
+      throw new Error(
+        `MiniMax files/retrieve failed: ${res.status} ${await res.text()}`
+      );
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    assertBaseResp(data, "files/retrieve");
+    const file = data.file as Record<string, unknown> | undefined;
+    const downloadUrl = (file?.download_url ?? file?.downloadURL) as
+      | string
+      | undefined;
+    if (!downloadUrl) {
+      throw new Error(
+        `MiniMax files/retrieve returned no download_url: ${JSON.stringify(data)}`
+      );
+    }
+    // safeFetch: download_url is provider-returned (externally influenced), so
+    // route it through the SSRF guard rather than the raw API fetch. Use the
+    // injected fetch so the guard stays testable.
+    const dl = await safeFetch(downloadUrl, { signal }, 5, this._minimaxFetch);
+    if (!dl.ok) {
+      throw new Error(`Failed to download MiniMax file from ${downloadUrl}`);
+    }
+    return new Uint8Array(await dl.arrayBuffer());
+  }
+
+  // ---------------------------------------------------------------------------
+  // Text-to-Speech — POST /v1/t2a_v2
+  // ---------------------------------------------------------------------------
+
+  override async textToSpeechEncoded(args: {
+    text: string;
+    model: string;
+    voice?: string;
+    speed?: number;
+    audioFormat?: string;
+  }): Promise<EncodedAudioResult | null> {
+    if (!args.text) {
+      throw new Error("text must not be empty");
+    }
+
+    const fmt = (args.audioFormat ?? "mp3").toLowerCase();
+    const formatToMime: Record<string, string> = {
+      mp3: "audio/mpeg",
+      wav: "audio/wav",
+      flac: "audio/flac",
+      pcm: "audio/pcm"
+    };
+    if (!(fmt in formatToMime) || fmt === "pcm") {
+      // Defer to streaming PCM path for raw samples / unknown formats
+      return null;
+    }
+
+    const bytes = await this._synthesize(args, fmt);
+    return { data: bytes, mimeType: formatToMime[fmt] };
+  }
+
+  override async *textToSpeech(args: {
+    text: string;
+    model: string;
+    voice?: string;
+    speed?: number;
+    audioFormat?: string;
+  }): AsyncGenerator<StreamingAudioChunk> {
+    if (!args.text) {
+      throw new Error("text must not be empty");
+    }
+    const bytes = await this._synthesize(args, "pcm");
+    yield { samples: toInt16Samples(bytes), sampleRate: 32000 };
+  }
+
+  private async _synthesize(
+    args: {
+      text: string;
+      model: string;
+      voice?: string;
+      speed?: number;
+    },
+    format: string
+  ): Promise<Uint8Array> {
+    const body: Record<string, unknown> = {
+      model: args.model || "speech-2.6-hd",
+      text: args.text,
+      stream: false,
+      voice_setting: {
+        voice_id: args.voice ?? "English_Trustworth_Man",
+        speed: Math.max(0.5, Math.min(2.0, args.speed ?? 1.0)),
+        vol: 1.0,
+        pitch: 0
+      },
+      audio_setting: {
+        sample_rate: 32000,
+        bitrate: 128000,
+        format,
+        channel: 1
+      }
+    };
+
+    log.debug("MiniMax textToSpeech", { model: body.model, format });
+
+    const res = await this._minimaxFetch(`${MINIMAX_BASE_URL}/v1/t2a_v2`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) {
+      throw new Error(
+        `MiniMax t2a_v2 failed: ${res.status} ${await res.text()}`
+      );
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    assertBaseResp(data, "t2a_v2");
+
+    const payload = data.data as Record<string, unknown> | undefined;
+    const audioHex = payload?.audio as string | undefined;
+    if (!audioHex) {
+      throw new Error(
+        `MiniMax t2a_v2 returned no audio data: ${JSON.stringify(data)}`
+      );
+    }
+    return hexToUint8(audioHex);
+  }
+}

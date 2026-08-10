@@ -1,0 +1,791 @@
+/**
+ * CodeActExecutor — executes a single step with JavaScript code as the action
+ * space instead of JSON tool calls (Wang et al., ICML 2024, arXiv:2402.01030).
+ *
+ * The provider sees exactly one tool, `execute_code`. Each call runs the
+ * model's program in the QuickJS sandbox where the step's toolbelt is exposed
+ * as `tools.<name>()` functions, a `state` object persists across actions,
+ * and `finish(result)` completes the step (host-validated against the step's
+ * output schema). The program's outcome — return value, logs, error — is the
+ * observation for the next turn.
+ *
+ * The message contract (`task_update`, `step_result`, `tool_call_update`,
+ * `chunk`), memory writes, and failure semantics are byte-compatible with
+ * {@link StepExecutor}, so every consumer works unchanged.
+ */
+
+import type {
+  BaseProvider,
+  ProcessingContext,
+  Message,
+  MessageContent,
+  ProviderStreamItem,
+  ToolCall
+} from "@nodetool-ai/runtime";
+import {
+  ACTIVE_MODEL_CONTEXT_KEY,
+  memoryKeys,
+  withAgentSpanGen,
+  type ActiveModelSelection
+} from "@nodetool-ai/runtime";
+import { createLogger } from "@nodetool-ai/config";
+import {
+  TaskUpdateEvent,
+  type Chunk,
+  type ProcessingMessage,
+  type StepResult,
+  type TaskUpdate,
+  type ToolCallUpdate
+} from "@nodetool-ai/protocol";
+import type { Step, Task } from "../types.js";
+import { Tool } from "../tools/base-tool.js";
+import { getMemoryTools } from "../tools/memory-tools.js";
+import { runInSandbox, type SandboxClock } from "../js-sandbox.js";
+import { truncateToolResult } from "../constants.js";
+import {
+  formatViolations,
+  validateAgainstSchema
+} from "../utils/json-schema-validate.js";
+import { linkAbort } from "../utils/link-abort.js";
+import { removeThinkTags } from "../utils/think-tags.js";
+import {
+  buildToolBridge,
+  toolSignature,
+  CODEACT_PRELUDE,
+  type ToolCallRecord,
+  type ToolSearchHit
+} from "./tool-api.js";
+import { searchTools } from "../tools/tool-search.js";
+import { buildCodeActSystemPrompt } from "./prompt.js";
+import {
+  GRAPH_MODEL_PRELUDE,
+  GRAPH_MODEL_PROMPT_SECTION,
+  GRAPH_MODEL_TOOL_NAMES,
+  hasGraphModelTools
+} from "./graph-model.js";
+import {
+  NODETOOL_API_PRELUDE_FULL,
+  buildNodetoolApiPromptSection,
+  hasNodetoolApiTools,
+  nodetoolApiCoveredToolNames
+} from "./nodetool-api.js";
+
+const log = createLogger("nodetool.agents.codeact");
+
+/**
+ * Code actions batch several tool calls per turn, so the turn budget is
+ * deliberately lower than tool mode's 30.
+ */
+export const DEFAULT_CODEACT_MAX_ITERATIONS = 20;
+
+/**
+ * Wall-clock limit per code action. Codeact actions await real tools —
+ * sub-agents, media generation, background-job waits — so the sandbox's 30 s
+ * default kills legitimate work mid-flight (`run_subtask` alone routinely
+ * takes a minute). The same value feeds QuickJS's interrupt deadline, so a
+ * pure CPU spin can now also run this long — acceptable here because every
+ * action is abortable via the run's signal, and tool-awaiting actions are the
+ * codeact norm.
+ */
+export const DEFAULT_CODEACT_ACTION_TIMEOUT_MS = 600_000;
+
+/**
+ * Input schema for the one provider tool codeact mode exposes. `title` is the
+ * user-facing label the UI shows for the action card while the code runs —
+ * the code itself is a detail view, so without a title the user sees only
+ * "Execute Code". Required: a strict schema (additionalProperties: false)
+ * must list every property under `required` for OpenAI structured outputs.
+ */
+export const EXECUTE_CODE_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    title: {
+      type: "string",
+      description:
+        "3-8 word user-facing summary of what this action does, shown in " +
+        'the UI while it runs (e.g. "Rendering product images from CSV").'
+    },
+    code: {
+      type: "string",
+      description: "The JavaScript program to run."
+    }
+  },
+  required: ["title", "code"],
+  additionalProperties: false
+} as const;
+
+/** The display label for a code action: its title, else a generic fallback. */
+/**
+ * A string leaf that is a JSON-serialized tool envelope rather than the value
+ * itself: it parses to an object carrying an envelope key (status/outputs/
+ * result/error) or a key named like the field it sits in. Deliberately
+ * narrow — a legitimate JSON-text output rarely nests its own field name or a
+ * run envelope.
+ */
+function stringifiedEnvelope(value: string, path: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{")) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return false;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return false;
+  }
+  const keys = Object.keys(parsed);
+  const field = path.split(".").pop()?.replace(/\[\d+\]$/, "") ?? "";
+  return keys.some(
+    (key) =>
+      key === "status" ||
+      key === "outputs" ||
+      key === "result" ||
+      key === "error" ||
+      key === field
+  );
+}
+
+/**
+ * Paths in a finish() payload whose string values carry the tell-tale
+ * `[object Object]` of an unread object coerced to a string, or a
+ * JSON-serialized envelope standing in for the value it wraps. A schema
+ * cannot catch these — the garbage is still a string — so the finish bridge
+ * rejects them and the model repairs the extraction inside the same action.
+ */
+export function coercionArtifactPaths(
+  value: unknown,
+  path = "result",
+  depth = 0
+): string[] {
+  if (depth > 6) return [];
+  if (typeof value === "string") {
+    if (value.includes("[object Object]")) return [path];
+    return stringifiedEnvelope(value, path) ? [path] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, i) =>
+      coercionArtifactPaths(entry, `${path}[${i}]`, depth + 1)
+    );
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).flatMap(([key, entry]) =>
+      coercionArtifactPaths(entry, `${path}.${key}`, depth + 1)
+    );
+  }
+  return [];
+}
+
+export function executeCodeMessage(args: Record<string, unknown>): string {
+  const title = typeof args?.["title"] === "string" ? args["title"].trim() : "";
+  return title || "Executing code action";
+}
+
+export const EXECUTE_CODE_TOOL_NAME = "execute_code";
+
+/**
+ * Tools documented in full in the prompt regardless of toolbelt size — the
+ * high-traffic set nearly every step reaches for (mirroring the chat
+ * runner's resident-toolbelt idea). Everything else is deferred: still
+ * callable, but discovered through `searchTools()` first, so a 70-tool belt
+ * does not cost 70 signatures of prompt.
+ */
+export const CODEACT_RESIDENT_TOOL_NAMES: ReadonlySet<string> = new Set([
+  // Search family — every discovery entry point stays top level.
+  "web_search",
+  "search_nodes",
+  "run_search",
+  "google_news",
+  "google_images",
+  "asset_search",
+  "grep",
+  "glob",
+  // Web + retrieval.
+  "browser",
+  "http_request",
+  "download_file",
+  // Workspace files — the Claude-agent core set (read/write/edit/glob/grep
+  // above) stays top level in full.
+  "read_file",
+  "write_file",
+  "edit_file",
+  "list_directory",
+  // Shared agent memory.
+  "memory_list",
+  "memory_read",
+  "memory_write",
+  // Delegation.
+  "run_subtask"
+]);
+
+/**
+ * Toolbelts at or below this size skip the split entirely — deferring three
+ * tools saves nothing and costs a discovery round.
+ */
+export const CODEACT_DEFER_THRESHOLD = 16;
+
+export interface CodeActExecutorOptions {
+  task: Task;
+  step: Step;
+  context: ProcessingContext;
+  provider: BaseProvider;
+  model: string;
+  tools?: Tool[];
+  /** Preamble layered before the CodeAct contract; cannot override it. */
+  systemPrompt?: string;
+  maxIterations?: number;
+  maxTokens?: number;
+  useFinishTask?: boolean;
+  threadId?: string;
+  upstreamMemoryKeys?: string[];
+  signal?: AbortSignal;
+  /** Wall-clock limit per code action. Defaults to {@link DEFAULT_CODEACT_ACTION_TIMEOUT_MS}. */
+  actionTimeoutMs?: number;
+  /** Tool calls one action may consume. Default 50. */
+  maxToolCallsPerAction?: number;
+  /**
+   * The action's wall clock, which the host stops while a bridged call waits on
+   * the user (a permission prompt). Without it, the time a person spends
+   * deciding is charged to the action budget and the program is killed
+   * mid-wait; the answer then resolves nothing.
+   */
+  clock?: SandboxClock;
+  /**
+   * Tools documented in full in the prompt. Defaults to
+   * {@link CODEACT_RESIDENT_TOOL_NAMES}; the rest of the toolbelt is
+   * deferred behind `searchTools()` once the belt exceeds
+   * {@link CODEACT_DEFER_THRESHOLD}.
+   */
+  residentToolNames?: Iterable<string>;
+}
+
+/** Observation envelope returned to the model after each code action. */
+interface ActionObservation {
+  ok: boolean;
+  result?: unknown;
+  error?: string;
+  stack?: string;
+  logs?: string[];
+  finished?: boolean;
+  toolCalls: number;
+}
+
+export class CodeActExecutor {
+  private readonly task: Task;
+  private readonly step: Step;
+  private readonly context: ProcessingContext;
+  private readonly provider: BaseProvider;
+  private readonly model: string;
+  private readonly tools: Tool[];
+  private readonly systemPrompt: string;
+  private readonly maxIterations: number;
+  private readonly maxTokens?: number;
+  private readonly useFinishTask: boolean;
+  private readonly threadId?: string;
+  private readonly upstreamMemoryKeys: string[];
+  private readonly signal?: AbortSignal;
+  private readonly actionTimeoutMs?: number;
+  private readonly clock?: SandboxClock;
+  private readonly maxToolCallsPerAction?: number;
+  private readonly resultSchema: Record<string, unknown> | null;
+  private readonly residentTools: Tool[];
+  private readonly deferredTools: Tool[];
+  /** Guest prelude for each action: tool wrappers + the object models. */
+  private readonly prelude: string;
+  /** Persists across actions within the step (CaveAgent-style runtime state). */
+  private readonly state: Record<string, unknown> = {};
+  private result: unknown = null;
+  private actionCount = 0;
+
+  constructor(opts: CodeActExecutorOptions) {
+    this.task = opts.task;
+    this.step = opts.step;
+    this.context = opts.context;
+    this.provider = opts.provider;
+    this.model = opts.model;
+    this.tools = opts.tools ? [...opts.tools] : [];
+    this.maxIterations = opts.maxIterations ?? DEFAULT_CODEACT_MAX_ITERATIONS;
+    this.maxTokens = opts.maxTokens;
+    this.useFinishTask = opts.useFinishTask ?? false;
+    this.threadId = opts.threadId;
+    this.upstreamMemoryKeys = opts.upstreamMemoryKeys ?? [];
+    this.signal = opts.signal;
+    this.actionTimeoutMs = opts.actionTimeoutMs;
+    this.clock = opts.clock;
+    this.maxToolCallsPerAction = opts.maxToolCallsPerAction;
+
+    // Memory tools ride in the toolbelt as functions like everything else.
+    const existing = new Set(this.tools.map((t) => t.name));
+    for (const memoryTool of getMemoryTools()) {
+      if (!existing.has(memoryTool.name)) this.tools.push(memoryTool);
+    }
+
+    const toolNames = this.tools.map((t) => t.name);
+    const withGraphModel = hasGraphModelTools(toolNames);
+    const withNodetoolApi = hasNodetoolApiTools(toolNames);
+
+    // Tools an object model wraps are documented once, as `nodetool.*` /
+    // `openWorkflow()` — not again as raw signatures in the catalog. They
+    // stay callable through the bridge (and findable via searchTools).
+    const covered = new Set<string>();
+    if (withNodetoolApi) {
+      for (const name of nodetoolApiCoveredToolNames(toolNames)) {
+        covered.add(name);
+      }
+    }
+    if (withGraphModel) {
+      for (const name of GRAPH_MODEL_TOOL_NAMES) covered.add(name);
+    }
+    const catalogTools = this.tools.filter((t) => !covered.has(t.name));
+
+    // Progressive disclosure: resident tools are documented in full; the
+    // long tail is name-only in the prompt and discovered via searchTools().
+    // Every tool stays callable either way — the split spends prompt tokens,
+    // not capability.
+    const residentNames = new Set(
+      opts.residentToolNames ?? CODEACT_RESIDENT_TOOL_NAMES
+    );
+    if (catalogTools.length <= CODEACT_DEFER_THRESHOLD) {
+      this.residentTools = [...catalogTools];
+      this.deferredTools = [];
+    } else {
+      this.residentTools = catalogTools.filter((t) =>
+        residentNames.has(t.name)
+      );
+      this.deferredTools = catalogTools.filter(
+        (t) => !residentNames.has(t.name)
+      );
+    }
+
+    const nodetoolApiSection = withNodetoolApi
+      ? buildNodetoolApiPromptSection(toolNames)
+      : "";
+    const extraSections: string[] = [];
+    if (withGraphModel) extraSections.push(GRAPH_MODEL_PROMPT_SECTION);
+    if (nodetoolApiSection) extraSections.push(nodetoolApiSection);
+    const preludeParts = [CODEACT_PRELUDE];
+    if (withGraphModel) preludeParts.push(GRAPH_MODEL_PRELUDE);
+    if (withNodetoolApi) preludeParts.push(NODETOOL_API_PRELUDE_FULL);
+    this.prelude = preludeParts.join("\n");
+
+    this.resultSchema = this.loadResultSchema();
+    this.systemPrompt = buildCodeActSystemPrompt({
+      tools: this.residentTools,
+      deferredTools: this.deferredTools,
+      resultSchema: this.resultSchema,
+      preamble: opts.systemPrompt,
+      extraSections
+    });
+  }
+
+  getResult(): unknown {
+    return this.result;
+  }
+
+  async *execute(): AsyncGenerator<ProcessingMessage> {
+    yield* withAgentSpanGen(
+      "step",
+      {
+        provider: this.provider.provider,
+        model: this.model,
+        task: this.step.instructions,
+        toolsCount: this.tools.length,
+        extra: {
+          "agent.step.id": this.step.id,
+          "agent.task.id": this.task.id,
+          "agent.step.mode": "codeact"
+        }
+      },
+      () => this._executeImpl()
+    );
+  }
+
+  private async *_executeImpl(): AsyncGenerator<ProcessingMessage> {
+    log.debug("CodeAct step started", {
+      stepId: this.step.id,
+      instructions: this.step.instructions.slice(0, 60)
+    });
+
+    this.context.set(ACTIVE_MODEL_CONTEXT_KEY, {
+      provider: this.provider.provider,
+      model: this.model
+    } satisfies ActiveModelSelection);
+
+    const history: Message[] = [
+      { role: "system", content: this.systemPrompt },
+      { role: "user", content: this.buildUserMessage() }
+    ];
+
+    this.step.startTime = Date.now();
+    yield this.taskUpdate(TaskUpdateEvent.StepStarted);
+
+    const abort = new AbortController();
+    const unlinkAbort = linkAbort(abort, this.signal);
+    const uiEvents: ProcessingMessage[] = [];
+    let lastAssistant: Message | null = null;
+    let generationError: Error | null = null;
+    let finishedResult: { value: unknown } | null = null;
+
+    const toolsByName = new Map(this.tools.map((t) => [t.name, t]));
+    const onToolCall = (record: ToolCallRecord): void => {
+      const tool = toolsByName.get(record.name);
+      uiEvents.push({
+        type: "tool_call_update",
+        node_id: this.step.id,
+        tool_call_id: record.toolCallId,
+        name: record.name,
+        args: record.args,
+        message: tool
+          ? Tool.resolveMessage(tool, record.args)
+          : `Running ${record.name}`
+      } satisfies ToolCallUpdate);
+    };
+
+    const bridge = buildToolBridge({
+      tools: this.tools,
+      context: this.context,
+      onToolCall,
+      maxToolCallsPerAction: this.maxToolCallsPerAction
+    });
+
+    const finishBridge = async (
+      resultJson: unknown
+    ): Promise<{ ok: true } | { ok: false; error: string }> => {
+      let payload: unknown = null;
+      if (typeof resultJson === "string") {
+        try {
+          payload = JSON.parse(resultJson);
+        } catch {
+          return { ok: false, error: "finish: result must be JSON-serializable" };
+        }
+      }
+      if (payload === null || payload === undefined) {
+        return { ok: false, error: "finish: missing result" };
+      }
+      if (this.resultSchema) {
+        const violations = validateAgainstSchema(payload, this.resultSchema);
+        if (violations.length > 0) {
+          return {
+            ok: false,
+            error: `Result validation failed: ${formatViolations(violations)}`
+          };
+        }
+      }
+      // A schema checks types, not truth — but "[object Object]" is always an
+      // unread object coerced to a string. Reject it here so the catch-around-
+      // finish repair loop fixes the extraction inside the same action.
+      const artifacts = coercionArtifactPaths(payload);
+      if (artifacts.length > 0) {
+        return {
+          ok: false,
+          error:
+            `finish: ${artifacts.join(", ")} holds a coerced or serialized ` +
+            `object instead of the value itself. Log the raw value ` +
+            `(console.log(JSON.stringify(...))) and extract the actual field ` +
+            `— never String() or JSON.stringify() an envelope into a string ` +
+            `field.`
+        };
+      }
+      finishedResult = { value: payload };
+      return { ok: true };
+    };
+
+    // Discovery over the FULL toolbelt (resident hits included, so a
+    // redundant query still answers instead of coming back empty).
+    const searchCatalog = this.tools.map((t) => ({
+      name: t.name,
+      description: t.description
+    }));
+    const searchToolsBridge = async (
+      query: unknown,
+      maxResults: unknown
+    ): Promise<
+      { ok: true; result: ToolSearchHit[] } | { ok: false; error: string }
+    > => {
+      try {
+        const limit =
+          typeof maxResults === "number" && Number.isFinite(maxResults)
+            ? Math.max(1, Math.min(25, Math.floor(maxResults)))
+            : 5;
+        const byName = new Map(this.tools.map((t) => [t.name, t]));
+        const hits = searchTools(searchCatalog, String(query ?? ""), limit).map(
+          (entry): ToolSearchHit => {
+            const tool = byName.get(entry.name) as Tool;
+            return {
+              name: entry.name,
+              signature: toolSignature(tool),
+              description: tool.description
+            };
+          }
+        );
+        return { ok: true, result: hits };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    };
+
+    const executeAction = async (
+      args: Record<string, unknown>
+    ): Promise<string | MessageContent[]> => {
+      const code = typeof args?.["code"] === "string" ? args["code"] : "";
+      if (!code.trim()) {
+        return JSON.stringify({
+          ok: false,
+          error: "execute_code: `code` must be a non-empty string",
+          toolCalls: 0
+        } satisfies ActionObservation);
+      }
+      this.actionCount++;
+      bridge.resetActionBudget();
+
+      const outcome = await runInSandbox({
+        code: `${this.prelude}\n${code}`,
+        context: this.context,
+        timeoutMs: this.actionTimeoutMs ?? DEFAULT_CODEACT_ACTION_TIMEOUT_MS,
+        signal: this.signal,
+        clock: this.clock,
+        globals: {
+          ...bridge.globals,
+          __finish: finishBridge,
+          __searchTools: searchToolsBridge,
+          state: this.state
+        }
+      });
+
+      const observation: ActionObservation = {
+        ok: outcome.success,
+        toolCalls: bridge.callCount()
+      };
+      if (outcome.success) {
+        if (outcome.result !== undefined) observation.result = outcome.result;
+      } else {
+        observation.error = outcome.error;
+        if (outcome.stack) observation.stack = outcome.stack;
+      }
+      if (outcome.logs && outcome.logs.length > 0) {
+        observation.logs = outcome.logs;
+      }
+
+      // A validated finish() completes the step even when the action crashed
+      // after recording it — the model cannot retract a validated result.
+      if (finishedResult) {
+        observation.finished = true;
+        this.storeCompletionResult(finishedResult.value);
+        uiEvents.push(this.taskUpdate(TaskUpdateEvent.StepCompleted));
+        uiEvents.push(this.stepResult(finishedResult.value));
+        abort.abort();
+      }
+
+      const text = truncateToolResult(JSON.stringify(observation));
+      // Pixels a tool returned during the action ride beside the observation
+      // as a provider image message; the observation itself stays light.
+      const images = bridge.drainImages();
+      return images.length > 0
+        ? [{ type: "text", text } as MessageContent, ...images]
+        : text;
+    };
+
+    const providerTools = [
+      {
+        name: EXECUTE_CODE_TOOL_NAME,
+        description:
+          "Execute a JavaScript action in the sandbox. The observation " +
+          "(return value, logs, error) is the tool result.",
+        inputSchema: EXECUTE_CODE_INPUT_SCHEMA,
+        execute: (args: Record<string, unknown>) => executeAction(args)
+      }
+    ];
+
+    const drainUi = function* (): Generator<ProcessingMessage> {
+      while (uiEvents.length > 0) yield uiEvents.shift() as ProcessingMessage;
+    };
+
+    try {
+      const stream = this.provider.generateLoop({
+        messages: history,
+        model: this.model,
+        tools: providerTools,
+        threadId: this.threadId,
+        maxIterations: this.maxIterations,
+        maxTokens: this.maxTokens,
+        sequentialTools: true,
+        signal: abort.signal
+      });
+
+      for await (const item of stream) {
+        if (isToolCall(item)) {
+          yield {
+            type: "tool_call_update",
+            node_id: this.step.id,
+            tool_call_id: item.id,
+            name: item.name,
+            args: item.args,
+            message: executeCodeMessage(item.args)
+          } satisfies ToolCallUpdate;
+          yield* drainUi();
+          continue;
+        }
+        if (isChunk(item)) {
+          if (typeof item.content === "string" && item.content.length > 0) {
+            yield {
+              type: "chunk",
+              node_id: this.step.id,
+              content: item.content,
+              done: false
+            } satisfies Chunk;
+          }
+          yield* drainUi();
+          continue;
+        }
+        if ("type" in item && (item as { type?: string }).type === "message") {
+          const m = (item as { message?: Message }).message;
+          if (m && m.role === "assistant") {
+            lastAssistant =
+              typeof m.content === "string"
+                ? { ...m, content: removeThinkTags(m.content) }
+                : m;
+          }
+        }
+        yield* drainUi();
+      }
+    } catch (e) {
+      generationError = e instanceof Error ? e : new Error(String(e));
+      log.error("CodeAct step generation failed", {
+        stepId: this.step.id,
+        error: generationError.message
+      });
+    } finally {
+      unlinkAbort();
+    }
+
+    yield* drainUi();
+
+    // Unschema'd steps also finalize from a no-tool-call assistant message —
+    // the same prose-mode rule StepExecutor has.
+    if (
+      !this.step.completed &&
+      this.resultSchema === null &&
+      lastAssistant &&
+      (!lastAssistant.toolCalls || lastAssistant.toolCalls.length === 0) &&
+      lastAssistant.content !== null &&
+      lastAssistant.content !== undefined
+    ) {
+      this.storeCompletionResult(lastAssistant.content);
+      yield this.taskUpdate(TaskUpdateEvent.StepCompleted);
+      yield this.stepResult(lastAssistant.content);
+    }
+
+    if (!this.step.completed) {
+      this.step.endTime = Date.now();
+      const message = generationError
+        ? `Step failed: ${generationError.message}`
+        : `Step failed: exceeded ${this.maxIterations} iterations without completion`;
+      this.step.failed = true;
+      this.step.error = message;
+      const errorResult = { error: message };
+      this.result = errorResult;
+      this.context.memory.set({
+        key: memoryKeys.step(this.step.id),
+        kind: "step_result",
+        value: errorResult,
+        source: this.step.id,
+        title: `Failed: ${this.step.instructions.slice(0, 60)}`
+      });
+      yield this.taskUpdate(TaskUpdateEvent.StepFailed);
+      yield {
+        type: "step_result",
+        step: { id: this.step.id, instructions: this.step.instructions },
+        result: errorResult,
+        error: message,
+        is_task_result: this.useFinishTask
+      } satisfies StepResult;
+    }
+  }
+
+  private loadResultSchema(): Record<string, unknown> | null {
+    if (!this.step.outputSchema) return null;
+    try {
+      const parsed = JSON.parse(this.step.outputSchema) as unknown;
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      log.warn("Ignoring unparseable outputSchema", { stepId: this.step.id });
+      return null;
+    }
+  }
+
+  private buildUserMessage(): string {
+    const parts: string[] = [this.step.instructions];
+    const keys = [
+      ...this.step.dependsOn.map((id) => memoryKeys.step(id)),
+      ...this.upstreamMemoryKeys
+    ];
+    if (keys.length > 0) {
+      parts.push(
+        `Required upstream context — read these before acting (via ` +
+          `\`await tools.memory_read({keys: [...]})\`):\n` +
+          keys.map((k) => `- ${k}`).join("\n")
+      );
+    }
+    return parts.join("\n\n");
+  }
+
+  private storeCompletionResult(value: unknown): void {
+    this.step.completed = true;
+    this.step.endTime = Date.now();
+    this.context.memory.set({
+      key: memoryKeys.step(this.step.id),
+      kind: "step_result",
+      value,
+      source: this.step.id,
+      title: this.step.instructions.slice(0, 80)
+    });
+    if (this.useFinishTask) {
+      this.context.memory.set({
+        key: memoryKeys.task(this.task.id),
+        kind: "task_result",
+        value,
+        source: this.task.id,
+        title: this.task.title
+      });
+    }
+    this.result = value;
+  }
+
+  private taskUpdate(event: TaskUpdateEvent): TaskUpdate {
+    return {
+      type: "task_update",
+      node_id: this.step.id,
+      task: { id: this.task.id, title: this.task.title },
+      step: { id: this.step.id, instructions: this.step.instructions },
+      event
+    };
+  }
+
+  private stepResult(result: unknown): StepResult {
+    return {
+      type: "step_result",
+      step: { id: this.step.id, instructions: this.step.instructions },
+      result,
+      is_task_result: this.useFinishTask
+    };
+  }
+}
+
+function isChunk(item: ProviderStreamItem): item is Chunk {
+  return (
+    "type" in item &&
+    (item as unknown as Record<string, unknown>)["type"] === "chunk" &&
+    typeof (item as unknown as Record<string, unknown>)["content"] === "string"
+  );
+}
+
+function isToolCall(item: ProviderStreamItem): item is ToolCall {
+  return (
+    "name" in item &&
+    typeof (item as unknown as Record<string, unknown>)["name"] === "string" &&
+    "id" in item
+  );
+}

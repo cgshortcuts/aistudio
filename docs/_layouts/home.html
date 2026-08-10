@@ -1,0 +1,71 @@
+---
+layout: default
+---
+<div class="home-page">
+  {{ content }}
+</div>
+
+<style>
+.home-page {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--spacing-2xl) var(--spacing-lg);
+}
+
+.home-page > :first-child {
+  margin-top: 0;
+}
+
+.hero-section {
+  text-align: center;
+  padding: var(--spacing-3xl) 0;
+  margin-bottom: var(--spacing-3xl);
+  position: relative;
+}
+
+.hero-title {
+  font-size: 3.5rem;
+  font-family: var(--font-heading);
+  color: var(--color-text-primary);
+  margin-bottom: var(--spacing-md);
+}
+
+.hero-subtitle {
+  font-size: 1.3rem;
+  color: var(--color-text-secondary);
+  max-width: 600px;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+
+.home-content {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: var(--spacing-2xl);
+  box-shadow: 0 4px 20px rgba(75, 150, 210, 0.08);
+}
+
+.home-content h2 {
+  margin-top: 0;
+}
+
+@media (max-width: 768px) {
+  .home-page {
+    padding: var(--spacing-xl) 0;
+  }
+
+  .hero-title {
+    font-size: 2.5rem;
+  }
+
+  .hero-subtitle {
+    font-size: 1.1rem;
+  }
+
+  .home-content {
+    padding: var(--spacing-lg);
+  }
+}
+</style>

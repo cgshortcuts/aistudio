@@ -1,0 +1,107 @@
+/** @jsxImportSource @emotion/react */
+import React, { memo, useMemo } from "react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { createStyles } from "./ThreadList.styles";
+import { ThreadItem } from "./ThreadItem";
+import { EmptyThreadList } from "./EmptyThreadList";
+import type { ThreadListProps } from "../types/thread.types";
+import { ThreadInfo } from "../types/thread.types";
+import { sortThreadsByDate } from "../utils/threadUtils";
+import { groupByDate } from "../../../utils/groupByDate";
+
+export type { ThreadInfo } from "../types/thread.types";
+
+function formatGroupDate(dateStr: string): string {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return "";
+  return date
+    .toLocaleDateString([], { day: "2-digit", month: "short" })
+    .toUpperCase();
+}
+
+const ThreadList: React.FC<ThreadListProps> = ({
+  threads,
+  currentThreadId,
+  onSelectThread,
+  onDeleteThread,
+  getThreadPreview,
+  isFiltered = false
+}) => {
+  const theme = useTheme<Theme>();
+  const componentStyles = useMemo(() => createStyles(theme), [theme]);
+
+  const listElements = useMemo(() => {
+    const elements: React.ReactNode[] = [];
+
+    if (threads && Object.keys(threads).length > 0) {
+      const threadEntries = sortThreadsByDate(threads as Record<string, ThreadInfo>);
+
+      // If there is only one thread, just render it with date
+      if (threadEntries.length === 1) {
+        const [singleId, singleThread] = threadEntries[0];
+        elements.push(
+          <ThreadItem
+            key={singleId}
+            threadId={singleId}
+            thread={singleThread}
+            isSelected={singleId === currentThreadId}
+            onSelect={onSelectThread}
+            onDelete={onDeleteThread}
+            previewText={getThreadPreview(singleId)}
+          />
+        );
+      } else {
+        // Group by human-readable relative label
+        let lastHeaderLabel: string | null = null;
+
+        const now = new Date();
+
+        threadEntries.forEach(([threadId, thread]) => {
+          const dateStr = thread.updatedAt;
+          const updatedAt = new Date(dateStr);
+
+          const headerLabel = groupByDate(updatedAt, now);
+
+          if (headerLabel !== lastHeaderLabel) {
+            elements.push(
+              <li key={`group-${headerLabel}`} className="thread-date-group">
+                <span className="group-label">{headerLabel}</span>
+                <span className="group-date">{formatGroupDate(dateStr)}</span>
+              </li>
+            );
+            lastHeaderLabel = headerLabel;
+          }
+
+          elements.push(
+            <ThreadItem
+              key={threadId}
+              threadId={threadId}
+              thread={thread}
+              isSelected={threadId === currentThreadId}
+              onSelect={onSelectThread}
+              onDelete={onDeleteThread}
+              previewText={getThreadPreview(threadId)}
+            />
+          );
+        });
+      }
+    }
+
+    return elements;
+  }, [threads, currentThreadId, onSelectThread, onDeleteThread, getThreadPreview]);
+
+  return (
+    <div className="thread-list-container" css={componentStyles}>
+      <ul className="thread-list">
+        {!threads || Object.keys(threads).length === 0 || listElements.length === 0 ? (
+          <EmptyThreadList isFiltered={isFiltered} />
+        ) : (
+          listElements
+        )}
+      </ul>
+    </div>
+  );
+};
+
+export default memo(ThreadList);

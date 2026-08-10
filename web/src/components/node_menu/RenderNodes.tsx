@@ -1,0 +1,309 @@
+/** @jsxImportSource @emotion/react */
+import { memo, useCallback, useMemo, useRef } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { useTheme } from "@mui/material/styles";
+import { useVirtualizer } from "@tanstack/react-virtual";
+// store
+import { NodeMetadata } from "../../stores/ApiTypes";
+import useNodeMenuStore from "../../stores/NodeMenuStore";
+// utils
+import NodeItem from "./NodeItem";
+import SearchResultsPanel from "./SearchResultsPanel";
+import { Text } from "../ui_primitives";
+import isEqual from "../../utils/isEqual";
+import ApiKeyValidation from "../node/ApiKeyValidation";
+import usePendingNodeCreateStore from "../../stores/PendingNodeCreateStore";
+import { serializeDragData } from "../../lib/dragdrop";
+import { useDragDropStore } from "../../lib/dragdrop/store";
+
+interface RenderNodesProps {
+  nodes: NodeMetadata[];
+  showCheckboxes?: boolean;
+  selectedNodeTypes?: string[];
+  onToggleSelection?: (nodeType: string) => void;
+  showFavoriteButton?: boolean;
+}
+
+const groupNodes = (nodes: NodeMetadata[]) => {
+  const groups: { [key: string]: NodeMetadata[] } = {};
+  nodes.forEach((node) => {
+    if (!groups[node.namespace]) {
+      groups[node.namespace] = [];
+    }
+    groups[node.namespace].push(node);
+  });
+  return groups;
+};
+
+const getServiceFromNamespace = (namespace: string): string => {
+  const parts = namespace.split(".");
+  return parts[0];
+};
+
+const NODE_ROW_HEIGHT = 32;
+const NAMESPACE_ROW_HEIGHT = 28;
+const API_VALIDATION_ROW_HEIGHT = 36;
+
+const NODES_CONTAINER_STYLE: React.CSSProperties = { height: "100%", overflow: "hidden" };
+const SCROLL_CONTAINER_STYLE: React.CSSProperties = {
+  height: "100%",
+  width: "100%",
+  overflowY: "auto",
+  overflowX: "hidden"
+};
+const VIRTUAL_LIST_STYLE: React.CSSProperties = {
+  width: "100%",
+  position: "relative"
+};
+
+type FlatRow =
+  | {
+      type: "api-validation";
+      key: string;
+      namespace: string;
+    }
+  | {
+      type: "namespace";
+      key: string;
+      namespace: string;
+      textForNamespaceHeader: string;
+    }
+  | {
+      type: "node";
+      key: string;
+      node: NodeMetadata;
+    };
+
+const RenderNodes: React.FC<RenderNodesProps> = ({
+  nodes,
+  showCheckboxes = false,
+  selectedNodeTypes = [],
+  onToggleSelection,
+  showFavoriteButton = true
+}) => {
+  const theme = useTheme();
+  const { setDragToCreate, groupedSearchResults, searchTerm } =
+    useNodeMenuStore(
+      useShallow((state) => ({
+        setDragToCreate: state.setDragToCreate,
+        groupedSearchResults: state.groupedSearchResults,
+        searchTerm: state.searchTerm
+      }))
+    );
+  const setActiveDrag = useDragDropStore((s) => s.setActiveDrag);
+
+  // Route click-to-add via PendingNodeCreateStore (safe outside the editor's
+  // ReactFlowProvider, e.g. inside the left-panel Search view).
+  const requestCreate = usePendingNodeCreateStore((s) => s.requestCreate);
+  const handleDragStart = useCallback(
+    (node: NodeMetadata, event: React.DragEvent<HTMLDivElement>) => {
+      setDragToCreate(true);
+      serializeDragData(
+        { type: "create-node", payload: node },
+        event.dataTransfer
+      );
+      event.dataTransfer.effectAllowed = "move";
+      setActiveDrag({ type: "create-node", payload: node });
+    },
+    [setDragToCreate, setActiveDrag]
+  );
+
+  const selectedPath = useNodeMenuStore((state) => state.selectedPath.join("."));
+
+  const groupedNodes = useMemo(() => {
+    return groupNodes(nodes);
+  }, [nodes]);
+
+  const searchNodes = useMemo(() => {
+    if (searchTerm && groupedSearchResults.length > 0) {
+      return groupedSearchResults.flatMap((group) => group.nodes);
+    }
+    return null;
+  }, [searchTerm, groupedSearchResults]);
+
+  const handleNodeClick = useCallback(
+    (node: NodeMetadata) => {
+      requestCreate(node);
+    },
+    [requestCreate]
+  );
+
+  const selectedNodeTypesSet = useMemo(() => {
+    return new Set(selectedNodeTypes);
+  }, [selectedNodeTypes]);
+
+  const virtualRows = useMemo(() => {
+    const seenServices = new Set<string>();
+    const rows: FlatRow[] = [];
+
+    Object.entries(groupedNodes).forEach(
+      ([namespace, nodesInNamespace], namespaceIndex) => {
+        const service = getServiceFromNamespace(namespace);
+        const isFirstNamespaceForService = !seenServices.has(service);
+        seenServices.add(service);
+
+        if (isFirstNamespaceForService) {
+          rows.push({
+            type: "api-validation",
+            key: `api-key-${service}-${namespaceIndex}`,
+            namespace
+          });
+        }
+
+        let textForNamespaceHeader = namespace; // Default to full namespace string
+
+        if (selectedPath && selectedPath === namespace) {
+          // If the current group of nodes IS the selected namespace, display its last part.
+          // e.g., selectedPath="A.B", namespace="A.B" -> display "B"
+          textForNamespaceHeader = namespace.split(".").pop() || namespace;
+        } else if (selectedPath && namespace.startsWith(selectedPath + ".")) {
+          // If the current group of nodes is a sub-namespace of the selected one, display the relative path.
+          // e.g., selectedPath="A", namespace="A.B.C" -> display "B.C"
+          textForNamespaceHeader = namespace.substring(selectedPath.length + 1);
+        }
+        // If selectedPath is empty (root is selected), textForNamespaceHeader remains the full 'namespace'.
+        // If namespace is not a child of selectedPath and not equal to selectedPath,
+        // it also remains the full 'namespace'.
+
+        rows.push({
+          type: "namespace",
+          key: `namespace-${namespace}-${namespaceIndex}`,
+          namespace,
+          textForNamespaceHeader
+        });
+
+        nodesInNamespace.forEach((node) => {
+          rows.push({
+            type: "node",
+            key: node.node_type,
+            node
+          });
+        });
+      }
+    );
+
+    return rows;
+  }, [groupedNodes, selectedPath]);
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const estimateSize = useCallback(
+    (index: number): number => {
+      const row = virtualRows[index];
+      if (!row) {
+        return NODE_ROW_HEIGHT;
+      }
+      if (row.type === "namespace") {
+        return NAMESPACE_ROW_HEIGHT;
+      }
+      if (row.type === "api-validation") {
+        return API_VALIDATION_ROW_HEIGHT;
+      }
+      return NODE_ROW_HEIGHT;
+    },
+    [virtualRows]
+  );
+
+  const virtualizer = useVirtualizer({
+    count: virtualRows.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize,
+    overscan: theme.virtualScroll.overscan.large,
+    getItemKey: (index) => virtualRows[index]?.key ?? index,
+  });
+
+  return (
+    <div className="nodes" style={NODES_CONTAINER_STYLE}>
+      {nodes.length > 0 ? (
+        searchNodes ? (
+          <SearchResultsPanel searchNodes={searchNodes} />
+        ) : (
+          <div
+            ref={scrollRef}
+            style={SCROLL_CONTAINER_STYLE}
+          >
+            <div
+              style={{
+                ...VIRTUAL_LIST_STYLE,
+                height: virtualizer.getTotalSize()
+              }}
+            >
+              {virtualizer.getVirtualItems().map((vi) => {
+                const row = virtualRows[vi.index];
+                if (!row) {
+                  return null;
+                }
+                const wrapperStyle: React.CSSProperties = {
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  width: "100%",
+                  height: vi.size,
+                  transform: `translateY(${vi.start}px)`,
+                };
+                if (row.type === "api-validation") {
+                  return (
+                    <div key={vi.key} style={wrapperStyle}>
+                      <ApiKeyValidation nodeNamespace={row.namespace} />
+                    </div>
+                  );
+                }
+                if (row.type === "namespace") {
+                  return (
+                    <Text
+                      key={vi.key}
+                      style={wrapperStyle}
+                      size="normal"
+                      weight={600}
+                      component="div"
+                      className="namespace-text"
+                    >
+                      {row.textForNamespaceHeader}
+                    </Text>
+                  );
+                }
+                return (
+                  <div key={vi.key} style={wrapperStyle}>
+                    <NodeItem
+                      node={row.node}
+                      onDragStart={handleDragStart}
+                      onClick={handleNodeClick}
+                      showCheckbox={showCheckboxes}
+                      isSelected={selectedNodeTypesSet.has(row.node.node_type)}
+                      onToggleSelection={onToggleSelection}
+                      showFavoriteButton={showFavoriteButton}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )
+      ) : (
+        <div className="no-selection">
+          <div className="explanation">
+            <Text size="normal" weight={600} style={{ marginTop: 0 }}>
+              Browse Nodes
+            </Text>
+            <ul>
+              <li>Click on the namespaces to the left</li>
+            </ul>
+
+            <Text size="normal" weight={600}>Search Nodes</Text>
+            <ul>
+              <li>Type in the search bar to search for nodes.</li>
+            </ul>
+
+            <Text size="normal" weight={600}>Create Nodes</Text>
+            <ul>
+              <li>Click on a node</li>
+              <li>Drag a node onto the canvas</li>
+            </ul>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default memo(RenderNodes, isEqual);

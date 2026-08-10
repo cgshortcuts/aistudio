@@ -1,0 +1,212 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import type { Theme } from "@mui/material/styles";
+import { MOTION, BORDER_RADIUS, SPACING, getSpacingPx, Z_INDEX } from "../ui_primitives";
+
+export const assetGridStyles = (theme: Theme) => {
+  return css({
+    "&": {
+      display: "flex",
+      marginTop: getSpacingPx(SPACING.xl),
+      flexDirection: "column",
+      justifyContent: "flex-start",
+      height: "100%",
+      containerType: "inline-size"
+    },
+
+    // DROPZONE
+    ".dropzone": {
+      display: "flex",
+      outline: "none",
+      flexDirection: "column",
+      position: "relative",
+      flexGrow: 1,
+      flexShrink: 1,
+      width: "100%",
+      maxHeight: "calc(-260px + 100vh)"
+    },
+    ".audio-controls-container": {
+      position: "absolute",
+      width: "calc(100% - 32px)",
+      left: "16px",
+      bottom: "0",
+      display: "flex",
+      flexDirection: "column",
+      gap: "0.25em",
+      zIndex: Z_INDEX.overlay,
+      padding: "0.5em",
+      borderTop: `2px solid ${theme.vars.palette.divider}`,
+      backgroundColor: theme.vars.palette.grey[800]
+    },
+    ".controls .zoom": {
+      maxWidth: "200px",
+      paddingBottom: "0.5em"
+    },
+    ".current-folder": {
+      display: "block",
+      left: "0",
+      fontSize: theme.fontSizeNormal,
+      color: theme.vars.palette.grey[200],
+      margin: "1em 0 0 0"
+    },
+    ".folder-slash": {
+      color: theme.vars.palette.primary.main,
+      fontWeight: 600,
+      marginRight: "0.25em",
+      userSelect: "none"
+    },
+    ".selected-asset-info": {
+      display: "flex",
+      alignItems: "center",
+      fontSize: `${theme.vars.fontSizeSmall} !important`,
+      color: theme.vars.palette.grey[400],
+      minHeight: "25px",
+      padding: "0",
+      margin: "0 0 0 0.5em"
+    },
+    ".folder-list-container": {
+      padding: 0
+    },
+    ".folder-list": {
+      listStyleType: "none",
+      padding: 0,
+      margin: 0
+    },
+    ".folder-item": {
+      position: "relative",
+      alignItems: "center",
+      padding: `${getSpacingPx(SPACING.micro)} ${getSpacingPx(SPACING.sm)}`,
+      marginLeft: 0,
+      borderRadius: BORDER_RADIUS.sm
+    },
+    ".folder-icon": {
+      marginRight: "0.1em",
+      color: theme.vars.palette.grey[500],
+      verticalAlign: "middle",
+      backgroundColor: "transparent"
+    },
+    ".folder-name": {
+      fontSize: theme.fontSizeSmall,
+      color: theme.vars.palette.grey[100],
+      verticalAlign: "middle"
+    },
+    ".folder-item.selected": {
+      backgroundColor: theme.vars.palette.c_overlay,
+      "& .folder-name": {
+        color: theme.vars.palette.grey[0],
+        fontWeight: 500
+      },
+      "& .folder-icon": {
+        color: theme.vars.palette.c_folder
+      }
+    },
+    ".root-folder": {
+      paddingLeft: getSpacingPx(SPACING.xs)
+    },
+    ".root-folder .folder-name": {
+      fontSize: theme.fontSizeSmall,
+      textTransform: "uppercase",
+      letterSpacing: "0.08em",
+      color: theme.vars.palette.grey[400],
+      fontWeight: 500
+    },
+    ".root-folder.selected .folder-name, .root-folder .folder-item.selected .folder-name": {
+      color: theme.vars.palette.grey[200]
+    },
+    ".file-info": {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "flex-end",
+      "& > span": {
+        textOverflow: "ellipsis",
+        overflow: "hidden",
+        whiteSpace: "nowrap",
+        maxWidth: "200px"
+      }
+    },
+    "@media (max-width: 600px)": {
+      "&": {
+        marginTop: "0"
+      },
+      ".dropzone": {
+        maxHeight: "calc(100vh - 140px)"
+      },
+      ".audio-controls-container": {
+        left: "8px",
+        width: "calc(100% - 16px)"
+      }
+    },
+    "@container (max-width: 520px)": {
+      ".header-info": {
+        display: "none !important"
+      }
+    },
+    // DOCKVIEW
+    "& .dv-tabs-and-actions-container": {
+      display: "none !important"
+    },
+    "& .dv-split-view-container .dv-view-container .dv-view": {
+      padding: "0"
+    },
+    // resize handle
+    "& .dv-split-view-container > .dv-sash-container > .dv-sash": {
+      position: "relative",
+      backgroundColor: "transparent",
+      transition: MOTION.background,
+      borderRadius: BORDER_RADIUS.xs
+    },
+    "& .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash":
+      {
+        width: "10px",
+        cursor: "ew-resize",
+        transform: "translate(0px, 0px)"
+      },
+    "& .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash::after":
+      {
+        content: '""',
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+        width: "2px",
+        height: "30%",
+        maxHeight: "100px",
+        backgroundColor: theme.vars.palette.grey[300],
+        borderRadius: BORDER_RADIUS.xs,
+        opacity: 0.6,
+        transition: `${MOTION.background}, ${MOTION.opacity}`
+      },
+    "& .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash": {
+      height: "10px",
+      cursor: "ns-resize",
+      transform: "translate(0px, 0px)"
+    },
+    "& .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash::after":
+      {
+        content: '""',
+        position: "absolute",
+        left: "50%",
+        top: "50%",
+        transform: "translate(-50%, -50%)",
+        width: "30%",
+        maxWidth: "100px",
+        height: "2px",
+        backgroundColor: theme.vars.palette.grey[300],
+        borderRadius: BORDER_RADIUS.xs,
+        opacity: 0.6,
+        transition: `${MOTION.background}, ${MOTION.opacity}`
+      },
+    "& .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash:hover::after":
+      {
+        backgroundColor: `${theme.vars.palette.primary.main} !important`,
+        opacity: 1
+      },
+    "& .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash:hover::after":
+      {
+        backgroundColor: `${theme.vars.palette.primary.main} !important`,
+        opacity: 1
+      }
+  });
+};
+
+export default assetGridStyles;

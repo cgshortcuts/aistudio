@@ -1,0 +1,159 @@
+import { useCallback } from "react";
+import { Node, Edge, useReactFlow } from "@xyflow/react";
+import { NodeData } from "../stores/NodeData";
+import { DUPLICATE_SPACING } from "../config/constants";
+import { useNodes, useNodeStoreRef } from "../contexts/NodeContext";
+import { shallow } from "zustand/shallow";
+
+/**
+ * Hook for duplicating selected nodes and their connected edges.
+ *
+ * @param vertical - If true, duplicates vertically; if false, horizontally
+ * @param keepUpstreamConnections - If true (default), preserves incoming edges from non-selected nodes
+ *
+ * @example
+ * const duplicateNodes = useDuplicateNodes();
+ * duplicateNodes(); // Duplicate horizontally
+ * const duplicateVertical = useDuplicateNodes(true);
+ * const duplicateIsolated = useDuplicateNodes(false, false);
+ */
+export const useDuplicateNodes = (
+  vertical: boolean = false,
+  keepUpstreamConnections: boolean = true
+): (() => void) => {
+  const reactFlow = useReactFlow();
+  // Subscribe to the actions only; `nodes`/`edges` are read lazily below so
+  // the returned callback keeps a stable identity.
+  const { setNodes, setEdges, generateNodeIds, getSelectedNodes } = useNodes(
+    (state) => ({
+      setNodes: state.setNodes,
+      setEdges: state.setEdges,
+      getSelectedNodes: state.getSelectedNodes,
+      generateNodeIds: state.generateNodeIds
+    }),
+    shallow
+  );
+  const nodeStore = useNodeStoreRef();
+  return useCallback(() => {
+    const getNodesBounds = reactFlow.getNodesBounds;
+    const { nodes, edges } = nodeStore.getState();
+    const selectedNodes = getSelectedNodes();
+
+    if (selectedNodes.length === 0) {
+      return;
+    }
+
+    const nodeBounds = getNodesBounds(selectedNodes);
+    const offsetX = vertical ? 0 : nodeBounds.width + DUPLICATE_SPACING;
+    const offsetY = vertical ? nodeBounds.height + DUPLICATE_SPACING : 0;
+
+    const newIds = generateNodeIds(selectedNodes.length);
+    const oldToNewIds = new Map<string, string>();
+    selectedNodes.forEach((node, index) => {
+      oldToNewIds.set(node.id, newIds[index]);
+    });
+
+    const newNodes: Node<NodeData>[] = [];
+    for (const node of selectedNodes) {
+      const newId = oldToNewIds.get(node.id);
+      if (!newId) {continue;}
+
+      const parentId = node.parentId;
+      const isParentDuplicated = parentId ? oldToNewIds.has(parentId) : false;
+
+      const newParentId = parentId
+        ? isParentDuplicated
+          ? oldToNewIds.get(parentId) ?? parentId
+          : parentId
+        : undefined;
+
+      const positionOffsetX = isParentDuplicated ? 0 : offsetX;
+      const positionOffsetY = isParentDuplicated ? 0 : offsetY;
+
+      const newNode: Node<NodeData> = {
+        ...node,
+        id: newId,
+        parentId: newParentId,
+        position: {
+          x: node.position.x + positionOffsetX,
+          y: node.position.y + positionOffsetY
+        },
+        data: {
+          ...node.data,
+          positionAbsolute: node.data.positionAbsolute
+            ? {
+                x: node.data.positionAbsolute.x + positionOffsetX,
+                y: node.data.positionAbsolute.y + positionOffsetY
+              }
+            : undefined
+        },
+        selected: true
+      };
+
+      newNodes.push(newNode);
+    }
+
+    const selectedNodeIds = selectedNodes.map((node) => node.id);
+    const selectedNodeIdsSet = new Set(selectedNodeIds);
+    const connectedEdges = edges.filter(
+      (edge) =>
+        selectedNodeIdsSet.has(edge.source) ||
+        selectedNodeIdsSet.has(edge.target)
+    );
+
+    const newEdges: Edge[] = [];
+    for (const edge of connectedEdges) {
+      const sourceInSelection = selectedNodeIdsSet.has(edge.source);
+      const targetInSelection = selectedNodeIdsSet.has(edge.target);
+
+      if (sourceInSelection && targetInSelection) {
+        const newSource = oldToNewIds.get(edge.source);
+        const newTarget = oldToNewIds.get(edge.target);
+        if (!newSource || !newTarget) {continue;}
+        newEdges.push({
+          ...edge,
+          id: crypto.randomUUID(),
+          source: newSource,
+          target: newTarget,
+          selected: false
+        });
+      } else if (
+        keepUpstreamConnections &&
+        !sourceInSelection &&
+        targetInSelection
+      ) {
+        const newTarget = oldToNewIds.get(edge.target);
+        if (!newTarget) {continue;}
+        newEdges.push({
+          ...edge,
+          id: crypto.randomUUID(),
+          source: edge.source,
+          target: newTarget,
+          selected: false
+        });
+      }
+    }
+
+    const updatedNodes = nodes.map((node) => ({
+      ...node,
+      selected: false
+    }));
+
+    const updatedEdges = edges.map((edge) => ({
+      ...edge,
+      selected: false
+    }));
+
+    setNodes([...updatedNodes, ...newNodes]);
+    setEdges([...updatedEdges, ...newEdges]);
+  }, [
+    vertical,
+    keepUpstreamConnections,
+    generateNodeIds,
+    getSelectedNodes,
+    reactFlow.getNodesBounds,
+    setNodes,
+    setEdges,
+    nodeStore
+  ]);
+};

@@ -1,0 +1,972 @@
+import { BaseNode, prop } from "@nodetool-ai/node-sdk";
+import type {
+  ASRModel,
+  AudioRef,
+  DataframeRef,
+  DocumentRef,
+  EmbeddingModel,
+  ImageModel,
+  ImageRef,
+  LanguageModel,
+  Model3DRef,
+  ScriptRef,
+  SketchRef,
+  TimelineRef,
+  TTSModel,
+  VideoModel,
+  VideoRef
+} from "@nodetool-ai/protocol";
+import { tagAsUniversal } from "@nodetool-ai/nodes-utils";
+import {
+  audioRefDefault,
+  dataframeRefDefault,
+  documentRefDefault,
+  imageRefDefault,
+  jsonRefDefault,
+  model3DRefDefault,
+  scriptRefDefault,
+  sketchRefDefault,
+  timelineRefDefault,
+  videoRefDefault
+} from "./ref-defaults.js";
+
+interface ImageSizeValue {
+  width?: number;
+  height?: number;
+}
+
+export class ConstantBaseNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Constant";
+  static readonly retrySafe = true;
+  static readonly title = "Constant";
+  static readonly description =
+    "Base class for fixed-value nodes.\n    constant, parameter, default\n\n    Use cases:\n    - Provide static inputs to a workflow\n    - Hold configuration values\n    - Simplify testing with deterministic outputs";
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: null };
+  }
+}
+
+export class ConstantBoolNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Bool";
+  static readonly retrySafe = true;
+  static readonly title = "Bool";
+  static readonly description =
+    "Represents a boolean constant in the workflow.\n    boolean, logic, flag\n\n    Use cases:\n    - Control flow decisions in conditional nodes\n    - Toggle features or behaviors in the workflow\n    - Set default boolean values for configuration";
+  static readonly metadataOutputTypes = {
+    output: "bool"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "bool", default: false, title: "Value" })
+  declare value: boolean;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? false };
+  }
+}
+
+export class ConstantIntegerNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Integer";
+  static readonly retrySafe = true;
+  static readonly title = "Integer";
+  static readonly description =
+    "Represents an integer constant in the workflow.\n    number, integer, whole\n\n    Use cases:\n    - Set numerical parameters for calculations\n    - Define counts, indices, or sizes\n    - Provide fixed numerical inputs for processing";
+  static readonly metadataOutputTypes = {
+    output: "int"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "int", default: 0, title: "Value" })
+  declare value: number;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? 0 };
+  }
+}
+
+export class ConstantFloatNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Float";
+  static readonly retrySafe = true;
+  static readonly title = "Float";
+  static readonly description =
+    "Represents a floating-point number constant in the workflow.\n    number, decimal, float\n\n    Use cases:\n    - Set numerical parameters for calculations\n    - Define thresholds or limits\n    - Provide fixed numerical inputs for processing";
+  static readonly metadataOutputTypes = {
+    output: "float"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "float", default: 0, title: "Value" })
+  declare value: number;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? 0.0 };
+  }
+}
+
+export class ConstantStringNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.String";
+  static readonly retrySafe = true;
+  static readonly title = "String";
+  static readonly description =
+    "Represents a string constant in the workflow.\n    text, string, characters\n\n    Use cases:\n    - Provide fixed text inputs for processing\n    - Define labels, identifiers, or names\n    - Set default text values for configuration";
+  static readonly metadataOutputTypes = {
+    output: "str"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "str", default: "", title: "Value" })
+  declare value: string;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? "" };
+  }
+}
+
+export class ConstantListNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.List";
+  static readonly retrySafe = true;
+  static readonly title = "List";
+  static readonly description =
+    "Represents a list constant in the workflow.\n    array, sequence, collection\n\n    Use cases:\n    - Store multiple values of the same type\n    - Provide ordered data inputs\n    - Define sequences for iteration in other nodes";
+  static readonly metadataOutputTypes = {
+    output: "list[any]"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "list[any]", default: [], title: "Value" })
+  declare value: unknown[];
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? [] };
+  }
+}
+
+export class ConstantTextListNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.TextList";
+  static readonly retrySafe = true;
+  static readonly title = "Text List";
+  static readonly description =
+    "Represents a list of text strings in the workflow.\n    texts, strings, text collection\n\n    Use cases:\n    - Provide a fixed list of text strings for batch processing\n    - Reference multiple text values in the workflow\n    - Set default text list for testing or demonstration purposes";
+  static readonly metadataOutputTypes = {
+    output: "list[str]"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "list[str]",
+    default: null,
+    title: "Value",
+    description: "List of text strings",
+    required: true
+  })
+  declare value: string[] | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? [] };
+  }
+}
+
+export class ConstantDictNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Dict";
+  static readonly retrySafe = true;
+  static readonly title = "Dict";
+  static readonly description =
+    "Represents a dictionary constant in the workflow.\n    dictionary, key-value, mapping\n\n    Use cases:\n    - Store configuration settings\n    - Provide structured data inputs\n    - Define parameter sets for other nodes";
+  static readonly metadataOutputTypes = {
+    output: "dict[str, any]"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "dict[str, any]", default: {}, title: "Value" })
+  declare value: Record<string, unknown>;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantAudioNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Audio";
+  static readonly retrySafe = true;
+  static readonly title = "Audio";
+  static readonly description =
+    "Represents an audio file constant in the workflow.\n    audio, file, mp3, wav\n\n    Use cases:\n    - Provide a fixed audio input for audio processing nodes\n    - Reference a specific audio file in the workflow\n    - Set default audio for testing or demonstration purposes";
+  static readonly metadataOutputTypes = {
+    output: "audio"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "audio",
+    default: audioRefDefault,
+    title: "Value"
+  })
+  declare value: AudioRef | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantImageNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Image";
+  static readonly retrySafe = true;
+  static readonly title = "Image";
+  static readonly description =
+    "Represents an image file constant in the workflow.\n    picture, photo, image\n\n    Use cases:\n    - Provide a fixed image input for image processing nodes\n    - Reference a specific image file in the workflow\n    - Set default image for testing or demonstration purposes";
+  static readonly metadataOutputTypes = {
+    output: "image"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "image",
+    default: imageRefDefault,
+    title: "Value"
+  })
+  declare value: ImageRef | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantVideoNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Video";
+  static readonly retrySafe = true;
+  static readonly title = "Video";
+  static readonly description =
+    "Represents a video file constant in the workflow.\n    video, movie, mp4, file\n\n    Use cases:\n    - Provide a fixed video input for video processing nodes\n    - Reference a specific video file in the workflow\n    - Set default video for testing or demonstration purposes";
+  static readonly metadataOutputTypes = {
+    output: "video"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "video",
+    default: videoRefDefault,
+    title: "Value"
+  })
+  declare value: VideoRef | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantDocumentNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Document";
+  static readonly retrySafe = true;
+  static readonly title = "Document";
+  static readonly description =
+    "Represents a document constant in the workflow.\n    document, pdf, word, docx";
+  static readonly metadataOutputTypes = {
+    output: "document"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "document",
+    default: documentRefDefault,
+    title: "Document"
+  })
+  declare value: DocumentRef | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantSketchNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Sketch";
+  static readonly retrySafe = true;
+  static readonly title = "Sketch";
+  static readonly description =
+    "Layered sketch document for drawing, masking, and image composition.\n    sketch, drawing, canvas, paint, image editor\n\n    Use cases:\n    - Pass a sketch document between nodes\n    - Edit the sketch directly from the workflow canvas\n    - Expose flattened image, mask, and layer outputs for downstream nodes";
+  static readonly metadataOutputTypes = {
+    output: "sketch",
+    image: "image",
+    mask: "image",
+    layers: "list[image]"
+  };
+  static readonly supportsDynamicInputs = true;
+  static readonly supportsDynamicOutputs = true;
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = ["image", "mask"];
+
+  @prop({
+    type: "sketch",
+    default: sketchRefDefault,
+    title: "Value"
+  })
+  declare value: SketchRef;
+
+  @prop({
+    type: "str",
+    default: "",
+    title: "Sketch data",
+    description: "Serialized editor document (managed by the UI)."
+  })
+  declare sketch_data: unknown;
+
+  @prop({
+    type: "image",
+    default: imageRefDefault,
+    title: "Image",
+    description: "Flattened composite (filled when you edit in the UI)."
+  })
+  declare image: unknown;
+
+  @prop({
+    type: "image",
+    default: imageRefDefault,
+    title: "Mask",
+    description: "Mask output when configured in the editor."
+  })
+  declare mask: unknown;
+
+  @prop({
+    type: "list",
+    default: [],
+    title: "Layers",
+    description: "List of exposed layer image references."
+  })
+  declare layers: unknown;
+
+  async process(): Promise<Record<string, unknown>> {
+    const result: Record<string, unknown> = {
+      output: this.value ?? {},
+      image: this.image,
+      mask: this.mask,
+      layers: Array.isArray(this.layers) ? this.layers : []
+    };
+    for (const [key, value] of this.dynamicProps) {
+      if (key.startsWith("layer_out_")) {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+}
+
+export class ConstantTimelineNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Timeline";
+  static readonly retrySafe = true;
+  static readonly title = "Timeline";
+  static readonly description =
+    "References a timeline sequence in the workflow.\n    timeline, video editor, sequence, clips, tracks\n\n    Use cases:\n    - Pass a timeline between nodes for video rendering or editing\n    - Open and edit the referenced timeline in the timeline editor\n    - Provide a fixed timeline input for downstream nodes";
+  static readonly metadataOutputTypes = {
+    output: "timeline"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "timeline",
+    default: timelineRefDefault,
+    title: "Value"
+  })
+  declare value: TimelineRef;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantScriptNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Script";
+  static readonly retrySafe = true;
+  static readonly title = "Script";
+  static readonly description =
+    "References a script in the workflow.\n    script, voiceover, narration, cast, tts\n\n    Use cases:\n    - Pass a script between nodes for voicing or timeline assembly\n    - Open and edit the referenced script in the script editor\n    - Provide a fixed script input for downstream nodes";
+  static readonly metadataOutputTypes = {
+    output: "script"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "script",
+    default: scriptRefDefault,
+    title: "Value"
+  })
+  declare value: ScriptRef;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantJSONNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.JSON";
+  static readonly retrySafe = true;
+  static readonly title = "JSON";
+  static readonly description =
+    "Represents a JSON constant in the workflow.\n    json, object, dictionary";
+  static readonly metadataOutputTypes = {
+    output: "json"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "json",
+    default: jsonRefDefault,
+    title: "Value"
+  })
+  declare value: unknown;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantModel3DNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Model3D";
+  static readonly retrySafe = true;
+  static readonly title = "Model 3D";
+  static readonly description =
+    "Represents a 3D model constant in the workflow.\n    3d, model, mesh, glb, obj, stl\n\n    Use cases:\n    - Provide a fixed 3D model input for processing nodes\n    - Reference a specific 3D model file in the workflow\n    - Set default 3D model for testing or demonstration purposes";
+  static readonly metadataOutputTypes = {
+    output: "model_3d"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "model_3d",
+    default: model3DRefDefault,
+    title: "Value"
+  })
+  declare value: Model3DRef | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantDataFrameNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.DataFrame";
+  static readonly retrySafe = true;
+  static readonly title = "Data Frame";
+  static readonly description =
+    "Represents a fixed DataFrame constant in the workflow.\n    table, data, dataframe, pandas\n\n    Use cases:\n    - Provide static data for analysis or processing\n    - Define lookup tables or reference data\n    - Set sample data for testing or demonstration";
+  static readonly metadataOutputTypes = {
+    output: "dataframe"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "dataframe",
+    default: dataframeRefDefault,
+    title: "DataFrame"
+  })
+  declare value: DataframeRef | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantAudioListNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.AudioList";
+  static readonly retrySafe = true;
+  static readonly title = "Audio List";
+  static readonly description =
+    "Represents a list of audio file constants in the workflow.\n    audios, sounds, audio files, collection\n\n    Use cases:\n    - Provide a fixed list of audio files for batch processing\n    - Reference multiple audio files in the workflow\n    - Set default audio list for testing or demonstration purposes";
+  static readonly metadataOutputTypes = {
+    output: "list[audio]"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "list[audio]",
+    default: null,
+    title: "Value",
+    description: "List of audio references",
+    required: true
+  })
+  declare value: AudioRef[] | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? [] };
+  }
+}
+
+export class ConstantImageListNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.ImageList";
+  static readonly retrySafe = true;
+  static readonly title = "Image List";
+  static readonly description =
+    "Represents a list of image file constants in the workflow.\n    pictures, photos, images, collection\n\n    Use cases:\n    - Provide a fixed list of images for batch processing\n    - Reference multiple image files in the workflow\n    - Set default image list for testing or demonstration purposes";
+  static readonly metadataOutputTypes = {
+    output: "list[image]"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "list[image]",
+    default: null,
+    title: "Value",
+    description: "List of image references",
+    required: true
+  })
+  declare value: ImageRef[] | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? [] };
+  }
+}
+
+export class ConstantVideoListNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.VideoList";
+  static readonly retrySafe = true;
+  static readonly title = "Video List";
+  static readonly description =
+    "Represents a list of video file constants in the workflow.\n    videos, movies, clips, collection\n\n    Use cases:\n    - Provide a fixed list of videos for batch processing\n    - Reference multiple video files in the workflow\n    - Set default video list for testing or demonstration purposes";
+  static readonly metadataOutputTypes = {
+    output: "list[video]"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "list[video]",
+    default: null,
+    title: "Value",
+    description: "List of video references",
+    required: true
+  })
+  declare value: VideoRef[] | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? [] };
+  }
+}
+
+export class ConstantSelectNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Select";
+  static readonly retrySafe = true;
+  static readonly title = "Select";
+  static readonly description =
+    "Represents a selection from a predefined set of options in the workflow.\n    select, enum, dropdown, choice, options\n\n    Use cases:\n    - Choose from a fixed set of values\n    - Configure options for downstream nodes\n    - Provide enum-compatible inputs for nodes that expect specific values\n\n    The output is a string that can be connected to enum-typed inputs.";
+  static readonly metadataOutputTypes = {
+    output: "str"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "str",
+    default: "",
+    title: "Value",
+    description: "The currently selected value.",
+    json_schema_extra: {
+      type: "select"
+    }
+  })
+  declare value: string;
+
+  @prop({
+    type: "list[str]",
+    default: [],
+    title: "Options",
+    description: "The list of available options to choose from."
+  })
+  declare options: string[];
+
+  @prop({
+    type: "str",
+    default: "",
+    title: "Enum Type Name",
+    description:
+      "The enum type name this select corresponds to (for type matching)."
+  })
+  declare enum_type_name: string;
+
+  async process(): Promise<Record<string, unknown>> {
+    const value = this.value ?? "";
+    const options = Array.isArray(this.options) ? this.options : [];
+    if (value !== "" && options.length > 0 && !options.includes(value)) {
+      throw new Error(
+        `Select value "${value}" is not one of the allowed options: ${options.join(", ")}`
+      );
+    }
+    return { output: value };
+  }
+}
+
+export class ConstantImageSizeNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.ImageSize";
+  static readonly retrySafe = true;
+  static readonly title = "Image Size";
+  static readonly description =
+    "Represents a fixed image size constant in the workflow.\n    constant, image_size, resolution, width, height, dimensions\n\n    Use cases:\n    - Provide fixed output dimensions for image generation nodes\n    - Reference a standard resolution across the workflow\n    - Expose width and height as separate integer outputs";
+  static readonly metadataOutputTypes = {
+    image_size: "image_size",
+    width: "int",
+    height: "int"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "image_size", default: null, title: "Value", required: true })
+  declare value: ImageSizeValue | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    const value = (this.value ?? { width: 1024, height: 1024 }) as {
+      width?: number;
+      height?: number;
+    };
+    const width = Number(value.width ?? 1024);
+    const height = Number(value.height ?? 1024);
+    return { image_size: value, width, height };
+  }
+}
+
+export class ConstantDateNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.Date";
+  static readonly retrySafe = true;
+  static readonly title = "Date";
+  static readonly description =
+    "Make a date object from year, month, day.\n    date, make, create";
+  static readonly metadataOutputTypes = {
+    output: "date"
+  };
+  static readonly inlineFields = ["year", "month"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "int",
+    default: 1900,
+    title: "Year",
+    description: "Year of the date",
+    min: 1,
+    max: 9999
+  })
+  declare year: number;
+
+  @prop({
+    type: "int",
+    default: 1,
+    title: "Month",
+    description: "Month of the date",
+    min: 1,
+    max: 12
+  })
+  declare month: number;
+
+  @prop({
+    type: "int",
+    default: 1,
+    title: "Day",
+    description: "Day of the date",
+    min: 1,
+    max: 31
+  })
+  declare day: number;
+
+  async process(): Promise<Record<string, unknown>> {
+    const year = Number(this.year ?? 1900);
+    const month = Number(this.month ?? 1);
+    const day = Number(this.day ?? 1);
+    return { output: { year, month, day } };
+  }
+}
+
+export class ConstantDateTimeNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.DateTime";
+  static readonly retrySafe = true;
+  static readonly title = "Date Time";
+  static readonly description =
+    "Make a datetime object from year, month, day, hour, minute, second.\n    datetime, make, create";
+  static readonly metadataOutputTypes = {
+    output: "datetime"
+  };
+  static readonly inlineFields = ["year", "month"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "int",
+    default: 1900,
+    title: "Year",
+    description: "Year of the datetime",
+    min: 1,
+    max: 9999
+  })
+  declare year: number;
+
+  @prop({
+    type: "int",
+    default: 1,
+    title: "Month",
+    description: "Month of the datetime",
+    min: 1,
+    max: 12
+  })
+  declare month: number;
+
+  @prop({
+    type: "int",
+    default: 1,
+    title: "Day",
+    description: "Day of the datetime",
+    min: 1,
+    max: 31
+  })
+  declare day: number;
+
+  @prop({
+    type: "int",
+    default: 0,
+    title: "Hour",
+    description: "Hour of the datetime",
+    min: 0,
+    max: 23
+  })
+  declare hour: number;
+
+  @prop({
+    type: "int",
+    default: 0,
+    title: "Minute",
+    description: "Minute of the datetime",
+    min: 0,
+    max: 59
+  })
+  declare minute: number;
+
+  @prop({
+    type: "int",
+    default: 0,
+    title: "Second",
+    description: "Second of the datetime",
+    min: 0,
+    max: 59
+  })
+  declare second: number;
+
+  @prop({
+    type: "int",
+    default: 0,
+    title: "Millisecond",
+    description: "Millisecond of the datetime",
+    min: 0,
+    max: 999
+  })
+  declare millisecond: number;
+
+  @prop({
+    type: "str",
+    default: "UTC",
+    title: "Tzinfo",
+    description: "Timezone of the datetime"
+  })
+  declare tzinfo: string;
+
+  @prop({
+    type: "int",
+    default: 0,
+    title: "Utc Offset",
+    description: "UTC offset of the datetime in minutes",
+    min: -720,
+    max: 840
+  })
+  declare utc_offset: number;
+
+  async process(): Promise<Record<string, unknown>> {
+    const millisecond = Number(this.millisecond ?? 0);
+    const utcOffsetMinutes = Number(this.utc_offset ?? 0);
+    return {
+      output: {
+        year: Number(this.year ?? 1900),
+        month: Number(this.month ?? 1),
+        day: Number(this.day ?? 1),
+        hour: Number(this.hour ?? 0),
+        minute: Number(this.minute ?? 0),
+        second: Number(this.second ?? 0),
+        microsecond: millisecond * 1000,
+        tzinfo: String(this.tzinfo ?? "UTC"),
+        utc_offset: utcOffsetMinutes * 60
+      }
+    };
+  }
+}
+
+export class ConstantASRModelNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.ASRModelConstant";
+  static readonly retrySafe = true;
+  static readonly title = "ASR Model Constant";
+  static readonly description =
+    "Represents an automatic speech recognition model constant in the workflow.\n    asr, speech, recognition, transcription, model\n\n    Use cases:\n    - Provide a fixed ASR model for transcription\n    - Set default ASR model for the workflow\n    - Configure model selection without user input";
+  static readonly metadataOutputTypes = {
+    output: "asr_model"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "asr_model", default: null, title: "Value", required: true })
+  declare value: ASRModel | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantEmbeddingModelNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.EmbeddingModelConstant";
+  static readonly retrySafe = true;
+  static readonly title = "Embedding Model Constant";
+  static readonly description =
+    "Represents an embedding model constant in the workflow.\n    embedding, model, vector, semantic\n\n    Use cases:\n    - Provide a fixed embedding model for vectorization\n    - Set default embedding model for the workflow\n    - Configure model selection without user input";
+  static readonly metadataOutputTypes = {
+    output: "embedding_model"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "embedding_model",
+    default: null,
+    title: "Value",
+    required: true
+  })
+  declare value: EmbeddingModel | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantImageModelNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.ImageModelConstant";
+  static readonly retrySafe = true;
+  static readonly title = "Image Model Constant";
+  static readonly description =
+    "Represents an image generation model constant in the workflow.\n    image, model, ai, generation, diffusion\n\n    Use cases:\n    - Provide a fixed image model for generation\n    - Set default image model for the workflow\n    - Configure model selection without user input";
+  static readonly metadataOutputTypes = {
+    output: "image_model"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "image_model", default: null, title: "Value", required: true })
+  declare value: ImageModel | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantLanguageModelNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.LanguageModelConstant";
+  static readonly retrySafe = true;
+  static readonly title = "Language Model Constant";
+  static readonly description =
+    "Represents a language model constant in the workflow.\n    llm, language, model, ai, chat, gpt\n\n    Use cases:\n    - Provide a fixed language model for chat or text generation\n    - Set default language model for the workflow\n    - Configure model selection without user input";
+  static readonly metadataOutputTypes = {
+    output: "language_model"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({
+    type: "language_model",
+    default: null,
+    title: "Value",
+    required: true
+  })
+  declare value: LanguageModel | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantTTSModelNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.TTSModelConstant";
+  static readonly retrySafe = true;
+  static readonly title = "TTS Model Constant";
+  static readonly description =
+    "Represents a text-to-speech model constant in the workflow.\n    tts, speech, voice, model, audio\n\n    Use cases:\n    - Provide a fixed TTS model for speech synthesis\n    - Set default TTS model for the workflow\n    - Configure model selection without user input";
+  static readonly metadataOutputTypes = {
+    output: "tts_model"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "tts_model", default: null, title: "Value", required: true })
+  declare value: TTSModel | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export class ConstantVideoModelNode extends BaseNode {
+  static readonly nodeType = "nodetool.constant.VideoModelConstant";
+  static readonly retrySafe = true;
+  static readonly title = "Video Model Constant";
+  static readonly description =
+    "Represents a video generation model constant in the workflow.\n    video, model, ai, generation\n\n    Use cases:\n    - Provide a fixed video model for generation\n    - Set default video model for the workflow\n    - Configure model selection without user input";
+  static readonly metadataOutputTypes = {
+    output: "video_model"
+  };
+  static readonly inlineFields = ["value"];
+  static readonly inputFields = [];
+
+  @prop({ type: "video_model", default: null, title: "Value", required: true })
+  declare value: VideoModel | null;
+
+  async process(): Promise<Record<string, unknown>> {
+    return { output: this.value ?? {} };
+  }
+}
+
+export const CONSTANT_NODES = tagAsUniversal([
+  ConstantBoolNode,
+  ConstantIntegerNode,
+  ConstantFloatNode,
+  ConstantStringNode,
+  ConstantListNode,
+  ConstantTextListNode,
+  ConstantDictNode,
+  ConstantAudioNode,
+  ConstantImageNode,
+  ConstantVideoNode,
+  ConstantDocumentNode,
+  ConstantSketchNode,
+  ConstantTimelineNode,
+  ConstantScriptNode,
+  ConstantJSONNode,
+  ConstantModel3DNode,
+  ConstantDataFrameNode,
+  ConstantAudioListNode,
+  ConstantImageListNode,
+  ConstantVideoListNode,
+  ConstantSelectNode,
+  ConstantImageSizeNode,
+  ConstantDateNode,
+  ConstantDateTimeNode,
+  ConstantASRModelNode,
+  ConstantEmbeddingModelNode,
+  ConstantImageModelNode,
+  ConstantLanguageModelNode,
+  ConstantTTSModelNode,
+  ConstantVideoModelNode
+]);

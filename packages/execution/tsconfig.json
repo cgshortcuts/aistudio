@@ -1,0 +1,33 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": [
+    "src"
+  ],
+  "exclude": [
+    "dist"
+  ],
+  "references": [
+    {
+      "path": "../config"
+    },
+    {
+      "path": "../gpu"
+    },
+    {
+      "path": "../protocol"
+    },
+    {
+      "path": "../kernel"
+    },
+    {
+      "path": "../node-sdk"
+    },
+    {
+      "path": "../runtime"
+    }
+  ]
+}

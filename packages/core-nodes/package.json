@@ -1,0 +1,81 @@
+{
+  "name": "@nodetool-ai/core-nodes",
+  "version": "0.7.0-rc.34",
+  "description": "Core NodeTool nodes — pure-JS logic, control flow, constants, list, input, subgraph",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "node ../../scripts/build-typescript-workspace.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nodetool-ai/kernel": "*",
+    "@nodetool-ai/node-sdk": "*",
+    "@nodetool-ai/nodes-utils": "*",
+    "@nodetool-ai/protocol": "*",
+    "@nodetool-ai/runtime": "*",
+    "@nodetool-ai/vectorstore": "*"
+  },
+  "devDependencies": {
+    "@nodetool-ai/audio-nodes": "*",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./nodes/*": {
+      "types": "./dist/nodes/*.d.ts",
+      "import": "./dist/nodes/*.js",
+      "default": "./dist/nodes/*.js"
+    },
+    "./lib/*": {
+      "types": "./dist/lib/*.d.ts",
+      "import": "./dist/lib/*.js",
+      "default": "./dist/lib/*.js"
+    }
+  },
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodetool-ai/nodetool.git",
+    "directory": "packages/core-nodes"
+  },
+  "homepage": "https://nodetool.ai",
+  "bugs": {
+    "url": "https://github.com/nodetool-ai/nodetool/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "nodetool",
+    "ai",
+    "workflow",
+    "workflow-automation",
+    "typescript",
+    "ai-nodes",
+    "no-code",
+    "visual-programming",
+    "workflow-nodes",
+    "control-flow",
+    "logic",
+    "constants",
+    "list",
+    "input"
+  ]
+}

@@ -1,0 +1,76 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import ReactDOM from "react-dom";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+
+import { Text, Box, BORDER_RADIUS, Z_INDEX } from "../ui_primitives";
+import { useAssetUpload } from "../../serverState/useAssetUpload";
+import LinearProgressWithLabel from "./LinearProgressWithLabel";
+
+const styles = (theme: Theme) =>
+  css({
+    "&": {
+      position: "absolute",
+      top: "50%",
+      left: "50%",
+      transform: "translate(-50%, -50%)",
+      width: "100%",
+      height: "50%",
+      padding: "0",
+      backgroundColor: "transparent",
+      zIndex: Z_INDEX.overlay,
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center"
+    },
+    ".uploading-message": {
+      width: "50%",
+      maxWidth: "600px",
+      maxHeight: "500px",
+      overflowY: "auto",
+      backgroundColor: theme.vars.palette.grey[600],
+      outline: `2px solid ${theme.vars.palette.grey[900]}`,
+      boxShadow: "0px 0px 10px 0px rgba(0, 0, 0, 0.01)",
+      padding: "1em",
+      borderRadius: BORDER_RADIUS.lg
+    },
+    ul: {
+      padding: "0 1em"
+    }
+  });
+
+const AssetUploadOverlay = () => {
+  const theme = useTheme();
+  const { files, isUploading, overallProgress, completed } = useAssetUpload();
+
+  if (!isUploading) {
+    return null;
+  }
+
+  return ReactDOM.createPortal(
+    <div css={styles(theme)} className="uploading-overlay">
+      <div className="uploading-message">
+        <Box>
+          <Text size="big" >Uploading assets</Text>
+          <Text size="normal" weight={600}>
+            {completed} / {files.length} files completed
+          </Text>
+        </Box>
+        <LinearProgressWithLabel value={overallProgress} />
+        <ul>
+          {files.map((file) => (
+            <LinearProgressWithLabel
+              key={file.id}
+              filename={file.file.name}
+              value={file.progress || 0}
+            />
+          ))}
+        </ul>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+export default AssetUploadOverlay;

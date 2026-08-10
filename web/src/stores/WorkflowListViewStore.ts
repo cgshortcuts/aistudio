@@ -1,0 +1,90 @@
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+export type SortBy = "name" | "date";
+
+interface WorkflowListViewState {
+  showGraphPreview: boolean;
+  sortBy: SortBy;
+  selectedTags: string[];
+  actions: {
+    toggleGraphPreview: () => void;
+    setShowGraphPreview: (show: boolean) => void;
+    setSortBy: (sortBy: SortBy) => void;
+    setSelectedTags: (tags: string[]) => void;
+    toggleTag: (tag: string) => void;
+    clearSelectedTags: () => void;
+  };
+}
+
+export const useWorkflowListViewStore = create<WorkflowListViewState>()(
+  persist(
+    (set) => ({
+      showGraphPreview: false,
+      sortBy: "date" satisfies SortBy,
+      selectedTags: [],
+      actions: {
+        toggleGraphPreview: () => {
+          set((state) => ({ showGraphPreview: !state.showGraphPreview }));
+        },
+        setShowGraphPreview: (show: boolean) => {
+          set({ showGraphPreview: show });
+        },
+        setSortBy: (sortBy: SortBy) => {
+          set({ sortBy });
+        },
+        setSelectedTags: (tags: string[]) => {
+          set({ selectedTags: tags });
+        },
+        toggleTag: (tag: string) => {
+          set((state) => ({
+            selectedTags: state.selectedTags.includes(tag)
+              ? state.selectedTags.filter((t) => t !== tag)
+              : [...state.selectedTags, tag]
+          }));
+        },
+        clearSelectedTags: () => {
+          set({ selectedTags: [] });
+        },
+      },
+    }),
+    {
+      name: "workflow-list-view",
+      partialize: (state) => ({ 
+        showGraphPreview: state.showGraphPreview,
+        sortBy: state.sortBy,
+        selectedTags: state.selectedTags
+      }),
+      merge: (persistedState, currentState) => {
+        if (!persistedState || typeof persistedState !== "object" || Array.isArray(persistedState)) {
+          return currentState;
+        }
+        const p = persistedState as Record<string, unknown>;
+        return {
+          ...currentState,
+          showGraphPreview:
+            typeof p.showGraphPreview === "boolean"
+              ? p.showGraphPreview
+              : currentState.showGraphPreview,
+          sortBy:
+            p.sortBy === "name" || p.sortBy === "date"
+              ? p.sortBy
+              : currentState.sortBy,
+          selectedTags:
+            Array.isArray(p.selectedTags)
+              ? p.selectedTags.filter((x): x is string => typeof x === "string")
+              : currentState.selectedTags,
+        };
+      },
+    }
+  )
+);
+
+export const useShowGraphPreview = (): boolean =>
+  useWorkflowListViewStore((state) => state.showGraphPreview);
+
+export const useSortBy = (): SortBy =>
+  useWorkflowListViewStore((state) => state.sortBy);
+
+export const useSelectedTags = (): string[] =>
+  useWorkflowListViewStore((state) => state.selectedTags);

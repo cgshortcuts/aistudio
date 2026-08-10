@@ -1,0 +1,884 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import React, {
+  Component,
+  Suspense,
+  useRef,
+  useCallback,
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  memo
+} from "react";
+import { Asset } from "../../stores/ApiTypes";
+import type { SelectChangeEvent } from "../ui_primitives";
+import {
+  Text,
+  LoadingSpinner,
+  ToolbarIconButton,
+  ToggleGroup,
+  ToggleOption,
+  FlexColumn,
+  FlexRow,
+  BORDER_RADIUS,
+  SPACING,
+  getSpacingPx,
+  Select,
+  MenuItem,
+  FormControl,
+  Z_INDEX
+} from "../ui_primitives";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { Canvas, useThree, ThreeEvent } from "@react-three/fiber";
+import {
+  OrbitControls,
+  Grid,
+  useGLTF,
+  Environment,
+  ContactShadows,
+  Html
+} from "@react-three/drei";
+import * as THREE from "three";
+
+import GridOnIcon from "@mui/icons-material/GridOn";
+import ViewInArIcon from "@mui/icons-material/ViewInAr";
+import FullscreenIcon from "@mui/icons-material/Fullscreen";
+import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
+import CameraAltIcon from "@mui/icons-material/CameraAlt";
+import RestartAltIcon from "@mui/icons-material/RestartAlt";
+import LightModeIcon from "@mui/icons-material/LightMode";
+import CloseIcon from "@mui/icons-material/Close";
+import { cn, reactFlowClasses } from "../ui_primitives";
+
+// Lighting presets (must match drei Environment preset types)
+type LightingPreset =
+  | "studio"
+  | "warehouse"
+  | "city"
+  | "sunset"
+  | "dawn"
+  | "forest"
+  | "apartment"
+  | "lobby"
+  | "night"
+  | "park";
+
+const LIGHTING_PRESETS: { value: LightingPreset; label: string }[] = [
+  { value: "studio", label: "Studio" },
+  { value: "dawn", label: "Dawn" },
+  { value: "warehouse", label: "Warehouse" },
+  { value: "city", label: "City" },
+  { value: "sunset", label: "Sunset" },
+  { value: "forest", label: "Forest" },
+  { value: "park", label: "Park" },
+  { value: "apartment", label: "Apartment" },
+  { value: "lobby", label: "Lobby" },
+  { value: "night", label: "Night" }
+];
+
+type BackgroundColor =
+  | "dark"
+  | "light"
+  | "neutral"
+  | "transparent"
+  | "gradient";
+
+const BACKGROUND_COLORS: {
+  value: BackgroundColor;
+  label: string;
+  color: string;
+}[] = [
+  { value: "dark", label: "Dark", color: "#1a1a1a" },
+  { value: "light", label: "Light", color: "#f5f5f5" },
+  { value: "neutral", label: "Neutral", color: "#404040" },
+  { value: "transparent", label: "Transparent", color: "transparent" },
+  { value: "gradient", label: "Gradient", color: "#2a2a3a" }
+];
+
+export interface Model3DViewerProps {
+  asset?: Asset;
+  url?: string;
+  compact?: boolean;
+  onClick?: () => void;
+  onDoubleClick?: () => void;
+}
+
+const styles = (theme: Theme, compact: boolean, backgroundColor: string) =>
+  css({
+    "&": {
+      width: "100%",
+      height: compact ? "100%" : "calc(100% - 120px)",
+      flex: "1 1 auto",
+      alignSelf: "stretch",
+      minHeight: 0,
+      marginTop: compact ? 0 : "1em",
+      position: "relative",
+      overflow: "hidden"
+    },
+    ".model-container": {
+      width: compact ? "100%" : "100%",
+      height: compact ? "100%" : "100%",
+      minHeight: compact ? "60px" : "300px",
+      flex: 1,
+      alignSelf: "stretch",
+      position: "relative",
+      cursor: compact ? "grab" : "default",
+      backgroundColor: backgroundColor,
+      borderRadius: compact ? BORDER_RADIUS.sm : 0,
+      overflow: "hidden"
+    },
+    ".canvas-container": {
+      width: "100%",
+      height: "100%",
+      minHeight: 0,
+      position: "relative",
+      overflow: "hidden"
+    },
+    ".canvas-container > div": {
+      width: "100% !important",
+      height: "100% !important",
+      minHeight: 0,
+      flex: 1
+    },
+    ".canvas-container canvas": {
+      display: "block",
+      width: "100% !important",
+      height: "100% !important",
+      minHeight: 0
+    },
+    ".loading-overlay": {
+      position: "absolute",
+      top: "50%",
+      left: "50%",
+      transform: "translate(-50%, -50%)",
+      zIndex: Z_INDEX.dropdown,
+      pointerEvents: "none"
+    },
+    ".model-info": {
+      marginTop: "1em",
+      textAlign: "center"
+    },
+    ".controls-toolbar": {
+      position: "absolute",
+      bottom: "1em",
+      left: "50%",
+      transform: "translateX(-50%)",
+      padding: "0.5em",
+      backgroundColor: "rgba(0, 0, 0, 0.7)",
+      borderRadius: BORDER_RADIUS.lg,
+      zIndex: Z_INDEX.overlay,
+      gap: "0.5em",
+      alignItems: "center"
+    },
+    ".controls-select": {
+      minWidth: "100px",
+      "& .MuiSelect-select": {
+        color: theme.vars.palette.grey[100],
+        padding: `${getSpacingPx(SPACING.xs)} ${getSpacingPx(SPACING.md)}`,
+        fontSize: "var(--fontSizeSmall)"
+      },
+      "& .MuiOutlinedInput-notchedOutline": {
+        borderColor: theme.vars.palette.action.disabled
+      },
+      "& .MuiSvgIcon-root": {
+        color: theme.vars.palette.grey[100]
+      }
+    },
+    ".error-overlay": {
+      position: "absolute",
+      top: "50%",
+      left: "50%",
+      transform: "translate(-50%, -50%)",
+      zIndex: Z_INDEX.dropdown,
+      padding: "1em 1.5em",
+      maxWidth: "90%",
+      backgroundColor: "rgba(0, 0, 0, 0.8)",
+      borderRadius: BORDER_RADIUS.lg
+    },
+    ".fullscreen-close-button": {
+      position: "absolute",
+      top: "1em",
+      right: "1em",
+      zIndex: Z_INDEX.modal,
+      backgroundColor: "rgba(0, 0, 0, 0.7)",
+      color: theme.vars.palette.grey[100],
+      "&:hover": {
+        backgroundColor: "rgba(0, 0, 0, 0.9)"
+      }
+    }
+  });
+
+interface ModelProps {
+  url: string;
+  wireframe: boolean;
+  onLoad?: (bounds: THREE.Box3) => void;
+  onClick?: () => void;
+  onDoubleClick?: () => void;
+}
+
+function Model({ url, wireframe, onLoad, onClick, onDoubleClick }: ModelProps) {
+  const { scene } = useGLTF(url);
+
+  // Clone scene to avoid modifying original
+  const clonedScene = useMemo(() => scene.clone(), [scene]);
+  const initialBounds = useMemo(() => new THREE.Box3().setFromObject(clonedScene), [clonedScene]);
+  const initialCenter = useMemo(
+    () => initialBounds.getCenter(new THREE.Vector3()),
+    [initialBounds]
+  );
+
+  useLayoutEffect(() => {
+    clonedScene.position.sub(initialCenter);
+    clonedScene.updateMatrixWorld(true);
+  }, [clonedScene, initialCenter]);
+
+  useEffect(() => {
+    clonedScene.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        const materials = Array.isArray(child.material)
+          ? child.material
+          : [child.material];
+        materials.forEach((mat) => {
+          if (mat && "wireframe" in mat) {
+            (mat as THREE.Material & { wireframe: boolean }).wireframe =
+              wireframe;
+          }
+        });
+      }
+    });
+  }, [clonedScene, wireframe]);
+
+  useEffect(() => {
+    const bounds = new THREE.Box3().setFromObject(clonedScene);
+    onLoad?.(bounds);
+  }, [clonedScene, onLoad]);
+
+  const handleClick = useCallback(
+    (e: ThreeEvent<MouseEvent>) => {
+      e.stopPropagation();
+      onClick?.();
+    },
+    [onClick]
+  );
+
+  const handleDoubleClick = useCallback(
+    (e: ThreeEvent<MouseEvent>) => {
+      e.stopPropagation();
+      onDoubleClick?.();
+    },
+    [onDoubleClick]
+  );
+
+  return (
+    <>
+      <primitive object={clonedScene} onClick={handleClick} onDoubleClick={handleDoubleClick} />
+    </>
+  );
+}
+
+interface ModelErrorBoundaryProps {
+  children: React.ReactNode;
+  onError: (error: Error) => void;
+  fallback: React.ReactNode;
+}
+
+interface ModelErrorBoundaryState {
+  hasError: boolean;
+}
+
+class ModelErrorBoundary extends Component<
+  ModelErrorBoundaryProps,
+  ModelErrorBoundaryState
+> {
+  constructor(props: ModelErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): ModelErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown): void {
+    const message =
+      error instanceof Error ? error.message : String(error ?? "Unknown error");
+    this.props.onError(new Error(message));
+  }
+
+  render(): React.ReactNode {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
+
+interface SceneHelpersProps {
+  showGrid: boolean;
+  showAxes: boolean;
+}
+
+function SceneHelpers({ showGrid, showAxes }: SceneHelpersProps) {
+  return (
+    <>
+      {showGrid && (
+        <Grid
+          position={[0, -0.01, 0]}
+          args={[10, 10]}
+          cellSize={0.5}
+          cellThickness={0.5}
+          cellColor="#6f6f6f"
+          sectionSize={2}
+          sectionThickness={1}
+          sectionColor="#9d9d9d"
+          fadeDistance={25}
+          fadeStrength={1}
+          followCamera={false}
+          infiniteGrid={true}
+        />
+      )}
+      {showAxes && <axesHelper args={[2]} />}
+    </>
+  );
+}
+
+interface CameraControllerProps {
+  resetTrigger: number;
+  modelBounds: THREE.Box3 | null;
+}
+
+interface OrbitControlsLike {
+  target: THREE.Vector3;
+  update: () => void;
+}
+
+function isOrbitControlsLike(obj: unknown): obj is OrbitControlsLike {
+  return (
+    obj !== null &&
+    typeof obj === "object" &&
+    "target" in obj &&
+    "update" in obj &&
+    typeof (obj as OrbitControlsLike).update === "function"
+  );
+}
+
+function CameraController({
+  resetTrigger,
+  modelBounds
+}: CameraControllerProps) {
+  const { camera, controls, size } = useThree();
+
+  const fitCameraToModel = useCallback(() => {
+    const perspectiveCamera =
+      camera instanceof THREE.PerspectiveCamera ? camera : null;
+
+    if (!perspectiveCamera || !modelBounds || modelBounds.isEmpty()) {
+      camera.position.set(3, 2, 3);
+      camera.lookAt(0, 0, 0);
+      if (isOrbitControlsLike(controls)) {
+        controls.target.set(0, 0, 0);
+        controls.update();
+      }
+      return;
+    }
+
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    modelBounds.getSize(size);
+    modelBounds.getCenter(center);
+
+    const maxDim = Math.max(size.x, size.y, size.z, 0.001);
+    const fitHeightDistance =
+      maxDim /
+      (2 * Math.tan(THREE.MathUtils.degToRad(perspectiveCamera.fov / 2)));
+    const fitWidthDistance =
+      fitHeightDistance / Math.max(perspectiveCamera.aspect, 0.1);
+    const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.35;
+    const direction = new THREE.Vector3(1, 0.65, 1).normalize();
+    const nextPosition = center.clone().add(direction.multiplyScalar(distance));
+
+    perspectiveCamera.position.copy(nextPosition);
+    perspectiveCamera.near = Math.max(distance / 100, 0.01);
+    perspectiveCamera.far = Math.max(distance * 20, 100);
+    perspectiveCamera.lookAt(center);
+    perspectiveCamera.updateProjectionMatrix();
+
+    if (isOrbitControlsLike(controls)) {
+      controls.target.copy(center);
+      controls.update();
+    }
+  }, [camera, controls, modelBounds]);
+
+  useEffect(() => {
+    if (size.width <= 0 || size.height <= 0) {
+      return;
+    }
+
+    // Wait until the canvas has applied its latest measured size before fitting.
+    const rafId = requestAnimationFrame(() => {
+      fitCameraToModel();
+    });
+
+    return () => cancelAnimationFrame(rafId);
+  }, [fitCameraToModel, size.height, size.width]);
+
+  useEffect(() => {
+    if (resetTrigger > 0) {
+      fitCameraToModel();
+    }
+  }, [fitCameraToModel, resetTrigger]);
+
+  return null;
+}
+
+function useScreenshotCapture() {
+  const captureScreenshot = useCallback(
+    (
+      gl: THREE.WebGLRenderer,
+      scene: THREE.Scene,
+      camera: THREE.Camera,
+      filename: string = "model-screenshot.png"
+    ) => {
+      gl.render(scene, camera);
+
+      const dataUrl = gl.domElement.toDataURL("image/png");
+
+      const link = document.createElement("a");
+      link.href = dataUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    },
+    []
+  );
+
+  return { captureScreenshot };
+}
+
+interface ScreenshotHandlerProps {
+  onCapture: (
+    gl: THREE.WebGLRenderer,
+    scene: THREE.Scene,
+    camera: THREE.Camera
+  ) => void;
+  triggerCapture: number;
+}
+
+function ScreenshotHandler({
+  onCapture,
+  triggerCapture
+}: ScreenshotHandlerProps) {
+  const { gl, scene, camera } = useThree();
+
+  useEffect(() => {
+    if (triggerCapture > 0) {
+      onCapture(gl, scene, camera);
+    }
+  }, [triggerCapture, gl, scene, camera, onCapture]);
+
+  return null;
+}
+
+const Model3DViewer: React.FC<Model3DViewerProps> = ({
+  asset,
+  url,
+  compact = false,
+  onClick,
+  onDoubleClick
+}) => {
+  const theme = useTheme();
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [showGrid, setShowGrid] = useState(!compact);
+  const [showAxes, setShowAxes] = useState(!compact);
+  const [wireframe, setWireframe] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [lightingPreset, setLightingPreset] =
+    useState<LightingPreset>("studio");
+  const [backgroundColor, setBackgroundColor] =
+    useState<BackgroundColor>("dark");
+  const [resetCameraTrigger, setResetCameraTrigger] = useState(0);
+  const [screenshotTrigger, setScreenshotTrigger] = useState(0);
+  const [modelBounds, setModelBounds] = useState<THREE.Box3 | null>(null);
+
+  const modelUrl = asset?.get_url || url || "";
+  const { captureScreenshot } = useScreenshotCapture();
+
+  const bgColorValue = useMemo(
+    () =>
+      BACKGROUND_COLORS.find((bg) => bg.value === backgroundColor)?.color ||
+      "#1a1a1a",
+    [backgroundColor]
+  );
+
+  const handleModelLoad = useCallback((bounds: THREE.Box3) => {
+    setIsLoading(false);
+    setLoadError(null);
+    setModelBounds(bounds.clone());
+  }, []);
+
+  const handleModelError = useCallback(
+    (error: Error) => {
+      setIsLoading(false);
+      setModelBounds(null);
+      const fileName = asset?.name || modelUrl.split("/").pop() || "unknown";
+      const ext = fileName.includes(".")
+        ? fileName.split(".").pop()?.toLowerCase()
+        : "unknown";
+      const supported = ["glb", "gltf"];
+      const isSupported = ext ? supported.includes(ext) : false;
+
+      const lines = [`Failed to load 3D model: ${fileName}`];
+      if (ext && !isSupported) {
+        lines.push(
+          `Format ".${ext}" is not supported. Supported formats: ${supported.map((e) => `.${e}`).join(", ")}.`
+        );
+      }
+      if (error.message) {
+        lines.push(error.message);
+      }
+      if (modelUrl) {
+        const display =
+          modelUrl.length > 120 ? modelUrl.slice(0, 120) + "…" : modelUrl;
+        lines.push(`URL: ${display}`);
+      }
+      setLoadError(lines.join("\n"));
+    },
+    [asset?.name, modelUrl]
+  );
+
+  useEffect(() => {
+    if (modelUrl) {
+      setIsLoading(true);
+      setLoadError(null);
+    }
+  }, [modelUrl]);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!containerRef.current) {
+      return;
+    }
+
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen?.();
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen?.();
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, []);
+
+  const exitFullscreen = useCallback(() => {
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && isFullscreen) {
+        exitFullscreen();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isFullscreen, exitFullscreen]);
+
+  const handleResetCamera = useCallback(() => {
+    setResetCameraTrigger((prev) => prev + 1);
+  }, []);
+
+  const handleScreenshot = useCallback(() => {
+    setScreenshotTrigger((prev) => prev + 1);
+  }, []);
+
+  const handleCaptureScreenshot = useCallback(
+    (gl: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera) => {
+      const filename = asset?.name
+        ? `${asset.name.replace(/\.[^/.]+$/, "")}-screenshot.png`
+        : "model-screenshot.png";
+      captureScreenshot(gl, scene, camera, filename);
+    },
+    [asset?.name, captureScreenshot]
+  );
+
+  const handleLightingChange = useCallback((event: SelectChangeEvent) => {
+    setLightingPreset(event.target.value as LightingPreset);
+  }, []);
+
+  const handleBackgroundChange = useCallback((event: SelectChangeEvent) => {
+    setBackgroundColor(event.target.value as BackgroundColor);
+  }, []);
+
+  const handleToggleGrid = useCallback(() => {
+    setShowGrid(!showGrid);
+  }, [showGrid]);
+
+  const handleToggleAxes = useCallback(() => {
+    setShowAxes(!showAxes);
+  }, [showAxes]);
+
+  if (!modelUrl) {
+    return (
+      <FlexColumn
+        css={styles(theme, compact, bgColorValue)}
+        className="model-3d-viewer"
+        fullWidth
+      >
+        <Text size="small" color="secondary">
+          No 3D model loaded
+        </Text>
+      </FlexColumn>
+    );
+  }
+
+  return (
+    <FlexColumn
+      css={styles(theme, compact, bgColorValue)}
+      className="model-3d-viewer"
+      ref={containerRef}
+      fullWidth
+    >
+      <FlexColumn
+        className={cn("model-container", reactFlowClasses.nodrag)}
+        onClick={compact ? onClick : undefined}
+        onDoubleClick={compact ? onDoubleClick : undefined}
+        fullWidth
+        fullHeight
+        align="center"
+        justify="center"
+      >
+        <FlexColumn className="canvas-container" fullWidth fullHeight>
+          {isLoading && !loadError && (
+            <FlexColumn className="loading-overlay" align="center" gap={SPACING.xs}>
+              <LoadingSpinner size={compact ? "small" : "medium"} />
+              {!compact && (
+                <Text size="small" color="secondary">
+                  Loading model…
+                </Text>
+              )}
+            </FlexColumn>
+          )}
+          {loadError && (
+            <FlexColumn className="error-overlay" align="flex-start" gap={SPACING.micro}>
+              {loadError.split("\n").map((line, i) => (
+                <Text
+                  key={`${i}:${line}`}
+                  size={i === 0 ? "normal" : "small"}
+                  color={i === 0 ? "error" : "secondary"}
+                  sx={{
+                    wordBreak: "break-word",
+                    opacity: i === 0 ? 1 : 0.8
+                  }}
+                >
+                  {line}
+                  </Text>
+              ))}
+            </FlexColumn>
+          )}
+          <Canvas
+            camera={{ position: [3, 2, 3], fov: 50 }}
+            gl={{ preserveDrawingBuffer: true }}
+            style={{
+              background: bgColorValue,
+              display: "block",
+              width: "100%",
+              height: "100%",
+              minHeight: 0,
+              maxWidth: "100%",
+              maxHeight: "100%",
+              flex: 1
+            }}
+          >
+            <ModelErrorBoundary onError={handleModelError} fallback={null}>
+              <Suspense
+                fallback={
+                  <Html center>
+                    <LoadingSpinner size="medium" />
+                  </Html>
+                }
+              >
+                <ambientLight intensity={0.3} />
+                <Environment
+                  preset={lightingPreset}
+                  background={backgroundColor === "gradient"}
+                />
+
+                {!compact && (
+                  <ContactShadows
+                    position={[0, -0.001, 0]}
+                    opacity={0.5}
+                    scale={10}
+                    blur={2}
+                    far={4}
+                  />
+                )}
+
+                <Model
+                  url={modelUrl}
+                  wireframe={wireframe}
+                  onLoad={handleModelLoad}
+                  onClick={compact ? onClick : undefined}
+                  onDoubleClick={compact ? onDoubleClick : undefined}
+                />
+
+                {!compact && (
+                  <SceneHelpers showGrid={showGrid} showAxes={showAxes} />
+                )}
+
+                <OrbitControls
+                  makeDefault
+                  enablePan={!compact}
+                  enableZoom={!compact}
+                  enableRotate={true}
+                  minDistance={0.5}
+                  maxDistance={50}
+                />
+
+                <CameraController
+                  resetTrigger={resetCameraTrigger}
+                  modelBounds={modelBounds}
+                />
+
+                <ScreenshotHandler
+                  onCapture={handleCaptureScreenshot}
+                  triggerCapture={screenshotTrigger}
+                />
+              </Suspense>
+            </ModelErrorBoundary>
+          </Canvas>
+        </FlexColumn>
+
+        {isFullscreen && (
+          <ToolbarIconButton
+            icon={<CloseIcon />}
+            tooltip="Exit Fullscreen (Esc)"
+            className="fullscreen-close-button"
+            onClick={exitFullscreen}
+            size="medium"
+          />
+        )}
+
+        {!compact && (
+          <FlexRow className="controls-toolbar" gap={SPACING.micro} align="center">
+            <ToolbarIconButton
+              icon={<GridOnIcon fontSize="small" />}
+              tooltip="Toggle Grid"
+              onClick={handleToggleGrid}
+              active={showGrid}
+              size="small"
+            />
+
+            <ToolbarIconButton
+              icon={<ViewInArIcon fontSize="small" />}
+              tooltip="Toggle Axes"
+              onClick={handleToggleAxes}
+              active={showAxes}
+              size="small"
+            />
+
+            <ToggleGroup
+              size="small"
+              value={wireframe ? "wireframe" : "solid"}
+              exclusive
+              onChange={(_, value) => setWireframe(value === "wireframe")}
+            >
+              <ToggleOption value="solid" size="small">
+                Solid
+              </ToggleOption>
+              <ToggleOption value="wireframe" size="small">
+                Wire
+              </ToggleOption>
+            </ToggleGroup>
+
+            <FormControl size="small" className="controls-select">
+              <Select
+                value={lightingPreset}
+                onChange={handleLightingChange}
+                variant="outlined"
+                aria-label="Lighting preset"
+                IconComponent={LightModeIcon}
+              >
+                {LIGHTING_PRESETS.map((preset) => (
+                  <MenuItem key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            <FormControl size="small" className="controls-select">
+              <Select
+                value={backgroundColor}
+                onChange={handleBackgroundChange}
+                variant="outlined"
+                aria-label="Background color"
+              >
+                {BACKGROUND_COLORS.map((bg) => (
+                  <MenuItem key={bg.value} value={bg.value}>
+                    {bg.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+
+            <ToolbarIconButton
+              icon={<RestartAltIcon fontSize="small" />}
+              tooltip="Reset Camera"
+              onClick={handleResetCamera}
+              size="small"
+            />
+
+            <ToolbarIconButton
+              icon={<CameraAltIcon fontSize="small" />}
+              tooltip="Take Screenshot"
+              onClick={handleScreenshot}
+              size="small"
+            />
+
+            <ToolbarIconButton
+              icon={
+                isFullscreen ? (
+                  <FullscreenExitIcon fontSize="small" />
+                ) : (
+                  <FullscreenIcon fontSize="small" />
+                )
+              }
+              tooltip={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              onClick={toggleFullscreen}
+              size="small"
+            />
+          </FlexRow>
+        )}
+      </FlexColumn>
+
+      {!compact && asset?.name && (
+        <div className="model-info">
+          <Text size="normal" weight={600} color="secondary">
+            {asset.name}
+          </Text>
+        </div>
+      )}
+    </FlexColumn>
+  );
+};
+
+export default memo(Model3DViewer);

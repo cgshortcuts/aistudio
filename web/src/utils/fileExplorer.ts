@@ -1,0 +1,298 @@
+import { useNotificationStore } from "../stores/NotificationStore";
+
+type ModelDirectory = "huggingface" | "ollama";
+
+type SystemDirectory = "installation" | "logs" | "assets";
+
+interface FileExplorerResult {
+  status: "success" | "error";
+  path?: string;
+  message?: string;
+}
+
+type ExplorerBridge = {
+  openModelDirectory: (
+    target: ModelDirectory
+  ) => Promise<FileExplorerResult | void>;
+  openModelPath: (path: string) => Promise<FileExplorerResult | void>;
+  openSystemDirectory?: (
+    target: SystemDirectory
+  ) => Promise<FileExplorerResult | void>;
+};
+
+type ExplorerWindow = Window & {
+  api?: ExplorerBridge;
+};
+
+const explorerUnavailableMessage =
+  "Unable to open folders because the desktop bridge is not available.";
+
+const LOG_PREFIX = "[fileExplorer]";
+
+function debugLog(message: string, extra?: unknown): void {
+  if (typeof console === "undefined" || typeof console.debug !== "function") {
+    return;
+  }
+  if (typeof extra === "undefined") {
+    console.debug(LOG_PREFIX, message);
+  } else {
+    console.debug(LOG_PREFIX, message, extra);
+  }
+}
+
+function getExplorerBridge(): ExplorerBridge | null {
+  const currentWindow = resolveExplorerWindow();
+
+  if (
+    !currentWindow ||
+    typeof currentWindow.api?.openModelDirectory !== "function" ||
+    typeof currentWindow.api?.openModelPath !== "function"
+  ) {
+    return null;
+  }
+  return currentWindow.api as ExplorerBridge;
+}
+
+function resolveExplorerWindow(): ExplorerWindow | null {
+  if (typeof window !== "undefined" && "api" in window) {
+    return window as ExplorerWindow;
+  }
+  const g: object | undefined =
+    typeof globalThis !== "undefined"
+      ? globalThis
+      : typeof global !== "undefined"
+        ? (global as object)
+        : undefined;
+  if (!g) return null;
+  if ("window" in g) {
+    const w = g.window as ExplorerWindow | undefined;
+    if (w?.api) return w;
+  }
+  if ("api" in g) {
+    return g as ExplorerWindow;
+  }
+  return null;
+}
+
+function notify(
+  type: "error" | "warning",
+  content: string,
+  dismissable = true
+): void {
+  useNotificationStore.getState().addNotification({
+    type,
+    content,
+    dismissable
+  });
+}
+
+function handleExplorerResult(
+  result: FileExplorerResult | void,
+  fallbackMessage: string
+): void {
+  if (!result) {
+    debugLog("Explorer bridge returned no result");
+    return;
+  }
+  debugLog("Explorer bridge returned result", result);
+  if (result.status === "error") {
+    const message = result.message ?? fallbackMessage;
+    notify("error", message);
+  }
+}
+
+function ensureExplorerAvailable(): ExplorerBridge | null {
+  const explorer = getExplorerBridge();
+  if (!explorer) {
+    console.warn("[fileExplorer] Desktop bridge not available.");
+    notify("warning", explorerUnavailableMessage);
+  }
+  return explorer;
+}
+
+export function isFileExplorerAvailable(): boolean {
+  return getExplorerBridge() !== null;
+}
+
+/**
+ * Ask the backend to open the given path in the user's file explorer.
+ * Gracefully handles missing paths and logs any failures.
+ *
+ * @param path Absolute or user-specific path to open.
+ */
+export async function openInExplorer(path: string): Promise<void> {
+  debugLog("openInExplorer request", { path });
+  if (!path) {
+    console.warn("[fileExplorer] Tried to open an empty path in explorer.");
+    debugLog("openInExplorer aborted due to empty path");
+    return;
+  }
+
+  if (!isPathValid(path)) {
+    console.warn(
+      "[fileExplorer] Invalid path supplied, refusing to open explorer:",
+      path
+    );
+    debugLog("openInExplorer aborted due to invalid path");
+    return;
+  }
+
+  const explorer = ensureExplorerAvailable();
+  if (!explorer) {
+    debugLog("openInExplorer aborted because explorer bridge is unavailable");
+    return;
+  }
+
+  try {
+    debugLog("Calling explorer.openModelPath", { path });
+    const result = await explorer.openModelPath(path);
+    handleExplorerResult(result, "Unable to open the requested path.");
+    debugLog("openInExplorer completed");
+  } catch (error) {
+    console.error("[fileExplorer] Failed to open path in explorer:", error);
+    debugLog("openInExplorer threw", error);
+    notify("error", "Could not open folder in file explorer.");
+  }
+}
+
+/**
+ * Ask the Electron main process to open the HuggingFace cache directory.
+ */
+export async function openHuggingfacePath(): Promise<void> {
+  const explorer = ensureExplorerAvailable();
+  if (!explorer) {
+    debugLog("openHuggingfacePath aborted because explorer bridge is unavailable");
+    return;
+  }
+
+  try {
+    debugLog("Calling explorer.openModelDirectory for huggingface");
+    const result = await explorer.openModelDirectory("huggingface");
+    handleExplorerResult(result, "Could not open HuggingFace folder.");
+    debugLog("openHuggingfacePath completed");
+  } catch (error) {
+    console.error("[fileExplorer] Failed to open HuggingFace path:", error);
+    debugLog("openHuggingfacePath threw", error);
+    notify("error", "Could not open HuggingFace folder.");
+  }
+}
+
+/**
+ * Ask the Electron main process to open the Ollama models directory.
+ */
+export async function openOllamaPath(): Promise<void> {
+  const explorer = ensureExplorerAvailable();
+  if (!explorer) {
+    debugLog("openOllamaPath aborted because explorer bridge is unavailable");
+    return;
+  }
+
+  try {
+    debugLog("Calling explorer.openModelDirectory for ollama");
+    const result = await explorer.openModelDirectory("ollama");
+    handleExplorerResult(result, "Could not open Ollama folder.");
+    debugLog("openOllamaPath completed");
+  } catch (error) {
+    console.error("[fileExplorer] Failed to open Ollama path:", error);
+    debugLog("openOllamaPath threw", error);
+    notify("error", "Could not open Ollama folder.");
+  }
+}
+
+/**
+ * Ask the Electron main process to open the Nodetool installation directory.
+ */
+export async function openInstallationPath(): Promise<void> {
+  const explorer = getExplorerBridge();
+  if (!explorer || typeof explorer.openSystemDirectory !== "function") {
+    debugLog("openInstallationPath aborted because openSystemDirectory is unavailable");
+    notify("warning", explorerUnavailableMessage);
+    return;
+  }
+
+  try {
+    debugLog("Calling explorer.openSystemDirectory for installation");
+    const result = await explorer.openSystemDirectory("installation");
+    handleExplorerResult(result, "Could not open Nodetool installation folder.");
+    debugLog("openInstallationPath completed");
+  } catch (error) {
+    console.error("[fileExplorer] Failed to open installation path:", error);
+    debugLog("openInstallationPath threw", error);
+    notify("error", "Could not open Nodetool installation folder.");
+  }
+}
+
+/**
+ * Ask the Electron main process to open the Nodetool logs directory.
+ */
+export async function openLogsPath(): Promise<void> {
+  const explorer = getExplorerBridge();
+  if (!explorer || typeof explorer.openSystemDirectory !== "function") {
+    debugLog("openLogsPath aborted because openSystemDirectory is unavailable");
+    notify("warning", explorerUnavailableMessage);
+    return;
+  }
+
+  try {
+    debugLog("Calling explorer.openSystemDirectory for logs");
+    const result = await explorer.openSystemDirectory("logs");
+    handleExplorerResult(result, "Could not open Nodetool logs folder.");
+    debugLog("openLogsPath completed");
+  } catch (error) {
+    console.error("[fileExplorer] Failed to open logs path:", error);
+    debugLog("openLogsPath threw", error);
+    notify("error", "Could not open Nodetool logs folder.");
+  }
+}
+
+/**
+ * Ask the Electron main process to open the Nodetool assets directory.
+ */
+export async function openAssetsPath(): Promise<void> {
+  const explorer = getExplorerBridge();
+  if (!explorer || typeof explorer.openSystemDirectory !== "function") {
+    debugLog("openAssetsPath aborted because openSystemDirectory is unavailable");
+    notify("warning", explorerUnavailableMessage);
+    return;
+  }
+
+  try {
+    debugLog("Calling explorer.openSystemDirectory for assets");
+    const result = await explorer.openSystemDirectory("assets");
+    handleExplorerResult(result, "Could not open Nodetool assets folder.");
+    debugLog("openAssetsPath completed");
+  } catch (error) {
+    console.error("[fileExplorer] Failed to open assets path:", error);
+    debugLog("openAssetsPath threw", error);
+    notify("error", "Could not open Nodetool assets folder.");
+  }
+}
+
+/**
+ * Check if system directory opening is available.
+ */
+export function isSystemDirectoryAvailable(): boolean {
+  const explorer = getExplorerBridge();
+  return explorer !== null && typeof explorer.openSystemDirectory === "function";
+}
+
+export function isPathValid(path: string): boolean {
+  if (!path) {return false;}
+
+  // Disallow path traversal sequences
+  if (path.includes("..")) {return false;}
+
+  // Accept typical absolute paths:
+  // 1. POSIX absolute path starting with '/'
+  // 2. Windows absolute path starting with a drive letter followed by ':' and either \\ or '/'
+  // 3. Home‐relative path starting with '~'
+  const windowsAbsRegex = /^[a-zA-Z]:[\\/].+/;
+  const posixAbsRegex = /^\/.+/;
+  const homeRegex = /^~[\\/].+/;
+
+  return (
+    windowsAbsRegex.test(path) ||
+    posixAbsRegex.test(path) ||
+    homeRegex.test(path)
+  );
+}

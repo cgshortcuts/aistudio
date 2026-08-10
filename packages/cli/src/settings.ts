@@ -1,0 +1,112 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+
+export interface ChatSettings {
+  provider: string;
+  model: string;
+  enabledTools: string[];
+}
+
+export const DEFAULT_SETTINGS: ChatSettings = {
+  provider: detectDefaultProvider(),
+  model: detectDefaultModel(),
+  enabledTools: [
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_directory",
+    "glob",
+    "grep",
+    "download_file",
+    "http_request",
+    "browser",
+    "take_screenshot",
+    "run_code",
+    // NodeTool MCP tools
+    "list_workflows",
+    "get_workflow",
+    "create_workflow",
+    "run_workflow",
+    "validate_workflow",
+    "get_example_workflow",
+    "export_workflow_digraph",
+    "list_nodes",
+    "search_nodes",
+    "get_node_info",
+    "list_jobs",
+    "get_job",
+    "get_job_logs",
+    "start_background_job",
+    "list_assets",
+    "get_asset",
+    "list_models"
+  ]
+};
+
+function detectDefaultProvider(): string {
+  if (process.env["ANTHROPIC_API_KEY"]) return "anthropic";
+  if (process.env["OPENAI_API_KEY"]) return "openai";
+  if (process.env["GEMINI_API_KEY"]) return "gemini";
+  return "ollama"; // local fallback
+}
+
+function detectDefaultModel(): string {
+  const prov = detectDefaultProvider();
+  switch (prov) {
+    case "anthropic":
+      return "claude-sonnet-4-6";
+    case "openai":
+      return "gpt-4o";
+    case "gemini":
+      return "gemini-3.5-flash";
+    default:
+      return "llama3.2";
+  }
+}
+
+const SETTINGS_DIR = join(homedir(), ".nodetool");
+const SETTINGS_FILE = join(SETTINGS_DIR, "chat-settings.json");
+
+/**
+ * Drop legacy fields from older settings files: agent-mode / planner toggles
+ * (the unified chat agent has no mode) and `workspace` (it now always defaults
+ * to the current directory and is never persisted).
+ */
+function migrateSettings(raw: Record<string, unknown>): Record<string, unknown> {
+  const {
+    agentMode: _dropMode,
+    agentPlanner: _dropPlanner,
+    workspace: _dropWorkspace,
+    ...rest
+  } = raw;
+  void _dropMode;
+  void _dropPlanner;
+  void _dropWorkspace;
+  return rest;
+}
+
+export async function loadSettings(): Promise<ChatSettings> {
+  try {
+    const content = await readFile(SETTINGS_FILE, "utf-8");
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    return { ...DEFAULT_SETTINGS, ...migrateSettings(parsed) } as ChatSettings;
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+}
+
+export async function saveSettings(
+  settings: Partial<ChatSettings>
+): Promise<void> {
+  try {
+    await mkdir(SETTINGS_DIR, { recursive: true });
+    const current = await loadSettings();
+    await writeFile(
+      SETTINGS_FILE,
+      JSON.stringify({ ...current, ...settings }, null, 2)
+    );
+  } catch {
+    // ignore save errors silently
+  }
+}

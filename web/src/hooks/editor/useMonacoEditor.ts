@@ -1,0 +1,110 @@
+import React, { useCallback, useRef, useState } from "react";
+// Type-only: the value import happens in `configureMonacoLoader` below. A
+// static `import * as monaco` pulled all 3.6 MB of Monaco into whatever chunk
+// reached this hook — including the inspector, which mounts with the workspace
+// — so the app downloaded the code editor on every boot.
+import type * as monaco from "monaco-editor";
+
+// Configure Monaco loader to use local files instead of CDN
+// This must be done before importing @monaco-editor/react
+let loaderConfigured = false;
+async function configureMonacoLoader() {
+  if (loaderConfigured) {
+    return;
+  }
+  const [loader, monaco] = await Promise.all([
+    import("@monaco-editor/loader"),
+    import("monaco-editor")
+  ]);
+  loader.default.config({ monaco });
+  loaderConfigured = true;
+}
+
+type MonacoComponent = (props: {
+  value: string;
+  onChange?: (val?: string) => void;
+  language?: string;
+  theme?: string;
+  options?: Record<string, unknown>;
+  width?: string | number;
+  height?: string | number;
+  onMount?: (editor: monaco.editor.IStandaloneCodeEditor, monaco: typeof import("monaco-editor")) => void;
+}) => React.JSX.Element;
+
+type MonacoEditorResult = {
+  MonacoEditor: MonacoComponent | null;
+  monacoLoadError: string | null;
+  isMonacoLoading: boolean;
+  loadMonacoIfNeeded: () => Promise<void>;
+  monacoRef: React.MutableRefObject<monaco.editor.IStandaloneCodeEditor | null>;
+  monacoOnMount: (editor: monaco.editor.IStandaloneCodeEditor) => void;
+  handleMonacoFind: () => void;
+  handleMonacoFormat: () => void;
+};
+
+/** Lazy-loads and manages a Monaco editor instance, deferring the heavy bundle until needed. */
+export function useMonacoEditor(): MonacoEditorResult {
+  const [MonacoEditor, setMonacoEditor] = useState<MonacoComponent | null>(
+    null
+  );
+  const [monacoLoadError, setMonacoLoadError] = useState<string | null>(null);
+  const [isMonacoLoading, setIsMonacoLoading] = useState(false);
+
+  const monacoRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  // Use refs to track loading state without causing callback recreation
+  const isLoadingRef = useRef(false);
+  const isLoadedRef = useRef(false);
+
+  const monacoOnMount = useCallback((editor: monaco.editor.IStandaloneCodeEditor) => {
+    monacoRef.current = editor;
+  }, []);
+
+  const loadMonacoIfNeeded = useCallback(async () => {
+    // Use refs for guards to keep callback reference stable
+    if (isLoadedRef.current || isLoadingRef.current) {
+      return;
+    }
+    isLoadingRef.current = true;
+    setIsMonacoLoading(true);
+    try {
+      await configureMonacoLoader();
+      const mod = await import("@monaco-editor/react");
+      setMonacoEditor(() => mod.default as unknown as MonacoComponent);
+      isLoadedRef.current = true;
+    } catch {
+      setMonacoLoadError("Failed to load code editor");
+    } finally {
+      isLoadingRef.current = false;
+      setIsMonacoLoading(false);
+    }
+  }, []);
+
+  const handleMonacoFind = useCallback(() => {
+    try {
+      const editor = monacoRef.current;
+      editor?.getAction?.("actions.find")?.run?.();
+    } catch {
+      /* empty */
+    }
+  }, []);
+
+  const handleMonacoFormat = useCallback(() => {
+    try {
+      const editor = monacoRef.current;
+      editor?.getAction?.("editor.action.formatDocument")?.run?.();
+    } catch {
+      /* empty */
+    }
+  }, []);
+
+  return {
+    MonacoEditor,
+    monacoLoadError,
+    isMonacoLoading,
+    loadMonacoIfNeeded,
+    monacoRef,
+    monacoOnMount,
+    handleMonacoFind,
+    handleMonacoFormat
+  } as const;
+}

@@ -1,0 +1,653 @@
+/**
+ * ComfyUI workflow executor — submits prompts to any ComfyUI server
+ * and streams progress via ComfyUI's WebSocket.
+ */
+import { createLogger } from "@nodetool-ai/config";
+import WebSocket from "ws";
+
+const log = createLogger("runtime:comfy-executor");
+
+export interface ComfyImage {
+  type: "image";
+  data: string;
+  filename: string;
+}
+
+/** A single file produced by a ComfyUI output node (image, audio, or video). */
+export interface ComfyFileOutput {
+  /** base64-encoded file bytes */
+  data: string;
+  filename: string;
+  mimeType: string;
+}
+
+/** Outputs produced by one ComfyUI node, grouped by media kind. */
+export interface ComfyNodeOutputs {
+  images?: ComfyFileOutput[];
+  audio?: ComfyFileOutput[];
+  video?: ComfyFileOutput[];
+}
+
+export interface ComfyExecutorResult {
+  status: "completed" | "failed";
+  /** Flat list of all output images, across every node (legacy convenience). */
+  images?: ComfyImage[];
+  /** Per-node outputs keyed by ComfyUI node id, grouped by media kind. */
+  nodeOutputs?: Record<string, ComfyNodeOutputs>;
+  raw_output?: Record<string, unknown>;
+  error?: string;
+}
+
+/** ComfyUI history output file descriptor. */
+interface ComfyOutputFile {
+  filename: string;
+  subfolder: string;
+  type: string;
+}
+
+/** Progress events emitted during execution. */
+export interface ComfyProgressEvent {
+  type:
+    | "executing"
+    | "progress"
+    | "executed"
+    | "execution_cached"
+    | "execution_start"
+    | "execution_error"
+    | "execution_interrupted";
+  node?: string | null;
+  progress?: number;
+  total?: number;
+  output?: Record<string, unknown>;
+  error?: string;
+  cached_nodes?: string[];
+}
+
+type ComfyPrompt = Record<
+  string,
+  { class_type: string; inputs: Record<string, unknown> }
+>;
+
+/** Handle returned by executeComfy for cancellation support. */
+export interface ComfyExecutionHandle {
+  /** Promise that resolves when execution completes or fails. */
+  result: Promise<ComfyExecutorResult>;
+  /** Cancel the execution — closes WS and sends interrupt to ComfyUI. */
+  cancel: () => void;
+}
+
+function normalizeBaseUrl(addr: string): string {
+  const url = addr.startsWith("http") ? addr : `http://${addr}`;
+  let end = url.length;
+  while (end > 0 && url[end - 1] === "/") end--;
+  return url.slice(0, end);
+}
+
+function toWsUrl(httpBase: string, clientId: string): string {
+  return httpBase.replace(/^http/, "ws") + `/ws?clientId=${clientId}`;
+}
+
+const IMAGE_FETCH_TIMEOUT_MS = 30_000;
+
+/**
+ * Execute a ComfyUI workflow against a ComfyUI server.
+ * Connects to ComfyUI's WebSocket for real-time progress events.
+ *
+ * Returns a handle with a result promise and a cancel() method.
+ */
+export function executeComfy(
+  prompt: ComfyPrompt,
+  addr: string,
+  onProgress?: (event: ComfyProgressEvent) => void,
+  timeoutMs = 600000,
+  onNodeOutput?: (nodeId: string, outputs: ComfyNodeOutputs) => void
+): ComfyExecutionHandle {
+  const base = normalizeBaseUrl(addr);
+  const clientId = `nodetool-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  let cancelled = false;
+  let ws: WebSocket | null = null;
+
+  const cancel = () => {
+    if (cancelled) return;
+    cancelled = true;
+    void fetch(`${base}/interrupt`, { method: "POST" }).catch((err) => {
+      log.warn("Failed to send ComfyUI interrupt request", {
+        error: String(err)
+      });
+    });
+    if (ws) {
+      try {
+        ws.close();
+      } catch {
+        /* Intentional: best-effort WebSocket close during cleanup */
+      }
+    }
+  };
+
+  // Frames that arrive after 'open' but before listenForCompletion attaches its
+  // real handler (i.e. during the /prompt submit round-trip). ComfyUI can
+  // dequeue and finish a cached prompt within milliseconds of returning the
+  // prompt_id, emitting its terminal events in this window; the `ws` library
+  // drops 'message' events with no listener, so buffer them and replay.
+  const preListenBuffer: unknown[] = [];
+  const bufferListener = (raw: unknown) => {
+    preListenBuffer.push(raw);
+  };
+
+  const result = (async (): Promise<ComfyExecutorResult> => {
+    // Connect WebSocket FIRST so we don't miss any events
+    const wsUrl = toWsUrl(base, clientId);
+    try {
+      // Bound the handshake: `ws` has no default handshake timeout, so a host
+      // that accepts the TCP connection but never completes the WS upgrade
+      // (hung proxy, wrong port, black-hole) would leave neither "open" nor
+      // "error" firing and the awaited promise — and the node actor — hung
+      // forever (the run watchdog is only armed later, in listenForCompletion).
+      ws = new WebSocket(wsUrl, { handshakeTimeout: timeoutMs });
+      await new Promise<void>((resolve, reject) => {
+        const connectTimer = setTimeout(() => {
+          reject(
+            new Error(
+              `ComfyUI WebSocket did not open within ${timeoutMs}ms`
+            )
+          );
+        }, timeoutMs);
+        ws!.on("open", () => {
+          clearTimeout(connectTimer);
+          resolve();
+        });
+        ws!.on("error", (err) => {
+          clearTimeout(connectTimer);
+          reject(err);
+        });
+      });
+      // Start buffering immediately so events during the submit round-trip
+      // below are not lost before listenForCompletion attaches its handler.
+      ws.on("message", bufferListener);
+      log.info(`ComfyUI WebSocket connected: ${wsUrl}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error(`Failed to connect ComfyUI WebSocket: ${msg}`);
+      return { status: "failed", error: `WebSocket connection failed: ${msg}` };
+    }
+
+    if (cancelled) {
+      try {
+        ws.close();
+      } catch {
+        /* Intentional: best-effort WebSocket close during cleanup */
+      }
+      return { status: "failed", error: "Cancelled before submission" };
+    }
+
+    // Submit prompt (with client_id so ComfyUI routes events to our WS)
+    let promptId: string;
+    try {
+      const url = `${base}/prompt`;
+      const body = JSON.stringify({ prompt, client_id: clientId });
+      log.info(
+        `Submitting prompt to ${url} (${body.length} bytes, ${Object.keys(prompt).length} nodes)`
+      );
+      // Bound the submit: it runs after the WS handshake resolves but before
+      // listenForCompletion arms its watchdog, so a server that accepts the
+      // connection but never responds would hang the node forever otherwise.
+      const submitRes = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      if (!submitRes.ok) {
+        const text = await submitRes.text();
+        log.error(`Submit failed: HTTP ${submitRes.status} — ${text}`);
+        try {
+          ws.close();
+        } catch {
+          /* Intentional: best-effort WebSocket close during cleanup */
+        }
+        return {
+          status: "failed",
+          error: `Submit failed (${submitRes.status}): ${text}`
+        };
+      }
+      const submitData = (await submitRes.json()) as { prompt_id: string };
+      promptId = submitData.prompt_id;
+      log.info(`Prompt accepted: ${promptId}`);
+    } catch (err) {
+      const errMsg =
+        err instanceof Error
+          ? `${err.message} (${err.cause ?? "no cause"})`
+          : String(err);
+      log.error(`Submit error to ${base}/prompt: ${errMsg}`);
+      try {
+        ws.close();
+      } catch {
+        /* Intentional: best-effort WebSocket close during cleanup */
+      }
+      return { status: "failed", error: `Submit error: ${errMsg}` };
+    }
+
+    // Streaming state: per-node outputs are downloaded+emitted live as each
+    // save node finishes; cached nodes are reconciled from history afterward.
+    const streamState: ComfyStreamState = {
+      base,
+      emitted: new Set<string>(),
+      collected: {},
+      onNodeOutput
+    };
+
+    // Listen for progress events on the already-connected WebSocket. Hand off
+    // the buffered frames (and the buffer listener to detach) so any terminal
+    // event that arrived during submit is replayed rather than lost.
+    const listenResult = await listenForCompletion(
+      ws,
+      promptId,
+      onProgress,
+      timeoutMs,
+      streamState,
+      { bufferListener, bufferedFrames: preListenBuffer }
+    );
+
+    if (listenResult.status === "failed") {
+      return listenResult;
+    }
+
+    // Reconcile from history: cached nodes (and any not captured live) don't
+    // emit `executed`, so fetch them now — skipping only nodes whose live
+    // download actually succeeded. A node added to `emitted` but whose live
+    // download failed or yielded nothing is intentionally NOT skipped, so it
+    // gets a second chance from history rather than being lost. (All in-flight
+    // downloads have settled by now: `settle()` drains them before resolving.)
+    const fromHistory = await fetchOutputs(
+      base,
+      promptId,
+      new Set(Object.keys(streamState.collected))
+    );
+    for (const [nodeId, outputs] of Object.entries(fromHistory)) {
+      streamState.collected[nodeId] = outputs;
+      onNodeOutput?.(nodeId, outputs);
+    }
+
+    const nodeOutputs = streamState.collected;
+    const images: ComfyImage[] = [];
+    for (const out of Object.values(nodeOutputs)) {
+      for (const img of out.images ?? []) {
+        images.push({ type: "image", data: img.data, filename: img.filename });
+      }
+    }
+
+    return {
+      status: "completed",
+      images,
+      nodeOutputs,
+      raw_output: listenResult.raw_output
+    };
+  })();
+
+  return { result, cancel };
+}
+
+/** Shared, mutable streaming state threaded through the WS listener. */
+interface ComfyStreamState {
+  base: string;
+  /** Node ids whose outputs were downloaded+emitted live (skip in history). */
+  emitted: Set<string>;
+  /** All emitted outputs, keyed by node id (for the final result). */
+  collected: Record<string, ComfyNodeOutputs>;
+  onNodeOutput?: (nodeId: string, outputs: ComfyNodeOutputs) => void;
+}
+
+/**
+ * Listen on an already-connected ComfyUI WebSocket for the prompt to complete,
+ * streaming progress events along the way. When a save/output node finishes
+ * (`executed`), its files are downloaded immediately and pushed via
+ * `stream.onNodeOutput`, so results surface as each node completes rather than
+ * batched at the end.
+ */
+function listenForCompletion(
+  ws: WebSocket,
+  promptId: string,
+  onProgress: ((event: ComfyProgressEvent) => void) | undefined,
+  timeoutMs: number,
+  stream: ComfyStreamState,
+  buffer?: {
+    bufferListener: (raw: unknown) => void;
+    bufferedFrames: unknown[];
+  }
+): Promise<ComfyExecutorResult> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let currentNode: string | null = null;
+    // In-flight per-node downloads; settle waits for these to finish.
+    const pending: Array<Promise<void>> = [];
+
+    const settle = (result: ComfyExecutorResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      // Remove message listener before closing to prevent stale callbacks
+      ws.removeAllListeners("message");
+      try {
+        ws.close();
+      } catch {
+        /* Intentional: best-effort WebSocket close during cleanup */
+      }
+      // Drain any in-flight downloads before resolving so streamed outputs
+      // are reflected in the final result.
+      void Promise.allSettled(pending).then(() => resolve(result));
+    };
+
+    const timer = setTimeout(() => {
+      log.error(`Timeout waiting for prompt ${promptId} after ${timeoutMs}ms`);
+      settle({ status: "failed", error: "Timeout waiting for ComfyUI result" });
+    }, timeoutMs);
+
+    ws.on("error", (err) => {
+      log.error(`ComfyUI WebSocket error: ${err.message}`);
+      settle({ status: "failed", error: `WebSocket error: ${err.message}` });
+    });
+
+    ws.on("close", () => {
+      if (!settled) {
+        settle({
+          status: "failed",
+          error: "ComfyUI WebSocket closed unexpectedly"
+        });
+      }
+    });
+
+    const messageHandler = (raw: WebSocket.RawData) => {
+      if (settled) return; // Guard against late messages in receive buffer
+
+      let msg: { type?: string; data?: Record<string, unknown> };
+      try {
+        msg = JSON.parse(raw.toString());
+      } catch {
+        return; // binary preview frame or malformed — skip
+      }
+
+      const type = msg.type;
+      const data = msg.data ?? {};
+      const msgPromptId = data.prompt_id as string | undefined;
+
+      // Skip messages for other prompts
+      if (msgPromptId && msgPromptId !== promptId) return;
+
+      switch (type) {
+        case "execution_start":
+          onProgress?.({ type: "execution_start" });
+          break;
+
+        case "execution_cached": {
+          const nodes = Array.isArray(data.nodes) ? data.nodes.map(String) : [];
+          onProgress?.({ type: "execution_cached", cached_nodes: nodes });
+          break;
+        }
+
+        case "executing": {
+          const nodeId = data.node != null ? String(data.node) : null;
+          currentNode = nodeId;
+          // Always emit the executing event (even for null/end-of-execution)
+          onProgress?.({ type: "executing", node: nodeId });
+          if (nodeId === null) {
+            // null node means execution finished — but prefer execution_success
+            // for the actual settle, as it carries richer data. Only settle here
+            // if execution_success doesn't arrive within a short window.
+            setTimeout(() => {
+              if (!settled) {
+                settle({ status: "completed", raw_output: {} });
+              }
+            }, 500);
+          }
+          break;
+        }
+
+        case "progress": {
+          const value = typeof data.value === "number" ? data.value : 0;
+          const max = typeof data.max === "number" ? data.max : 1;
+          onProgress?.({
+            type: "progress",
+            node: currentNode,
+            progress: value,
+            total: max
+          });
+          break;
+        }
+
+        case "executed": {
+          const nodeId = data.node != null ? String(data.node) : null;
+          const output = (data.output ?? {}) as Record<string, unknown>;
+          onProgress?.({ type: "executed", node: nodeId, output });
+          // Download this node's files now and stream them out, so outputs
+          // surface as each save node completes (not batched at the end).
+          if (nodeId && !stream.emitted.has(nodeId)) {
+            stream.emitted.add(nodeId);
+            pending.push(
+              (async () => {
+                const outputs = await downloadNodeOutput(
+                  stream.base,
+                  output as ComfyRawNodeOutput
+                );
+                if (Object.keys(outputs).length === 0) return;
+                stream.collected[nodeId] = outputs;
+                stream.onNodeOutput?.(nodeId, outputs);
+              })().catch((err) => {
+                log.warn(
+                  `Failed to stream output for node ${nodeId}: ${String(err)}`
+                );
+              })
+            );
+          }
+          break;
+        }
+
+        case "execution_success":
+          settle({ status: "completed", raw_output: data });
+          break;
+
+        case "execution_error": {
+          const errMsg =
+            typeof data.exception_message === "string"
+              ? data.exception_message
+              : "ComfyUI execution error";
+          const nodeId = data.node != null ? String(data.node) : currentNode;
+          onProgress?.({
+            type: "execution_error",
+            node: nodeId,
+            error: errMsg
+          });
+          settle({ status: "failed", error: errMsg });
+          break;
+        }
+
+        case "execution_interrupted":
+          onProgress?.({ type: "execution_interrupted" });
+          settle({ status: "failed", error: "Execution interrupted" });
+          break;
+      }
+    };
+
+    // Detach the pre-listen buffer, attach the real handler for live frames,
+    // then replay any frames buffered during the submit window (in order). A
+    // terminal event that arrived before this point is thus not lost.
+    if (buffer) {
+      ws.off("message", buffer.bufferListener);
+    }
+    ws.on("message", messageHandler);
+    if (buffer) {
+      for (const raw of buffer.bufferedFrames) {
+        if (settled) break;
+        messageHandler(raw as WebSocket.RawData);
+      }
+    }
+
+    // Only after replaying buffered frames: if a completion arrived during the
+    // submit window it has already settled us above. If we're still unsettled
+    // and the socket already closed/errored during that window (those events
+    // won't re-fire on the freshly-attached "close" listener), fail fast rather
+    // than hang for the full timeout.
+    if (
+      !settled &&
+      (ws.readyState === WebSocket.CLOSING ||
+        ws.readyState === WebSocket.CLOSED)
+    ) {
+      settle({
+        status: "failed",
+        error: "ComfyUI WebSocket closed before result streaming began"
+      });
+    }
+  });
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  bmp: "image/bmp",
+  wav: "audio/wav",
+  mp3: "audio/mpeg",
+  ogg: "audio/ogg",
+  flac: "audio/flac",
+  m4a: "audio/mp4",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  mov: "video/quicktime",
+  mkv: "video/x-matroska"
+};
+
+function mimeForFilename(filename: string): string {
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  return MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
+
+/** Download one history output file and return it base64-encoded. */
+async function downloadOutputFile(
+  base: string,
+  file: ComfyOutputFile
+): Promise<ComfyFileOutput | null> {
+  try {
+    const params = new URLSearchParams({
+      filename: file.filename,
+      subfolder: file.subfolder,
+      type: file.type
+    });
+    const viewRes = await fetch(`${base}/view?${params.toString()}`, {
+      signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS)
+    });
+    if (!viewRes.ok) return null;
+    const buffer = await viewRes.arrayBuffer();
+    return {
+      data: Buffer.from(buffer).toString("base64"),
+      filename: file.filename,
+      mimeType: mimeForFilename(file.filename)
+    };
+  } catch (err) {
+    log.warn(`Failed to fetch output ${file.filename}: ${String(err)}`);
+    return null;
+  }
+}
+
+/** Raw ComfyUI output-node payload (from `executed` events and `/history`). */
+interface ComfyRawNodeOutput {
+  images?: ComfyOutputFile[];
+  audio?: ComfyOutputFile[];
+  // VHS and core video nodes report under different keys
+  gifs?: ComfyOutputFile[];
+  videos?: ComfyOutputFile[];
+}
+
+/** Download all files in one output-node payload, grouped by media kind. */
+async function downloadNodeOutput(
+  base: string,
+  raw: ComfyRawNodeOutput
+): Promise<ComfyNodeOutputs> {
+  const collected: ComfyNodeOutputs = {};
+  const groups: Array<[keyof ComfyNodeOutputs, ComfyOutputFile[]]> = [
+    ["images", raw.images ?? []],
+    ["audio", raw.audio ?? []],
+    ["video", [...(raw.gifs ?? []), ...(raw.videos ?? [])]]
+  ];
+  for (const [kind, files] of groups) {
+    if (files.length === 0) continue;
+    const downloaded: ComfyFileOutput[] = [];
+    for (const file of files) {
+      const out = await downloadOutputFile(base, file);
+      if (out) downloaded.push(out);
+    }
+    if (downloaded.length > 0) collected[kind] = downloaded;
+  }
+  return collected;
+}
+
+/**
+ * Fetch output files from ComfyUI history after a prompt completes, grouped
+ * per node and by media kind. Skips nodes already emitted live (`emitted`) so
+ * cached/non-streamed nodes are reconciled without double-downloading.
+ */
+async function fetchOutputs(
+  base: string,
+  promptId: string,
+  emitted?: Set<string>
+): Promise<Record<string, ComfyNodeOutputs>> {
+  const result: Record<string, ComfyNodeOutputs> = {};
+  try {
+    const histRes = await fetch(`${base}/history/${promptId}`, {
+      signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS)
+    });
+    if (!histRes.ok) return result;
+
+    const histData = (await histRes.json()) as Record<string, unknown>;
+    const entry = histData[promptId] as Record<string, unknown> | undefined;
+    const outputs = entry?.outputs as
+      | Record<string, ComfyRawNodeOutput>
+      | undefined;
+    if (!outputs) return result;
+
+    for (const [nodeId, nodeOutput] of Object.entries(outputs)) {
+      if (emitted?.has(nodeId)) continue;
+      const collected = await downloadNodeOutput(base, nodeOutput);
+      if (Object.keys(collected).length > 0) result[nodeId] = collected;
+    }
+  } catch (err) {
+    log.warn(`Failed to fetch history for ${promptId}: ${String(err)}`);
+  }
+  return result;
+}
+
+/**
+ * Upload a file to a ComfyUI server's input folder via `/upload/image`
+ * (ComfyUI accepts arbitrary input files on this endpoint, not just images).
+ * Returns the stored filename to reference from a Load* node's input.
+ */
+export async function uploadComfyFile(
+  addr: string,
+  bytes: Uint8Array,
+  filename: string,
+  mimeType = "application/octet-stream"
+): Promise<string> {
+  const base = normalizeBaseUrl(addr);
+  const form = new FormData();
+  const view = new Uint8Array(bytes);
+  const ab = view.buffer.slice(
+    view.byteOffset,
+    view.byteOffset + view.byteLength
+  ) as ArrayBuffer;
+  form.append("image", new Blob([ab], { type: mimeType }), filename);
+  form.append("overwrite", "true");
+  const res = await fetch(`${base}/upload/image`, {
+    method: "POST",
+    body: form,
+    // Bound the upload so a stalled ComfyUI endpoint rejects instead of hanging
+    // the caller indefinitely, matching the download/history fetches.
+    signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS)
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`ComfyUI upload failed (${res.status}): ${text}`);
+  }
+  const data = (await res.json()) as { name?: string; subfolder?: string };
+  const name = data.name ?? filename;
+  return data.subfolder ? `${data.subfolder}/${name}` : name;
+}

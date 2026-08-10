@@ -1,0 +1,1142 @@
+/**
+ * Workflows router — migrated from REST `/api/workflows*`.
+ *
+ * Retained on REST (file downloads):
+ *   - GET  /api/workflows/:id/dsl-export   (text/plain file download)
+ *
+ * Everything else is served via tRPC:
+ *   - list, get, create, update, delete
+ *   - autosave
+ *   - examples (list + search)
+ *   - public (list + get) — publicProcedure (no auth required)
+ *   - versions (list, create, restore, delete)
+ *
+ * Auth note:
+ *   - `public.*` endpoints use publicProcedure — no auth required, matches
+ *     the legacy behaviour (public workflows are browsable without login).
+ *   - All other endpoints use protectedProcedure.
+ */
+
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import nodePath from "node:path";
+import { withCacheBuster } from "../../lib/example-thumbnail.js";
+import {
+  Workflow,
+  WorkflowVersion,
+  WorkflowCollaborator,
+  WorkflowShare
+} from "@nodetool-ai/models";
+import type {
+  Workflow as WorkflowModel,
+  WorkflowVersion as WorkflowVersionModel
+} from "@nodetool-ai/models";
+import { loadPythonPackageMetadata } from "@nodetool-ai/node-sdk";
+import { createLogger } from "@nodetool-ai/config";
+import {
+  loadExampleGraph,
+  defaultExamplePackageName,
+  deriveExampleAssetsDir
+} from "../../example-workflows.js";
+import { ApiErrorCode } from "../../error-codes.js";
+import { router, publicProcedure } from "../index.js";
+import { protectedProcedure } from "../middleware.js";
+import { throwApiError } from "../error-formatter.js";
+import { syncRegistrations } from "../../triggers/registration-sync.js";
+import {
+  getWorkflowInterfaceV1,
+  getWorkflowInterfacesV1,
+  listWorkflowSummariesV1,
+  WorkflowInterfaceServiceError
+} from "../../workflow-interface-service.js";
+import {
+  listInput,
+  listOutput,
+  getInput,
+  createInput,
+  updateInput,
+  deleteInput,
+  deleteOutput,
+  autosaveInput,
+  autosaveOutput,
+  examplesInput,
+  examplesOutput,
+  publicListInput,
+  publicListOutput,
+  publicGetInput,
+  versionsListInput,
+  versionsListOutput,
+  versionCreateInput,
+  versionResponse,
+  versionRestoreInput,
+  versionDeleteInput,
+  versionDeleteOutput,
+  terminalOutputsInput,
+  terminalOutputsOutput,
+  workflowResponse,
+  workflowInterfaceInput,
+  workflowInterfaceV1,
+  workflowInterfacesInput,
+  workflowInterfacesOutput,
+  sdkWorkflowSummariesInput,
+  sdkWorkflowSummariesOutput,
+  graph as graphSchema,
+  sharingGetInput,
+  sharingGetOutput,
+  sharingCreateLinkInput,
+  sharingRevokeLinkInput,
+  sharingSetRoleInput,
+  sharingRemoveCollaboratorInput,
+  sharingOkOutput,
+  sharingAcceptInput,
+  sharingAcceptOutput,
+  shareItem,
+  collaboratorItem,
+  sharedWithMeInput,
+  sharedWithMeOutput,
+  type WorkflowResponse,
+  type VersionResponse
+} from "@nodetool-ai/protocol/api-schemas/workflows.js";
+
+const log = createLogger("nodetool.websocket.trpc.workflows");
+
+function throwWorkflowInterfaceError(error: unknown): never {
+  if (!(error instanceof WorkflowInterfaceServiceError)) {
+    throw error;
+  }
+  if (error.code === "feature_disabled") {
+    throwApiError(ApiErrorCode.SERVICE_UNAVAILABLE, error.message);
+  }
+  if (error.code === "workflow_not_found") {
+    throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, error.message);
+  }
+  throwApiError(ApiErrorCode.INVALID_INPUT, error.message);
+}
+
+/**
+ * Reconcile `trigger_registrations` against the workflow's current graph.
+ * Non-fatal by design — a broken trigger sync must not stop the user's graph
+ * from saving, so failures are logged and swallowed here.
+ */
+async function syncTriggerRegistrations(
+  workflow: WorkflowModel
+): Promise<void> {
+  try {
+    await syncRegistrations(workflow, {});
+  } catch (error) {
+    log.error("Trigger registration sync failed", {
+      workflowId: workflow.id,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+/**
+ * The caller's effective role on a workflow:
+ *   owner  — workflows.user_id
+ *   editor — collaborator grant with role "editor"
+ *   viewer — collaborator grant with role "viewer", or public access
+ *   null   — no access (surfaced as WORKFLOW_NOT_FOUND, never FORBIDDEN,
+ *            so private workflow ids are not probeable)
+ */
+type WorkflowRole = "owner" | "editor" | "viewer";
+
+async function resolveWorkflowRole(
+  workflow: WorkflowModel,
+  userId: string
+): Promise<WorkflowRole | null> {
+  if (workflow.user_id === userId) return "owner";
+  const grant = await WorkflowCollaborator.findFor(workflow.id, userId);
+  if (grant) return grant.role;
+  if (workflow.access === "public") return "viewer";
+  return null;
+}
+
+/** Load a workflow and require at least `minimum` access, else 404. */
+async function requireWorkflowRole(
+  workflowId: string,
+  userId: string,
+  minimum: "viewer" | "editor" | "owner"
+): Promise<{ workflow: WorkflowModel; role: WorkflowRole }> {
+  const workflow = (await Workflow.get(workflowId)) as WorkflowModel | null;
+  if (!workflow) {
+    throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+  }
+  const role = await resolveWorkflowRole(workflow, userId);
+  const rank: Record<WorkflowRole, number> = { viewer: 1, editor: 2, owner: 3 };
+  if (!role || rank[role] < rank[minimum]) {
+    throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+  }
+  return { workflow, role };
+}
+
+/**
+ * Validate a workflow graph against the wire schema. Returns the graph if it
+ * passes, or null if invalid — so list endpoints can still return the rest of
+ * the workflow row instead of failing the entire response.
+ */
+function summarizeGraphIssues(
+  issues: ReadonlyArray<{
+    readonly code: string;
+    readonly path: ReadonlyArray<PropertyKey>;
+    readonly message: string;
+  }>
+): string {
+  const [first] = issues;
+  if (!first) {
+    return "unknown validation error";
+  }
+
+  const path =
+    first.path.length > 0
+      ? first.path.map((segment) => String(segment)).join(".")
+      : "<root>";
+  const suffix = issues.length > 1 ? ` (+${issues.length - 1} more)` : "";
+  return `${path}: ${first.message}${suffix}`;
+}
+
+function safeGraph(
+  workflowId: string,
+  raw: unknown
+): WorkflowResponse["graph"] {
+  if (raw == null) return null;
+  const parsed = graphSchema.safeParse(raw);
+  if (parsed.success) return parsed.data;
+  log.warn(
+    `Workflow ${workflowId} has an invalid graph; returning null: ${summarizeGraphIssues(parsed.error.issues)}`
+  );
+  return null;
+}
+
+const OUTPUT_NODE_MEDIA_TYPES: Record<string, "image" | "video" | "audio"> = {
+  "nodetool.output.ImageOutput": "image",
+  "nodetool.output.VideoOutput": "video",
+  "nodetool.output.AudioOutput": "audio"
+};
+
+function findTerminalMediaOutputNodes(
+  workflow: WorkflowModel
+): Array<{ id: string; type: string; data?: Record<string, unknown> }> {
+  const graph = safeGraph(workflow.id, workflow.graph);
+  const nodes = (graph?.nodes ?? []) as Array<{
+    id: string;
+    type: string;
+    data?: Record<string, unknown>;
+  }>;
+  const edges = (graph?.edges ?? []) as Array<{ source?: string }>;
+  const terminalOutputNodeIds = new Set(
+    nodes
+      .filter((n) => Object.hasOwn(OUTPUT_NODE_MEDIA_TYPES, n.type))
+      .map((n) => n.id)
+  );
+  for (const edge of edges) {
+    const sourceId = edge.source;
+    if (sourceId && terminalOutputNodeIds.has(sourceId)) {
+      terminalOutputNodeIds.delete(sourceId);
+    }
+  }
+  return nodes.filter((n) => terminalOutputNodeIds.has(n.id));
+}
+
+function hasTerminalMediaOutput(workflow: WorkflowModel): boolean {
+  return findTerminalMediaOutputNodes(workflow).length > 0;
+}
+
+// ── Rate-limit tracking for autosave ───────────────────────────────────────
+const lastAutosaveTime = new Map<string, number>();
+const AUTOSAVE_RATE_LIMIT_MS = 30_000;
+
+// Entries older than the rate-limit window can never rate-limit again, so drop
+// them. Without this the map grows one permanent entry per workflow ever
+// autosaved (including deleted ones) for the lifetime of the process.
+function recordAutosave(workflowId: string, now: number): void {
+  for (const [id, ts] of lastAutosaveTime) {
+    if (now - ts >= AUTOSAVE_RATE_LIMIT_MS) {
+      lastAutosaveTime.delete(id);
+    }
+  }
+  lastAutosaveTime.set(workflowId, now);
+}
+
+// ── toWorkflowResponse ─────────────────────────────────────────────────────
+
+function toWorkflowResponse(workflow: WorkflowModel): WorkflowResponse {
+  return {
+    id: workflow.id,
+    access: workflow.access,
+    created_at: (workflow.created_at as string | undefined) ?? null,
+    updated_at: (workflow.updated_at as string | undefined) ?? null,
+    name: workflow.name,
+    tool_name: workflow.tool_name ?? null,
+    description: workflow.description ?? null,
+    tags: workflow.tags ?? [],
+    thumbnail: workflow.thumbnail ?? null,
+    thumbnail_url: workflow.thumbnail_url ?? null,
+    graph: safeGraph(workflow.id, workflow.graph),
+    input_schema: null,
+    output_schema: null,
+    settings:
+      (workflow.settings as WorkflowResponse["settings"] | null) ?? null,
+    package_name: workflow.package_name ?? null,
+    path: workflow.path ?? null,
+    run_mode: workflow.run_mode ?? null,
+    workspace_id: workflow.workspace_id ?? null,
+    required_providers: null,
+    required_models: null,
+    html_app: workflow.html_app ?? null,
+    app_doc: workflow.app_doc ?? null,
+    etag: workflow.getEtag() ?? null
+  };
+}
+
+// ── toVersionResponse ──────────────────────────────────────────────────────
+
+function toVersionResponse(v: WorkflowVersionModel): VersionResponse {
+  return {
+    id: v.id,
+    workflow_id: v.workflow_id,
+    user_id: v.user_id,
+    name: (v.name as string | null) ?? null,
+    description: (v.description as string | null) ?? null,
+    graph: v.graph ?? null,
+    version: v.version,
+    save_type: (v.save_type as string | null) ?? "manual",
+    autosave_metadata: (v.autosave_metadata as unknown) ?? null,
+    created_at: (v.created_at as string | undefined) ?? null
+  };
+}
+
+function toCollaboratorItem(grant: WorkflowCollaborator) {
+  return {
+    workflow_id: grant.workflow_id,
+    user_id: grant.user_id,
+    role: grant.role,
+    invited_by: grant.invited_by,
+    created_at: grant.created_at ?? null
+  };
+}
+
+function toShareItem(share: WorkflowShare) {
+  return {
+    id: share.id,
+    workflow_id: share.workflow_id,
+    token: share.token,
+    role: share.role,
+    created_at: share.created_at ?? null,
+    revoked_at: share.revoked_at ?? null
+  };
+}
+
+// ── Example workflow helpers ────────────────────────────────────────────────
+
+const EXAMPLES_THUMBNAILS_PREFIX = "/api/workflows/examples/thumbnails/";
+
+interface ExampleMetadata {
+  id?: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+}
+
+function buildExamplesFromDir(
+  examplesDir: string,
+  examplesAssetsFallbackDir?: string
+): unknown[] {
+  if (!existsSync(examplesDir)) return [];
+  const assetsDir = deriveExampleAssetsDir(
+    examplesDir,
+    examplesAssetsFallbackDir
+  );
+  const now = new Date().toISOString();
+  const workflows: unknown[] = [];
+  let files: string[];
+  try {
+    files = readdirSync(examplesDir)
+      .filter((f) => f.toLowerCase().endsWith(".json"))
+      .sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+  for (const file of files) {
+    try {
+      const raw = readFileSync(nodePath.join(examplesDir, file), "utf8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const name =
+        typeof parsed.name === "string"
+          ? parsed.name
+          : file.replace(/\.json$/i, "");
+      // Append ?v=<md5-8> via withCacheBuster so the browser invalidates
+      // its cached thumbnail whenever the JPG is regenerated on disk.
+      const jpgFile = `${name}.jpg`;
+      const jpgPath = nodePath.join(assetsDir, jpgFile);
+      const thumbnailUrl = existsSync(jpgPath)
+        ? withCacheBuster(
+            `${EXAMPLES_THUMBNAILS_PREFIX}${encodeURIComponent(jpgFile)}`,
+            jpgPath
+          )
+        : null;
+      workflows.push({
+        id: file,
+        access: "public",
+        created_at: now,
+        updated_at: now,
+        name,
+        tool_name: null,
+        description:
+          typeof parsed.description === "string" ? parsed.description : "",
+        tags: Array.isArray(parsed.tags)
+          ? parsed.tags.filter((t: unknown) => typeof t === "string")
+          : [],
+        thumbnail: thumbnailUrl ? jpgFile : null,
+        thumbnail_url: thumbnailUrl,
+        graph: { nodes: [], edges: [] },
+        input_schema: null,
+        output_schema: null,
+        settings: null,
+        package_name:
+          typeof parsed.package_name === "string" ? parsed.package_name : null,
+        path: null,
+        run_mode: null,
+        workspace_id: null,
+        required_providers: null,
+        required_models: null,
+        html_app: null,
+        app_doc: null,
+        etag: null
+      });
+    } catch {
+      // skip invalid files
+    }
+  }
+  return workflows;
+}
+
+function buildExampleWorkflows(apiOptions: {
+  examplesDir?: string;
+  examplesAssetsFallbackDir?: string;
+  metadataRoots?: string[];
+  metadataMaxDepth?: number;
+}): unknown[] {
+  if (apiOptions.examplesDir) {
+    return buildExamplesFromDir(
+      apiOptions.examplesDir,
+      apiOptions.examplesAssetsFallbackDir
+    );
+  }
+  const loaded = loadPythonPackageMetadata({
+    roots: apiOptions.metadataRoots,
+    maxDepth: apiOptions.metadataMaxDepth
+  });
+  const now = new Date().toISOString();
+  const workflows: unknown[] = [];
+  for (const pkg of loaded.packages) {
+    if (!pkg.examples || pkg.examples.length === 0) continue;
+    for (const ex of pkg.examples) {
+      const meta = ex as ExampleMetadata;
+      workflows.push({
+        id: meta.id ?? "",
+        access: "public",
+        created_at: now,
+        updated_at: now,
+        name: meta.name,
+        tool_name: null,
+        description: meta.description ?? "",
+        tags: meta.tags ?? [],
+        thumbnail: null,
+        thumbnail_url: null,
+        graph: { nodes: [], edges: [] },
+        input_schema: null,
+        output_schema: null,
+        settings: null,
+        package_name: pkg.name,
+        path: null,
+        run_mode: null,
+        workspace_id: null,
+        required_providers: null,
+        required_models: null,
+        html_app: null,
+        app_doc: null,
+        etag: null
+      });
+    }
+  }
+  return workflows;
+}
+
+// ── Router ─────────────────────────────────────────────────────────────────
+
+export const workflowsRouter = router({
+  sdkSummaries: protectedProcedure
+    .input(sdkWorkflowSummariesInput)
+    .output(sdkWorkflowSummariesOutput)
+    .query(async ({ ctx, input }) => {
+      try {
+        const result = await listWorkflowSummariesV1({
+          userId: ctx.userId,
+          limit: input.limit,
+          ...(input.cursor ? { cursor: input.cursor } : {})
+        });
+        return {
+          workflows: result.workflows.map((workflow) => ({
+            id: workflow.id,
+            name: workflow.name,
+            description: workflow.description,
+            revision: workflow.updated_at,
+            registry_revision: Number.isSafeInteger(ctx.registry.revision)
+              ? ctx.registry.revision
+              : null,
+            run_mode: workflow.run_mode
+          })),
+          next: result.next
+        };
+      } catch (error) {
+        throwWorkflowInterfaceError(error);
+      }
+    }),
+
+  // ── list (GET /api/workflows) ─────────────────────────────────────────────
+  list: protectedProcedure
+    .input(listInput)
+    .output(listOutput)
+    .query(async ({ ctx, input }) => {
+      const [workflows, cursor] = await Workflow.paginate(ctx.userId, {
+        limit: input.limit,
+        runMode: input.run_mode,
+        tag: input.tag,
+        startKey: input.cursor
+      });
+      let filtered = workflows;
+      if (input.mediaOutput) {
+        filtered = filtered.filter((w) => hasTerminalMediaOutput(w));
+      }
+      return {
+        workflows: filtered.map((w) => toWorkflowResponse(w)),
+        // mediaOutput filtering happens in memory after DB pagination, so cursor
+        // pagination is intentionally disabled for this mode.
+        next: input.mediaOutput ? null : cursor || null
+      };
+    }),
+
+  // ── get (GET /api/workflows/:id) ─────────────────────────────────────────
+  get: protectedProcedure
+    .input(getInput)
+    .output(workflowResponse)
+    .query(async ({ ctx, input }) => {
+      const { workflow } = await requireWorkflowRole(
+        input.id,
+        ctx.userId,
+        "viewer"
+      );
+      return toWorkflowResponse(workflow);
+    }),
+
+  // SDK-only, versioned workflow contract. Existing workflow responses remain
+  // unchanged, and the flag lets deployments roll this out independently.
+  interface: protectedProcedure
+    .input(workflowInterfaceInput)
+    .output(workflowInterfaceV1)
+    .query(async ({ ctx, input }) => {
+      try {
+        return await getWorkflowInterfaceV1({
+          workflowId: input.id,
+          userId: ctx.userId,
+          registry: ctx.registry
+        });
+      } catch (error) {
+        throwWorkflowInterfaceError(error);
+      }
+    }),
+
+  interfaces: protectedProcedure
+    .input(workflowInterfacesInput)
+    .output(workflowInterfacesOutput)
+    .query(async ({ ctx, input }) => {
+      try {
+        return await getWorkflowInterfacesV1({
+          workflowIds: input.ids,
+          userId: ctx.userId,
+          registry: ctx.registry
+        });
+      } catch (error) {
+        throwWorkflowInterfaceError(error);
+      }
+    }),
+
+  // ── create (POST /api/workflows) ─────────────────────────────────────────
+  create: protectedProcedure
+    .input(createInput)
+    .output(workflowResponse)
+    .mutation(async ({ ctx, input }) => {
+      if (
+        !input.graph ||
+        !Array.isArray(input.graph.nodes) ||
+        !Array.isArray(input.graph.edges)
+      ) {
+        throwApiError(
+          ApiErrorCode.INVALID_INPUT,
+          "graph is required and must have nodes and edges arrays"
+        );
+      }
+      let graph = input.graph;
+      let appDoc = input.app_doc ?? null;
+
+      // Optionally seed from example
+      if (input.from_example_name && (!graph || graph.nodes?.length === 0)) {
+        const examplePackage =
+          input.from_example_package ??
+          defaultExamplePackageName(ctx.apiOptions) ??
+          "nodetool-base";
+        const example = loadExampleGraph(
+          examplePackage,
+          input.from_example_name,
+          ctx.apiOptions
+        );
+        if (example?.graph) {
+          graph = example.graph as typeof graph;
+        }
+        // Carry the example's app UI unless the caller supplied one.
+        if (appDoc == null && example?.app_doc) {
+          appDoc = example.app_doc as Record<string, unknown>;
+        }
+      }
+
+      const workflow = (await Workflow.create({
+        user_id: ctx.userId,
+        name: input.name,
+        tool_name: input.tool_name ?? null,
+        package_name: input.package_name ?? null,
+        path: input.path ?? null,
+        tags: input.tags ?? [],
+        description: input.description ?? "",
+        thumbnail: input.thumbnail ?? null,
+        thumbnail_url: input.thumbnail_url ?? null,
+        access: input.access === "public" ? "public" : "private",
+        graph,
+        settings: input.settings ?? null,
+        run_mode: input.run_mode ?? "workflow",
+        workspace_id: input.workspace_id ?? null,
+        html_app: input.html_app ?? null,
+        app_doc: appDoc
+      })) as WorkflowModel;
+
+      await syncTriggerRegistrations(workflow);
+
+      return toWorkflowResponse(workflow);
+    }),
+
+  // ── update (PUT /api/workflows/:id) ──────────────────────────────────────
+  update: protectedProcedure
+    .input(updateInput)
+    .output(workflowResponse)
+    .mutation(async ({ ctx, input }) => {
+      if (
+        !input.graph ||
+        !Array.isArray(input.graph.nodes) ||
+        !Array.isArray(input.graph.edges)
+      ) {
+        throwApiError(
+          ApiErrorCode.INVALID_INPUT,
+          "graph is required and must have nodes and edges arrays"
+        );
+      }
+      const graph = input.graph;
+      const existing = (await Workflow.get(input.id)) as WorkflowModel | null;
+
+      let existingRole: WorkflowRole | null = null;
+      if (existing) {
+        existingRole = await resolveWorkflowRole(existing, ctx.userId);
+        if (existingRole !== "owner" && existingRole !== "editor") {
+          throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+        }
+      }
+
+      if (existing) {
+        const fields: Parameters<typeof Workflow.updateFieldsIfUnchanged>[2] = {
+          name: input.name,
+          tool_name: input.tool_name ?? null,
+          description: input.description ?? "",
+          tags: input.tags ?? [],
+          package_name: input.package_name ?? null,
+          graph
+        };
+        if (input.thumbnail !== undefined) fields.thumbnail = input.thumbnail;
+        // Only the owner can change visibility; editors keep it as-is.
+        if (existingRole === "owner") {
+          fields.access = input.access === "public" ? "public" : "private";
+        }
+        // Only touch optional columns when the caller sent them, so a partial
+        // update (a body omitting these keys) doesn't wipe stored values. A
+        // deliberate clear still sends an explicit null.
+        if (input.settings !== undefined) fields.settings = input.settings;
+        if (input.run_mode !== undefined && input.run_mode !== null)
+          fields.run_mode = input.run_mode;
+        if (input.workspace_id !== undefined)
+          fields.workspace_id = input.workspace_id;
+        if (input.html_app !== undefined) fields.html_app = input.html_app;
+        if (input.app_doc !== undefined) fields.app_doc = input.app_doc;
+
+        const updated = await Workflow.updateFieldsIfUnchanged(
+          input.id,
+          input.expected_updated_at ?? existing.updated_at,
+          fields
+        );
+        if (!updated) {
+          throwApiError(
+            ApiErrorCode.ALREADY_EXISTS,
+            "Workflow was modified since last read (optimistic concurrency conflict)"
+          );
+        }
+        await syncTriggerRegistrations(updated);
+        return toWorkflowResponse(updated);
+      }
+
+      if (input.expected_updated_at) {
+        throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+      }
+
+      // Upsert: create if doesn't exist
+      const workflow = (await Workflow.create({
+        id: input.id,
+        user_id: ctx.userId,
+        name: input.name,
+        tool_name: input.tool_name ?? null,
+        package_name: input.package_name ?? null,
+        path: input.path ?? null,
+        tags: input.tags ?? [],
+        description: input.description ?? "",
+        thumbnail: input.thumbnail ?? null,
+        thumbnail_url: input.thumbnail_url ?? null,
+        access: input.access === "public" ? "public" : "private",
+        graph,
+        settings: input.settings ?? null,
+        run_mode: input.run_mode ?? "workflow",
+        workspace_id: input.workspace_id ?? null,
+        html_app: input.html_app ?? null,
+        app_doc: input.app_doc ?? null
+      })) as WorkflowModel;
+
+      await syncTriggerRegistrations(workflow);
+
+      return toWorkflowResponse(workflow);
+    }),
+
+  // ── delete (DELETE /api/workflows/:id) ───────────────────────────────────
+  delete: protectedProcedure
+    .input(deleteInput)
+    .output(deleteOutput)
+    .mutation(async ({ ctx, input }) => {
+      const workflow = (await Workflow.get(input.id)) as WorkflowModel | null;
+      if (!workflow)
+        throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+      if (workflow.user_id !== ctx.userId) {
+        throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+      }
+      await workflow.delete();
+      lastAutosaveTime.delete(input.id);
+      await WorkflowCollaborator.removeAllForWorkflow(input.id);
+      await WorkflowShare.removeAllForWorkflow(input.id);
+      return { ok: true as const };
+    }),
+
+  // ── autosave (POST/PUT /api/workflows/:id/autosave) ───────────────────────
+  autosave: protectedProcedure
+    .input(autosaveInput)
+    .output(autosaveOutput)
+    .mutation(async ({ ctx, input }) => {
+      const { workflow, role } = await requireWorkflowRole(
+        input.id,
+        ctx.userId,
+        "editor"
+      );
+
+      const force = input.force === true;
+      const maxVersions =
+        typeof input.max_versions === "number" ? input.max_versions : 10;
+
+      // Rate-limit
+      if (!force) {
+        const last = lastAutosaveTime.get(input.id);
+        if (last !== undefined && Date.now() - last < AUTOSAVE_RATE_LIMIT_MS) {
+          return {
+            version: null,
+            message: "Autosave skipped (rate limited)",
+            skipped: true,
+            updated_at: workflow.updated_at ?? null
+          };
+        }
+      }
+
+      const fields: Parameters<typeof Workflow.updateFieldsIfUnchanged>[2] = {
+        graph: input.graph
+      };
+      if (input.name !== undefined) fields.name = input.name;
+      if (input.description !== undefined)
+        fields.description = input.description;
+      // Only the owner can change visibility; editors keep it as-is.
+      if (
+        role === "owner" &&
+        (input.access === "public" || input.access === "private")
+      )
+        fields.access = input.access;
+      const savedWorkflow = await Workflow.updateFieldsIfUnchanged(
+        input.id,
+        input.expected_updated_at ?? workflow.updated_at,
+        fields
+      );
+      if (!savedWorkflow) {
+        throwApiError(
+          ApiErrorCode.ALREADY_EXISTS,
+          "Workflow was modified since last read (optimistic concurrency conflict)"
+        );
+      }
+      await syncTriggerRegistrations(savedWorkflow);
+      recordAutosave(input.id, Date.now());
+
+      let version: {
+        id: string;
+        version: number;
+        workflow_id: string;
+        save_type: string;
+        created_at?: string | null;
+      } | null = null;
+
+      try {
+        const nextVer = await WorkflowVersion.nextVersion(input.id);
+        const wv = new WorkflowVersion({
+          workflow_id: input.id,
+          user_id: ctx.userId,
+          graph: input.graph,
+          version: nextVer,
+          save_type: "autosave",
+          name: savedWorkflow.name,
+          description: savedWorkflow.description
+        });
+        await wv.save();
+        version = {
+          id: wv.id,
+          version: wv.version,
+          workflow_id: wv.workflow_id,
+          save_type: wv.save_type ?? "autosave",
+          created_at: (wv.created_at as string | undefined) ?? null
+        };
+        await WorkflowVersion.pruneOldVersions(input.id, maxVersions);
+      } catch {
+        // non-fatal — version table may not exist
+      }
+
+      return {
+        version,
+        message: "Autosaved successfully",
+        skipped: false,
+        updated_at: savedWorkflow.updated_at ?? null
+      };
+    }),
+
+  // ── examples (GET /api/workflows/examples) ────────────────────────────────
+  examples: protectedProcedure
+    .input(examplesInput)
+    .output(examplesOutput)
+    .query(async ({ ctx, input }) => {
+      const workflows = buildExampleWorkflows(ctx.apiOptions);
+      const query = (input.query ?? "").toLowerCase().trim();
+      const filtered = query
+        ? workflows.filter((w) => {
+            const wf = w as Record<string, unknown>;
+            const name = String(wf.name ?? "").toLowerCase();
+            const desc = String(wf.description ?? "").toLowerCase();
+            const tags = (wf.tags as string[] | undefined) ?? [];
+            return (
+              name.includes(query) ||
+              desc.includes(query) ||
+              tags.some((t) => t.toLowerCase().includes(query))
+            );
+          })
+        : workflows;
+      return { workflows: filtered, next: null };
+    }),
+
+  // ── public workflows ──────────────────────────────────────────────────────
+  public: router({
+    list: publicProcedure
+      .input(publicListInput)
+      .output(publicListOutput)
+      .query(async ({ input }) => {
+        const [workflows] = await Workflow.paginatePublic({
+          limit: input.limit
+        });
+        return {
+          workflows: workflows.map((w) => toWorkflowResponse(w)),
+          next: null
+        };
+      }),
+
+    get: publicProcedure
+      .input(publicGetInput)
+      .output(workflowResponse)
+      .query(async ({ input }) => {
+        const workflow = (await Workflow.get(input.id)) as WorkflowModel | null;
+        if (!workflow || workflow.access !== "public") {
+          throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+        }
+        return toWorkflowResponse(workflow);
+      })
+  }),
+
+  // ── terminalOutputs (GET /api/workflows/:id/terminal-outputs) ─────────────
+  // Returns the terminal media-output nodes of a workflow for the multi-output
+  // selection prompt in AddClipMenu.
+  terminalOutputs: protectedProcedure
+    .input(terminalOutputsInput)
+    .output(terminalOutputsOutput)
+    .query(async ({ ctx, input }) => {
+      const workflow = (await Workflow.get(input.id)) as WorkflowModel | null;
+      if (!workflow)
+        throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+      if (workflow.access !== "public" && workflow.user_id !== ctx.userId) {
+        throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+      }
+
+      const outputs = findTerminalMediaOutputNodes(workflow).map((n) => ({
+        id: n.id,
+        type: n.type,
+        mediaType: OUTPUT_NODE_MEDIA_TYPES[n.type] as
+          | "image"
+          | "video"
+          | "audio",
+        name: (n.data?.name as string | undefined) ?? ""
+      }));
+
+      return { outputs };
+    }),
+
+  // ── versions ──────────────────────────────────────────────────────────────
+  versions: router({
+    // GET /api/workflows/:id/versions
+    list: protectedProcedure
+      .input(versionsListInput)
+      .output(versionsListOutput)
+      .query(async ({ ctx, input }) => {
+        // Owners and editors see version history
+        await requireWorkflowRole(input.id, ctx.userId, "editor");
+        const versions = await WorkflowVersion.listForWorkflow(input.id, {
+          limit: input.limit
+        });
+        return { versions: versions.map(toVersionResponse) };
+      }),
+
+    // POST /api/workflows/:id/versions
+    create: protectedProcedure
+      .input(versionCreateInput)
+      .output(versionResponse)
+      .mutation(async ({ ctx, input }) => {
+        const { workflow } = await requireWorkflowRole(
+          input.id,
+          ctx.userId,
+          "editor"
+        );
+        const nextVer = await WorkflowVersion.nextVersion(input.id);
+        const version = (await WorkflowVersion.create({
+          workflow_id: input.id,
+          user_id: ctx.userId,
+          name: input.name ?? null,
+          description: input.description ?? null,
+          graph: workflow.graph,
+          version: nextVer
+        })) as WorkflowVersionModel;
+        return toVersionResponse(version);
+      }),
+
+    // POST /api/workflows/:id/versions/:version/restore
+    restore: protectedProcedure
+      .input(versionRestoreInput)
+      .output(workflowResponse)
+      .mutation(async ({ ctx, input }) => {
+        const { workflow } = await requireWorkflowRole(
+          input.id,
+          ctx.userId,
+          "editor"
+        );
+        const version = await WorkflowVersion.findByVersion(
+          input.id,
+          input.version
+        );
+        if (!version)
+          throwApiError(ApiErrorCode.NOT_FOUND, "Version not found");
+        workflow.graph = version.graph;
+        await workflow.save();
+        return toWorkflowResponse(workflow);
+      }),
+
+    // DELETE /api/workflows/:id/versions/:versionId
+    delete: protectedProcedure
+      .input(versionDeleteInput)
+      .output(versionDeleteOutput)
+      .mutation(async ({ ctx, input }) => {
+        const version = (await WorkflowVersion.get(
+          input.version_id
+        )) as WorkflowVersionModel | null;
+        if (!version)
+          throwApiError(ApiErrorCode.NOT_FOUND, "Version not found");
+        if (version.user_id !== ctx.userId) {
+          // The workflow owner may prune versions saved by collaborators.
+          const parent = (await Workflow.get(
+            version.workflow_id
+          )) as WorkflowModel | null;
+          if (!parent || parent.user_id !== ctx.userId) {
+            throwApiError(ApiErrorCode.NOT_FOUND, "Version not found");
+          }
+        }
+        await version.delete();
+        return { ok: true as const };
+      })
+  }),
+
+  // ── sharing ────────────────────────────────────────────────────────────────
+  // Private sharing via role-scoped links: the owner mints a link, any
+  // authenticated user who redeems it becomes a collaborator (viewer/editor).
+  sharing: router({
+    // Collaborators + share links for the dialog. Owner only.
+    get: protectedProcedure
+      .input(sharingGetInput)
+      .output(sharingGetOutput)
+      .query(async ({ ctx, input }) => {
+        await requireWorkflowRole(input.id, ctx.userId, "owner");
+        const [collaborators, shares] = await Promise.all([
+          WorkflowCollaborator.listForWorkflow(input.id),
+          WorkflowShare.listForWorkflow(input.id)
+        ]);
+        return {
+          collaborators: collaborators.map(toCollaboratorItem),
+          shares: shares.map(toShareItem)
+        };
+      }),
+
+    // Mint (or return the existing active) share link for a role.
+    createLink: protectedProcedure
+      .input(sharingCreateLinkInput)
+      .output(shareItem)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkflowRole(input.id, ctx.userId, "owner");
+        const share = await WorkflowShare.ensure({
+          workflowId: input.id,
+          role: input.role,
+          createdBy: ctx.userId
+        });
+        return toShareItem(share);
+      }),
+
+    // Stop new redemptions of a link. Existing collaborators keep access.
+    revokeLink: protectedProcedure
+      .input(sharingRevokeLinkInput)
+      .output(sharingOkOutput)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkflowRole(input.id, ctx.userId, "owner");
+        const share = (await WorkflowShare.get(
+          input.share_id
+        )) as WorkflowShare | null;
+        if (!share || share.workflow_id !== input.id) {
+          throwApiError(ApiErrorCode.NOT_FOUND, "Share not found");
+        }
+        if (!share.isRevoked) await share.revoke();
+        return { ok: true as const };
+      }),
+
+    // Change a collaborator's role. Owner only.
+    setRole: protectedProcedure
+      .input(sharingSetRoleInput)
+      .output(collaboratorItem)
+      .mutation(async ({ ctx, input }) => {
+        await requireWorkflowRole(input.id, ctx.userId, "owner");
+        const grant = await WorkflowCollaborator.findFor(
+          input.id,
+          input.user_id
+        );
+        if (!grant) {
+          throwApiError(ApiErrorCode.NOT_FOUND, "Collaborator not found");
+        }
+        if (grant.role !== input.role) {
+          grant.role = input.role;
+          await grant.save();
+        }
+        return toCollaboratorItem(grant);
+      }),
+
+    // Remove a collaborator. Owner removes anyone; a collaborator may
+    // remove themself ("leave").
+    removeCollaborator: protectedProcedure
+      .input(sharingRemoveCollaboratorInput)
+      .output(sharingOkOutput)
+      .mutation(async ({ ctx, input }) => {
+        if (input.user_id !== ctx.userId) {
+          await requireWorkflowRole(input.id, ctx.userId, "owner");
+        }
+        const removed = await WorkflowCollaborator.remove(
+          input.id,
+          input.user_id
+        );
+        if (!removed) {
+          throwApiError(ApiErrorCode.NOT_FOUND, "Collaborator not found");
+        }
+        return { ok: true as const };
+      }),
+
+    // Redeem a share link: the caller becomes a collaborator with the
+    // link's role and gets the workflow back for navigation.
+    accept: protectedProcedure
+      .input(sharingAcceptInput)
+      .output(sharingAcceptOutput)
+      .mutation(async ({ ctx, input }) => {
+        const share = await WorkflowShare.findByToken(input.token);
+        if (!share || share.isRevoked) {
+          throwApiError(
+            ApiErrorCode.NOT_FOUND,
+            "Share link is invalid or revoked"
+          );
+        }
+        const workflow = (await Workflow.get(
+          share.workflow_id
+        )) as WorkflowModel | null;
+        if (!workflow) {
+          throwApiError(ApiErrorCode.WORKFLOW_NOT_FOUND, "Workflow not found");
+        }
+        // The owner opening their own link is a no-op, not a grant.
+        if (workflow.user_id !== ctx.userId) {
+          await WorkflowCollaborator.upsert({
+            workflowId: workflow.id,
+            userId: ctx.userId,
+            role: share.role,
+            invitedBy: share.created_by
+          });
+        }
+        return { workflow: toWorkflowResponse(workflow), role: share.role };
+      }),
+
+    // Workflows shared with the caller, with their role on each.
+    sharedWithMe: protectedProcedure
+      .input(sharedWithMeInput)
+      .output(sharedWithMeOutput)
+      .query(async ({ ctx, input }) => {
+        const grants = await WorkflowCollaborator.listForUser(ctx.userId);
+        const limited = grants.slice(0, input.limit);
+        const loaded = await Promise.all(
+          limited.map(async (grant) => ({
+            grant,
+            workflow: (await Workflow.get(
+              grant.workflow_id
+            )) as WorkflowModel | null
+          }))
+        );
+        const workflows: Array<
+          WorkflowResponse & { shared_role: "viewer" | "editor" }
+        > = [];
+        for (const { grant, workflow } of loaded) {
+          // Skip grants pointing at deleted workflows.
+          if (!workflow) continue;
+          workflows.push({
+            ...toWorkflowResponse(workflow),
+            shared_role: grant.role
+          });
+        }
+        return { workflows };
+      })
+  })
+});

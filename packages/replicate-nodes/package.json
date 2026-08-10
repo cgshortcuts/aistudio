@@ -1,0 +1,67 @@
+{
+  "name": "@nodetool-ai/replicate-nodes",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "version": "0.7.0-rc.34",
+  "description": "Replicate AI model nodes for the TS workflow runner",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "node ../../scripts/build-typescript-workspace.mjs && node -e \"require('node:fs').cpSync('src/replicate-manifest.json', 'dist/replicate-manifest.json')\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nodetool-ai/config": "*",
+    "@nodetool-ai/node-sdk": "*",
+    "@nodetool-ai/runtime": "*",
+    "replicate": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./replicate-manifest.json": "./dist/replicate-manifest.json"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodetool-ai/nodetool.git",
+    "directory": "packages/replicate-nodes"
+  },
+  "homepage": "https://nodetool.ai",
+  "bugs": {
+    "url": "https://github.com/nodetool-ai/nodetool/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "nodetool",
+    "ai",
+    "workflow",
+    "workflow-automation",
+    "typescript",
+    "ai-nodes",
+    "no-code",
+    "visual-programming",
+    "workflow-nodes",
+    "replicate",
+    "image-generation",
+    "model-nodes"
+  ]
+}

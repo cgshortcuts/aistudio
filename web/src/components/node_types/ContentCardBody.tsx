@@ -1,0 +1,891 @@
+/** @jsxImportSource @emotion/react */
+/**
+ * ContentCardBody
+ *
+ * Content-forward node body for nodes whose metadata declares
+ * `body: "content_card"` (image / video / text / etc. generators and "thin"
+ * image-edit nodes). See `isContentCardNode` in `contentCardRegistry`.
+ * Three regions:
+ *
+ *   1. Header           — already rendered by `NodeHeader` in `BaseNode`
+ *   2. Preview area     — variant dispatch by primary-output type
+ *   3. Footer strip     — optional `DynamicInputButton` (RunModelButton
+ *                         removed — single-node run lives in the existing
+ *                         node toolbar)
+ *
+ * Inline fields are rendered below the preview via the existing
+ * `NodeInputs` infrastructure. Input fields render as handle-only ports on
+ * the left edge via `HandleColumn`. Everything else stays in the Inspector.
+ */
+
+import React, { memo, useCallback, useMemo } from "react";
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import ImageIcon from "@mui/icons-material/Image";
+import MovieIcon from "@mui/icons-material/Movie";
+import AudiotrackIcon from "@mui/icons-material/Audiotrack";
+import TextFieldsIcon from "@mui/icons-material/TextFields";
+import ViewInArIcon from "@mui/icons-material/ViewInAr";
+import LayersIcon from "@mui/icons-material/Layers";
+import DownloadIcon from "@mui/icons-material/Download";
+import AddIcon from "@mui/icons-material/Add";
+import {
+  BORDER_RADIUS,
+  CheckerDropzone,
+  DynamicInputButton,
+  FlexColumn,
+  MOTION,
+  reducedMotion,
+  SPACING,
+  ToolbarIconButton,
+  VideoPlayer,
+  Z_INDEX
+} from "../ui_primitives";
+import { NodeInputs } from "../node/NodeInputs";
+import AddDynamicOutputButton from "../node/AddDynamicOutputButton";
+import HandleColumn from "../node/HandleColumn";
+import ImageView from "../node/ImageView";
+import OutputRenderer from "../node/OutputRenderer";
+import { NodeOutputs } from "../node/NodeOutputs";
+import NodeProgress from "../node/NodeProgress";
+import { getMimeTypeFromUri } from "../node/output";
+import { useMediaSrc } from "../../hooks/nodes/useMediaSrc";
+import { TextRenderer } from "../node/output/TextRenderer";
+import AudioPlayer from "../audio/AudioPlayer";
+import { useMediaOverlay } from "../node/MediaOverlayContext";
+import { useAssetStore } from "../../stores/AssetStore";
+import { useNotificationStore } from "../../stores/NotificationStore";
+import { createAssetFile } from "../../utils/createAssetFile";
+import { downloadPreviewAssets } from "../../utils/downloadPreviewAssets";
+
+import type { NodeMetadata } from "../../stores/ApiTypes";
+import { RAW_RGBA_MIME } from "@nodetool-ai/protocol";
+import type { NodeData } from "../../stores/NodeData";
+import { useNodeResultValue } from "../../hooks/nodes/useNodeExecState";
+import {
+  assetsToPreviewValue,
+  useNodeResultHistory
+} from "../../hooks/nodes/useNodeResultHistory";
+import { useNodes } from "../../contexts/NodeContext";
+import { useConnectedEdgesSelector } from "../../hooks/nodes/useConnectedEdges";
+
+import {
+  getContentCardVariant,
+  getDynamicInputLabel,
+  getPrimaryOutput,
+  type ContentCardVariant
+} from "./contentCardRegistry";
+import {
+  resolveExposedInputNames,
+  resolveInlineFieldNames
+} from "../../utils/exposedInputs";
+import ExposedLabeledInputs from "../node/ExposedLabeledInputs";
+import NodeHistoryViewer from "../node/NodeHistoryViewer";
+import { extractTextValue } from "../../utils/extractTextValue";
+
+const styles = (theme: Theme) =>
+  css({
+    "&.content-card-body": {
+      position: "relative",
+      width: "100%",
+      height: "100%",
+      display: "flex",
+      flexDirection: "column",
+      gap: theme.spacing(0.5),
+      padding: `${theme.spacing(1)} ${theme.spacing(0.5)} ${theme.spacing(0.5)}`,
+      minHeight: 0
+    },
+    // Text variant inherits the node body color instead of the dark media
+    // backdrop — keeps text content visually flush with the rest of the
+    // node and matches the PreviewNode look.
+    "&[data-content-card-variant=\"text\"] .preview-area": {
+      backgroundColor: "transparent"
+    },
+    // Cap the text preview height ONLY while it is actively streaming and the
+    // node is still auto-sized, so a long generation scrolls inside the card
+    // instead of growing the node unbounded line-by-line during the run. Once
+    // the generation completes (or the user resizes the node), the cap lifts
+    // and the preview grows to fit / fills the available height
+    // (`.preview-area` is flex: 1 1 auto). The "expand" button still opens the
+    // full text in a popup for very long results.
+    "&[data-content-card-variant=\"text\"][data-streaming]:not([data-node-sized]) .preview-area":
+      {
+        maxHeight: theme.spacing(30)
+      },
+    // Preview keeps a minimum strip when the node is resized very small;
+    // params (flex-shrink: 0) clip at the bottom via node-content-container.
+    ".preview-area": {
+      position: "relative",
+      flex: "1 1 auto",
+      minHeight: theme.spacing(6),
+      borderRadius: BORDER_RADIUS.sm,
+      // Allow the handle column to extend past the preview's left edge so
+      // the handle dots align with the card's outer edge (compensates for
+      // the body's padding).
+      overflow: "visible",
+      backgroundColor: theme.vars.palette.grey[900],
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      // Scope the handle column to the preview area's vertical bounds so
+      // handles for `exposedInputs` never overlap inline-field rows below.
+      "& > .handle-column": {
+        top: 0,
+        bottom: 0,
+        left: `calc(${theme.spacing(0)})`
+      },
+      // Video preview fills the area; its action overlay (download / save to
+      // assets) reveals on hover, top-right, clear of the player's bottom bar.
+      ".video-preview": {
+        position: "relative",
+        width: "100%",
+        height: "100%"
+      },
+      ".video-preview-actions": {
+        position: "absolute",
+        top: theme.spacing(0.5),
+        right: theme.spacing(0.5),
+        zIndex: Z_INDEX.dropdown,
+        display: "flex",
+        gap: theme.spacing(0.5),
+        opacity: 0,
+        transition: MOTION.opacity,
+        ...reducedMotion({ transition: MOTION.none })
+      },
+      ".video-preview:hover .video-preview-actions": {
+        opacity: 1
+      },
+      // Touch devices have no hover; keep the video preview actions reachable.
+      "@media (pointer: coarse)": {
+        ".video-preview-actions": { opacity: 1 }
+      },
+      ".video-preview-actions button": {
+        width: 24,
+        height: 24,
+        padding: theme.spacing(SPACING.micro),
+        backgroundColor: theme.vars.palette.c_scrim,
+        color: theme.vars.palette.grey[0],
+        borderRadius: BORDER_RADIUS.sm,
+        "&:hover": {
+          backgroundColor: theme.vars.palette.c_scrim_strong
+        },
+        "& svg": {
+          fontSize: 14
+        }
+      },
+      ".image-grid-preview": {
+        width: "100%",
+        height: "100%",
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))",
+        gap: theme.spacing(1),
+        padding: theme.spacing(1),
+        overflow: "auto",
+        alignContent: "start"
+      },
+      ".image-grid-tile": {
+        aspectRatio: "1 / 1",
+        minHeight: theme.spacing(8),
+        borderRadius: BORDER_RADIUS.sm,
+        overflow: "hidden"
+      },
+      ".image-grid-tile .image-output": {
+        minHeight: 0,
+        height: "100%"
+      },
+      "& img": {
+        display: "block",
+        width: "100%",
+        height: "100%",
+        objectFit: "contain"
+      },
+      ".text-preview": {
+        width: "100%",
+        height: "100%",
+        overflow: "auto",
+        padding: theme.spacing(0.5),
+        background: "transparent",
+        // The inner TextRenderer/MaybeMarkdown brings its own typography
+        // (matches PreviewNode); just give it a scroll container.
+        "& > .output": {
+          height: "100%"
+        }
+      },
+      ".mask-empty": {
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: theme.spacing(0.5),
+        background: theme.vars.palette.common.black,
+        color: theme.vars.palette.common.white,
+        opacity: 0.85,
+        fontFamily: theme.fontFamily1,
+        fontSize: theme.fontSizeSmall,
+        ".mask-icon": { fontSize: 36, opacity: 0.85 }
+      },
+      ".mask-on-checker": {
+        width: "100%",
+        height: "100%",
+        backgroundColor: theme.vars.palette.grey[900],
+        backgroundImage: `
+          linear-gradient(45deg, ${theme.vars.palette.grey[800]} 25%, transparent 25%),
+          linear-gradient(-45deg, ${theme.vars.palette.grey[800]} 25%, transparent 25%),
+          linear-gradient(45deg, transparent 75%, ${theme.vars.palette.grey[800]} 75%),
+          linear-gradient(-45deg, transparent 75%, ${theme.vars.palette.grey[800]} 75%)
+        `,
+        backgroundSize: "24px 24px",
+        backgroundPosition: "0 0, 0 12px, 12px -12px, -12px 0px"
+      },
+      ".model-3d-thumb": {
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: theme.spacing(0.5),
+        color: theme.vars.palette.grey[300],
+        fontFamily: theme.fontFamily1,
+        fontSize: theme.fontSizeSmall,
+        padding: theme.spacing(1),
+        ".model-3d-icon": { fontSize: 48, opacity: 0.7 },
+        ".model-3d-name": {
+          maxWidth: "100%",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap"
+        }
+      }
+    },
+    // Inline fields render in normal flow with visible labels and editors
+    ".inline-fields": {
+      flex: "0 0 auto",
+      paddingTop: theme.spacing(0.5)
+    },
+    // Dynamic inputs (user-added) render below inline fields. The inner
+    // NodeInputs supplies its own margins, so reset them to keep the
+    // dynamic rows flush with the rest of the card body.
+    ".dynamic-inputs": {
+      flex: "0 0 auto",
+      "& .node-inputs": {
+        marginTop: 0,
+        marginBottom: 0
+      }
+    },
+    ".exposed-labeled-inputs": {
+      flex: "0 0 auto",
+      paddingTop: theme.spacing(0.5),
+      "& .node-inputs": {
+        marginTop: 0,
+        marginBottom: 0
+      }
+    },
+    // Input handles are rendered by <HandleColumn /> — see HandleColumn.tsx
+    // for the left-edge absolute positioning.
+    ".outputs-row": {
+      flex: "0 0 auto"
+    },
+    ".footer-strip": {
+      flex: "0 0 auto",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: theme.spacing(1),
+      paddingTop: theme.spacing(0.5)
+    }
+  });
+
+export interface ContentCardBodyProps {
+  id: string;
+  nodeType: string;
+  nodeMetadata: NodeMetadata;
+  data: NodeData;
+  workflowId: string;
+  status?: string;
+  isOutputNode: boolean;
+}
+
+const EMPTY_PROPERTIES: NonNullable<NodeMetadata["properties"]> = [];
+
+/**
+ * Resolve the value(s) to render in the preview area from the cached
+ * result. The card surfaces every generation from the latest execution —
+ * for `num_images=N` style nodes that means N tiles in the grid.
+ *
+ * Inputs may be:
+ *   - A primitive / asset-ref directly,
+ *   - A `{ [outputName]: value }` record for multi/single-output nodes, or
+ *   - An array of either of the above accumulated from `output_update`s.
+ */
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const extractPrimaryValue = (
+  result: unknown,
+  primaryOutputName: string | undefined
+): unknown => {
+  if (
+    isRecord(result) &&
+    primaryOutputName &&
+    primaryOutputName in result
+  ) {
+    return result[primaryOutputName];
+  }
+  return result;
+};
+
+const resolvePreviewValue = (
+  result: unknown,
+  primaryOutputName: string | undefined
+): unknown => {
+  if (!Array.isArray(result)) {
+    return extractPrimaryValue(result, primaryOutputName);
+  }
+
+  // Streamed outputs accumulate into an array; unwrap any record-shaped
+  // items (`{ output: ... }`) and flatten one level so a `num_images=N`
+  // run renders as N tiles, not one.
+  const values = result
+    .flatMap((item) => {
+      const value = extractPrimaryValue(item, primaryOutputName);
+      return Array.isArray(value) ? value : [value];
+    })
+    .filter((value) => value !== undefined && value !== null);
+
+  if (values.length === 0) return undefined;
+  return values.length === 1 ? values[0] : values;
+};
+
+type ImagePreviewSource = string | Uint8Array;
+
+const isNumberArray = (value: unknown[]): value is number[] =>
+  value.length > 0 && value.every((item) => typeof item === "number");
+
+const imageSourceFromValue = (value: unknown): ImagePreviewSource | undefined => {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return isNumberArray(value) ? new Uint8Array(value) : undefined;
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  // Raw-RGBA buffers aren't encoded images — returning the bytes here would feed
+  // them to <img>. Defer to OutputRenderer, which paints them onto a <canvas>.
+  if (value.mimeType === RAW_RGBA_MIME) {
+    return undefined;
+  }
+
+  if (typeof value.uri === "string" && value.uri) {
+    return value.uri;
+  }
+  if (typeof value.url === "string" && value.url) {
+    return value.url;
+  }
+
+  const data = value.data;
+  if (typeof data === "string") {
+    return data;
+  }
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  if (Array.isArray(data) && isNumberArray(data)) {
+    return new Uint8Array(data);
+  }
+  return undefined;
+};
+
+const extractImagePreviewValues = (value: unknown): unknown[] => {
+  if (Array.isArray(value)) {
+    if (isNumberArray(value)) {
+      return [value];
+    }
+    return value.flatMap((item) => extractImagePreviewValues(item));
+  }
+  if (isRecord(value)) {
+    if (value.output !== undefined) {
+      return extractImagePreviewValues(value.output);
+    }
+    if (Array.isArray(value.data) && !isNumberArray(value.data)) {
+      return value.data.flatMap((item) => extractImagePreviewValues(item));
+    }
+  }
+  return imageSourceFromValue(value) ? [value] : [];
+};
+
+const SingleImagePreview: React.FC<{ value: unknown }> = memo(
+  function SingleImagePreview({ value }) {
+    const source = imageSourceFromValue(value);
+    if (source) {
+      return <ImageView source={source} />;
+    }
+    return <OutputRenderer value={value} showTextActions={false} />;
+  }
+);
+
+const ImagePreview: React.FC<{ value: unknown }> = ({ value }) => {
+  const images = extractImagePreviewValues(value);
+  if (images.length > 1) {
+    return (
+      <div className="image-grid-preview nodrag nopan">
+        {images.map((item, index) => (
+          <div className="image-grid-tile" key={`image-${index}`}>
+            <SingleImagePreview value={item} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (images.length === 1) {
+    return <SingleImagePreview value={images[0]} />;
+  }
+  return <OutputRenderer value={value} showTextActions={false} />;
+};
+
+const VideoPreview: React.FC<{ value: unknown; nodeId: string }> = ({
+  value,
+  nodeId
+}) => {
+  const src = useMediaSrc(value, "video");
+  // Inside NodeHistoryViewer the unified overlay already owns download — only
+  // add our actions on the direct (non-gallery) path, where the video isn't
+  // auto-saved and there's nothing to download/save it with otherwise.
+  const { suppressed } = useMediaOverlay();
+  const createAsset = useAssetStore((s) => s.createAsset);
+  const addNotification = useNotificationStore((s) => s.addNotification);
+
+  const handleDownload = useCallback(async () => {
+    try {
+      await downloadPreviewAssets({
+        nodeId,
+        previewValue: value,
+        rawResult: value
+      });
+    } catch (error) {
+      console.error("VideoPreview: download failed", error);
+      addNotification({ type: "error", content: "Failed to start download" });
+    }
+  }, [nodeId, value, addNotification]);
+
+  const handleAddToAssets = useCallback(async () => {
+    try {
+      const assetFiles = await createAssetFile(
+        value as Parameters<typeof createAssetFile>[0],
+        nodeId
+      );
+      await Promise.all(assetFiles.map(({ file }) => createAsset(file)));
+      addNotification({
+        type: "success",
+        content: `${assetFiles.length} file${
+          assetFiles.length === 1 ? "" : "s"
+        } added to assets`
+      });
+    } catch (error) {
+      console.error("VideoPreview: add to assets failed", error);
+      addNotification({
+        type: "error",
+        content: "Failed to add video to assets"
+      });
+    }
+  }, [value, nodeId, createAsset, addNotification]);
+
+  if (!src) {
+    return <OutputRenderer value={value} showTextActions={false} />;
+  }
+  // nodrag/nopan keep ReactFlow from hijacking click-to-play and seek drag.
+  return (
+    <div className="video-preview nodrag nopan">
+      <VideoPlayer src={src} />
+      {!suppressed && (
+        <div className="video-preview-actions">
+          <ToolbarIconButton
+            title="Download"
+            size="small"
+            onClick={handleDownload}
+            aria-label="Download video"
+          >
+            <DownloadIcon />
+          </ToolbarIconButton>
+          <ToolbarIconButton
+            title="Save to Assets"
+            size="small"
+            onClick={handleAddToAssets}
+            aria-label="Save video to assets"
+          >
+            <AddIcon />
+          </ToolbarIconButton>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const AudioPreview: React.FC<{ value: unknown }> = ({ value }) => {
+  const v =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : null;
+  const inlineFormat = (v?.metadata as { format?: string } | undefined)?.format;
+  const mimeType =
+    getMimeTypeFromUri(typeof v?.uri === "string" ? v.uri : "") ||
+    (inlineFormat === "wav" ? "audio/wav" : "audio/mp3");
+  // Pass mimeType so the in-memory blob is tagged for WaveSurfer to decode.
+  const src = useMediaSrc(value, "audio", mimeType);
+  if (!src) {
+    return <OutputRenderer value={value} showTextActions={false} />;
+  }
+  // Wrap so ReactFlow doesn't pan the canvas when interacting with controls.
+  return (
+    <div className="audio-preview nodrag nopan">
+      <AudioPlayer
+        source={src}
+        mimeType={mimeType}
+        height={80}
+        waveformHeight={80}
+      />
+    </div>
+  );
+};
+
+const TextPreview: React.FC<{ value: unknown }> = ({ value }) => {
+  // Render via the same TextRenderer PreviewNode uses (markdown + theme
+  // typography) so the card and the preview node match visually. The card's
+  // height is capped (see `.preview-area` CSS) so long/streaming text scrolls
+  // in place; the generations navigator's "Open full text" control
+  // (NodeHistoryViewer) opens the full text in a readable popup.
+  const text = extractTextValue(value);
+  return (
+    <div
+      className="text-preview nodrag nopan nowheel"
+      aria-label="Generated text"
+    >
+      <TextRenderer text={text} showActions={false} />
+    </div>
+  );
+};
+
+const Model3DPreview: React.FC<{ value: unknown }> = ({ value }) => {
+  // Static thumbnail only — no interactive viewer.
+  const v =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : null;
+  const name =
+    (typeof v?.name === "string" && v.name) ||
+    (typeof v?.uri === "string" && v.uri.split("/").pop()) ||
+    "3D model";
+  return (
+    <div className="model-3d-thumb">
+      <ViewInArIcon className="model-3d-icon" />
+      <span className="model-3d-name" title={String(name)}>
+        {String(name)}
+      </span>
+    </div>
+  );
+};
+
+const PreviewArea: React.FC<{
+  variant: ContentCardVariant;
+  value: unknown;
+  nodeId: string;
+}> = ({ variant, value, nodeId }) => {
+  // Empty state — variant-specific empty surface.
+  if (value === undefined || value === null) {
+    if (variant === "image_mask") {
+      return (
+        <div className="mask-empty">
+          <LayersIcon className="mask-icon" />
+          <span>No mask yet</span>
+        </div>
+      );
+    }
+    const empty: Record<
+      Exclude<ContentCardVariant, "image_mask">,
+      { message: string; icon: React.ReactNode }
+    > = {
+      image: { message: "Run to generate", icon: <ImageIcon /> },
+      video: { message: "Run to generate video", icon: <MovieIcon /> },
+      text: { message: "Run to generate text", icon: <TextFieldsIcon /> },
+      audio: { message: "Run to generate audio", icon: <AudiotrackIcon /> },
+      model_3d: { message: "Run to generate 3D", icon: <ViewInArIcon /> },
+      generic: { message: "Run Model", icon: undefined }
+    };
+    const { message, icon } = empty[variant];
+    return <CheckerDropzone message={message} icon={icon} />;
+  }
+
+  switch (variant) {
+    case "image":
+      return <ImagePreview value={value} />;
+    case "image_mask":
+      // Render the alpha image against a checker so transparency reads clearly.
+      return (
+        <div className="mask-on-checker">
+          <ImagePreview value={value} />
+        </div>
+      );
+    case "video":
+      return <VideoPreview value={value} nodeId={nodeId} />;
+    case "audio":
+      return <AudioPreview value={value} />;
+    case "text":
+      return <TextPreview value={value} />;
+    case "model_3d":
+      return <Model3DPreview value={value} />;
+    default:
+      return <OutputRenderer value={value} showTextActions={false} />;
+  }
+};
+
+const MEDIA_VARIANTS: ContentCardVariant[] = ["image", "image_mask", "video", "audio", "model_3d"];
+
+const ContentCardBodyInner: React.FC<ContentCardBodyProps> = ({
+  id,
+  nodeType,
+  nodeMetadata,
+  data,
+  workflowId,
+  status,
+  isOutputNode
+}) => {
+  const connectedEdgesSelector = useConnectedEdgesSelector(id);
+  const connectedEdges = useNodes(connectedEdgesSelector);
+
+  const theme = useTheme();
+  const cssStyles = useMemo(() => styles(theme), [theme]);
+
+  const primaryOutput = useMemo(
+    () => getPrimaryOutput(nodeMetadata),
+    [nodeMetadata]
+  );
+  const variant = useMemo(
+    () => getContentCardVariant(primaryOutput),
+    [primaryOutput]
+  );
+
+  // Whether the user has explicitly resized the node (React Flow writes the
+  // dragged height onto `node.height`; it is undefined while auto-sized). When
+  // sized, the text preview drops its default height cap and fills the node.
+  const isNodeSized = useNodes((s) => {
+    const h = s.findNode(id)?.height;
+    return typeof h === "number" && h > 0;
+  });
+
+  const result = useNodeResultValue(workflowId, id);
+  const { lastJobAssets } = useNodeResultHistory(workflowId, id);
+
+  // Resolved live (in-memory) result for the primary output. NodeHistoryViewer
+  // takes this as `liveResult` and shows it during a run; otherwise it shows
+  // the indexed history asset.
+  const liveResolvedResult = useMemo(() => {
+    if (result === undefined) return undefined;
+    return resolvePreviewValue(result, primaryOutput?.name);
+  }, [result, primaryOutput?.name]);
+
+  // Fallback for non-media variants (text/generic) where there's no history
+  // navigator: show the latest job's saved assets when the in-memory result
+  // is gone after a page reload.
+  const fallbackPreviewValue = useMemo(() => {
+    if (result !== undefined) return liveResolvedResult;
+    return assetsToPreviewValue(lastJobAssets);
+  }, [result, liveResolvedResult, lastJobAssets]);
+
+  const isMediaVariant = MEDIA_VARIANTS.includes(variant);
+  // Only nodes that persist their outputs have a gallery to browse. Media
+  // generators / savers (`auto_save_asset`) and text nodes (persisted as
+  // text/plain assets) get the history navigator. Pure transforms
+  // (brightness/contrast, color grading, …) don't auto-save, so there's no
+  // gallery — show their live output directly, without the nav/grid buttons.
+  const hasGallery = !!nodeMetadata.auto_save_asset;
+  const usesHistoryNavigator =
+    (isMediaVariant && hasGallery) || variant === "text";
+
+  const isDynamic = !!nodeMetadata.supports_dynamic_inputs;
+  const supportsDynamicOutputs = !!nodeMetadata.supports_dynamic_outputs;
+  const hasDynamicProps =
+    Object.keys(data.dynamic_properties ?? {}).length > 0;
+
+  // Two-pass field classification per field-classification.md:
+  // 1. inlineFields: rendered as full editors in normal flow
+  // 2. inputFields ∪ exposedInputs: rendered as handle-only on left edge
+  // Fallback when neither is set: all properties render as handles (old behavior)
+  // `!== undefined` so a node with explicitly empty arrays ("send everything
+  // to the Inspector") is honored — not treated as legacy.
+  const useNewLayout =
+    nodeMetadata.inline_fields !== undefined ||
+    nodeMetadata.input_fields !== undefined;
+  const properties = nodeMetadata.properties ?? EMPTY_PROPERTIES;
+  const inlineFieldNameSet = useMemo(
+    () => new Set(resolveInlineFieldNames(nodeMetadata, data)),
+    [nodeMetadata, data]
+  );
+  // Handle column = metadata input_fields ∪ user-promoted exposedInputs.
+  const handleNames = useMemo(
+    () =>
+      useNewLayout
+        ? new Set(resolveExposedInputNames(nodeMetadata, data))
+        : null,
+    [useNewLayout, nodeMetadata, data]
+  );
+  const inlineProps = useMemo(
+    () =>
+      useNewLayout
+        ? properties.filter((p) => inlineFieldNameSet.has(p.name))
+        : [],
+    [useNewLayout, properties, inlineFieldNameSet]
+  );
+  const handleProps = useMemo(
+    () =>
+      useNewLayout
+        ? properties.filter((p) => handleNames!.has(p.name))
+        : properties.filter(
+            (p) =>
+              !inlineFieldNameSet.has(p.name) &&
+              !(data.exposedInputsLabeled ?? []).includes(p.name) &&
+              !(data.exposedInputsHidden ?? []).includes(p.name)
+          ),
+    [useNewLayout, properties, handleNames, inlineFieldNameSet, data]
+  );
+
+  // Only rendered when the node opts into `supports_dynamic_inputs`; delegates
+  // to the same store flow as NodePropertyForm.
+  const updateNodeData = useNodes((state) => state.updateNodeData);
+  const handleAddDynamicInput = useCallback(() => {
+    const existing = data.dynamic_properties ?? {};
+    let i = 1;
+    while (`input_${i}` in existing) {
+      i += 1;
+    }
+    updateNodeData(id, {
+      dynamic_properties: { ...existing, [`input_${i}`]: "" }
+    });
+  }, [data.dynamic_properties, id, updateNodeData]);
+
+  const renderSingle = useCallback(
+    (value: unknown) => (
+      <PreviewArea variant={variant} value={value} nodeId={id} />
+    ),
+    [variant, id]
+  );
+
+  return (
+    <div
+      css={cssStyles}
+      className="content-card-body node-drag-handle"
+      data-content-card-variant={variant}
+      data-node-sized={isNodeSized ? "true" : undefined}
+      data-streaming={status === "running" ? "true" : undefined}
+    >
+      <div className="preview-area">
+        {usesHistoryNavigator ? (
+          <NodeHistoryViewer
+            workflowId={workflowId}
+            nodeId={id}
+            liveResult={liveResolvedResult}
+            renderSingle={renderSingle}
+          />
+        ) : (
+          <PreviewArea
+            variant={variant}
+            value={fallbackPreviewValue}
+            nodeId={id}
+          />
+        )}
+        {/* Handle column lives inside the preview so its vertical extent
+            is bounded by the preview — keeps `exposedInputs` handles from
+            colliding with inline-field rows below. */}
+        <HandleColumn id={id} properties={handleProps} connectedEdges={connectedEdges} />
+      </div>
+
+      {/* Inline fields: rendered as full editors in normal flow under preview.
+          Labels are visible here (no display: none). Dynamic inputs are
+          rendered separately below so they always appear — even when this
+          node has no inline fields. */}
+      {useNewLayout && inlineProps.length > 0 && (
+        <div className="inline-fields">
+          <NodeInputs
+            id={id}
+            nodeMetadata={nodeMetadata}
+            layout={nodeMetadata.layout}
+            properties={inlineProps}
+            nodeType={nodeType}
+            data={data}
+            editableDynamicInputs={false}
+            showFields={true}
+            showDynamicInputs={false}
+          />
+        </div>
+      )}
+
+      {/* Dynamic inputs: user-added inputs (the "+ Add another …" button).
+          Rendered as full rows with a left handle, editable value, and
+          rename/delete icons — independent of inline fields so concat /
+          mixer / agent nodes (empty inlineFields) still get handles. */}
+      {isDynamic && hasDynamicProps && (
+        <div className="dynamic-inputs">
+          <NodeInputs
+            id={id}
+            nodeMetadata={nodeMetadata}
+            layout={nodeMetadata.layout}
+            properties={EMPTY_PROPERTIES}
+            nodeType={nodeType}
+            data={data}
+            editableDynamicInputs={true}
+            showFields={true}
+            defaultDynamicInputType={primaryOutput?.type}
+          />
+        </div>
+      )}
+
+      <ExposedLabeledInputs
+        id={id}
+        nodeMetadata={nodeMetadata}
+        nodeType={nodeType}
+        data={data}
+        properties={properties}
+      />
+
+      {!isOutputNode && (
+        <div className="outputs-row">
+          <NodeOutputs
+            id={id}
+            outputs={nodeMetadata.outputs}
+          />
+        </div>
+      )}
+
+      {(isDynamic || supportsDynamicOutputs) && (
+        <FlexColumn className="footer-strip" align="flex-start" gap={0.5}>
+          {isDynamic && (
+            <DynamicInputButton
+              itemLabel={getDynamicInputLabel(nodeMetadata)}
+              onAdd={handleAddDynamicInput}
+            />
+          )}
+          {supportsDynamicOutputs && (
+            <AddDynamicOutputButton
+              id={id}
+              dynamicOutputs={data.dynamic_outputs ?? {}}
+            />
+          )}
+        </FlexColumn>
+      )}
+
+      {status === "running" && <NodeProgress id={id} workflowId={workflowId} />}
+    </div>
+  );
+};
+
+export const ContentCardBody = memo(ContentCardBodyInner);
+ContentCardBody.displayName = "ContentCardBody";
+
+export default ContentCardBody;

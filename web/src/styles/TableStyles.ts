@@ -1,0 +1,190 @@
+import { css } from "@emotion/react";
+import type { Theme } from "@mui/material/styles";
+import { MOTION, BORDER_RADIUS, SPACING, getSpacingPx, Z_INDEX } from "../components/ui_primitives";
+
+export const tableStyles = (theme: Theme) =>
+  css({
+    display: "flex",
+    flexDirection: "column",
+    width: "100%",
+    overflow: "hidden",
+    // Main container - Tabulator controls its own height
+    ".dicttable, .datatable": {
+      width: "100%",
+      position: "relative",
+      border: `1px solid ${theme.vars.palette.grey[900]}`
+    },
+
+    // Tabulator base - has fixed pixel height set in component
+    ".tabulator": {
+      fontSize: theme.fontSizeSmall,
+      fontFamily: theme.fontFamily1
+    },
+    ".tabulator-tableholder": {
+      overflow: "auto",
+      paddingBottom: "4em",
+      backgroundColor: theme.vars.palette.grey[800],
+      borderTop: `1px solid ${theme.vars.palette.grey[900]}`,
+      scrollbarWidth: "thin",
+      scrollbarColor: `${theme.vars.palette.grey[600]} ${theme.vars.palette.grey[900]}`,
+      "&::-webkit-scrollbar": {
+        width: "8px",
+        height: "8px"
+      },
+      "&::-webkit-scrollbar-track": {
+        background: theme.vars.palette.grey[900]
+      },
+      "&::-webkit-scrollbar-thumb": {
+        background: theme.vars.palette.grey[600],
+        borderRadius: BORDER_RADIUS.sm
+      },
+      "&::-webkit-scrollbar-thumb:hover": {
+        background: theme.vars.palette.grey[500]
+      }
+    },
+
+    ".tabulator .tabulator-col-resize-handle": {
+      position: "absolute",
+      right: "5em",
+      width: "6px",
+      margin: `0 -${getSpacingPx(SPACING.xs)}`,
+      zIndex: Z_INDEX.dropdown + 1,
+      verticalAlign: "middle"
+    },
+
+    ".tabulator-row": {
+      minHeight: "15px",
+      minWidth: "20px",
+      fontSize: theme.fontSizeSmall,
+      backgroundColor: theme.vars.palette.grey[900]
+    },
+    ".tabulator-row-even": {
+      backgroundColor: theme.vars.palette.grey[800]
+    },
+    ".tabulator-row:hover": {
+      backgroundColor: theme.vars.palette.grey[600]
+    },
+
+    ".tabulator .tabulator-header": {
+      height: "2.5em",
+      minHeight: "20px",
+      maxHeight: "30px",
+      fontSize: theme.fontSizeSmall,
+      color: theme.vars.palette.grey[200],
+      fontWeight: 400,
+      borderBottom: `1px solid ${theme.vars.palette.grey[900]}`
+    },
+    ".tabulator .tabulator-header .tabulator-col": {
+      minHeight: "2em",
+      borderRight: `1px solid ${theme.vars.palette.grey[900]}`
+    },
+    ".tabulator .tabulator-header .tabulator-col-title": {
+      lineHeight: "1.1em"
+    },
+    ".tabulator .tabulator-header .tabulator-col.tabulator-sortable .tabulator-col-content .tabulator-col-sorter .tabulator-arrow":
+      {
+        transition: `border ${MOTION.fast}`
+      },
+    ".tabulator .tabulator-header .tabulator-col.tabulator-sortable[aria-sort=ascending] .tabulator-col-content .tabulator-col-sorter .tabulator-arrow":
+      {
+        borderBottom: `6px solid ${theme.vars.palette.primary.main}`
+      },
+    ".tabulator .tabulator-header .tabulator-col.tabulator-sortable[aria-sort=descending] .tabulator-col-content .tabulator-col-sorter .tabulator-arrow":
+      {
+        borderTop: `6px solid ${theme.vars.palette.primary.main}`
+      },
+
+    ".tabulator-row .tabulator-cell": {
+      borderColor: theme.vars.palette.grey[900]
+    },
+    ".tabulator-row .tabulator-cell.tabulator-frozen": {
+      paddingLeft: `${getSpacingPx(SPACING.micro)} !important`,
+      borderRight: `1px solid ${theme.vars.palette.grey[900]}`
+    },
+    ".tabulator .tabulator-header .tabulator-col .tabulator-col-content": {
+      padding: `${getSpacingPx(SPACING.sm)} 0 0 ${getSpacingPx(SPACING.micro)}`
+    },
+
+    ".table-actions": {
+      display: "flex",
+      width: "100%",
+      gap: "0.25em",
+      margin: 0,
+      padding: "0.35em 0.5em",
+      justifyContent: "flex-start",
+      alignItems: "center",
+      minHeight: "2.5em",
+      borderBottom: `1px solid ${theme.vars.palette.grey[700]}`,
+      backgroundColor: theme.vars.palette.grey[900],
+      "& .disabled": {
+        color: theme.vars.palette.action.disabled
+      },
+      "& .table-actions-extra": {
+        marginLeft: "auto",
+        display: "flex",
+        alignItems: "center",
+        gap: "0.35em"
+      },
+      "& button": {
+        padding: getSpacingPx(SPACING.xs),
+        width: "28px",
+        height: "28px",
+        "& svg": {
+          width: "18px",
+          height: "18px"
+        },
+        "&.disabled": {
+          opacity: 0.5
+        }
+      }
+    },
+
+    ".datetime-picker": {
+      backgroundColor: theme.vars.palette.primary.main
+    },
+    ".tabulator .tabulator-cell.tabulator-editing.datetime input": {
+      padding: ".5em",
+      borderRadius: BORDER_RADIUS.lg,
+      backgroundColor: theme.vars.palette.common.white
+    },
+    ".datetime": {
+      "& button": {
+        position: "absolute",
+        width: "20px",
+        height: "20px",
+        padding: 0,
+        top: "0",
+        right: ".5em",
+        borderRadius: BORDER_RADIUS.lg,
+        backgroundColor: theme.vars.palette.common.white,
+        "&:hover svg": {
+          color: theme.vars.palette.primary.main
+        },
+        "& svg": {
+          color: theme.vars.palette.grey[1000],
+          width: "100%",
+          height: "100%"
+        }
+      },
+      "& fieldset": {
+        border: 0
+      }
+    },
+
+    ".tabulator .tabulator-cell.tabulator-editing input": {
+      backgroundColor: theme.vars.palette.grey[0],
+      color: theme.vars.palette.grey[1000],
+      fontSize: theme.fontSizeSmall,
+      "&::selection": {
+        backgroundColor: theme.vars.palette.primary.main
+      }
+    },
+
+    ".tabulator-row .tabulator-cell.row-select, .tabulator .tabulator-header .tabulator-col.row-select .tabulator-col-content, .tabulator-header .tabulator-col.row-select":
+      {
+        width: "25px !important",
+        minWidth: "25px !important",
+        textAlign: "left",
+        padding: "0 !important"
+      }
+  });

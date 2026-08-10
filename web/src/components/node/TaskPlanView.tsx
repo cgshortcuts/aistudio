@@ -1,0 +1,44 @@
+/** @jsxImportSource @emotion/react */
+import React, { memo, useMemo } from "react";
+import { css } from "@emotion/react";
+import { Text } from "../ui_primitives";
+import { Task } from "../../stores/ApiTypes";
+import TaskView from "./TaskView";
+
+interface TaskPlanViewProps {
+  data: Task[] | { type?: "task_plan"; title?: string; tasks?: Task[] };
+}
+
+const cssStyles = css({
+  ".task-list-title": {
+    margin: "1rem 1rem",
+    fontWeight: 600,
+    fontSize: "var(--fontSizeNormal)"
+  }
+});
+
+const TaskPlanView: React.FC<TaskPlanViewProps> = ({ data }) => {
+  const { tasks, title } = useMemo(() => {
+    // Handle either array of tasks or a task_plan object
+    if (Array.isArray(data)) {
+      return { tasks: data, title: undefined };
+    } else {
+      return { tasks: data.tasks ?? [], title: data.title };
+    }
+  }, [data]);
+
+  return (
+    <div css={cssStyles}>
+      {title && (
+        <Text size="normal" weight={600} className="task-list-title">
+          {title}
+        </Text>
+      )}
+      {tasks.map((task) => (
+        <TaskView key={task.id} task={task} />
+      ))}
+    </div>
+  );
+};
+
+export default memo(TaskPlanView);

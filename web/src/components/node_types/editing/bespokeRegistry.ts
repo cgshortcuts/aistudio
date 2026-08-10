@@ -1,0 +1,148 @@
+/**
+ * Bespoke editing-node body registry.
+ *
+ * Maps `node_type` → bespoke body component. Resolved before the content-card
+ * registry in `NodeContent` body routing:
+ *
+ *   bespoke registry → content-card registry → generic body
+ *
+ * Un-registered nodes fall through to the next routing layer.
+ */
+
+import type React from "react";
+import type { NodeMetadata } from "../../../stores/ApiTypes";
+import type { NodeData } from "../../../stores/NodeData";
+import AdjustmentBody from "./AdjustmentBody";
+import { ADJUSTMENT_NODE_TYPES } from "./AdjustmentBody.constants";
+import BlurBody, { BLUR_NODE_TYPE } from "./BlurBody";
+import CanvasResizeBody, {
+  CANVAS_RESIZE_NODE_TYPE
+} from "./CanvasResizeBody";
+import ChannelsBody, { CHANNELS_NODE_TYPE } from "./ChannelsBody";
+import ChromaKeyBody, { CHROMA_KEY_NODE_TYPE } from "./ChromaKeyBody";
+import CollectionBody, { COLLECTION_NODE_TYPE } from "./CollectionBody";
+import ColorOverlayBody, {
+  COLOR_OVERLAY_NODE_TYPE
+} from "./ColorOverlayBody";
+import CompositorBody, { COMPOSITOR_NODE_TYPE } from "./CompositorBody";
+import ConstantSketchBody, {
+  CONSTANT_SKETCH_NODE_TYPE
+} from "./ConstantSketchBody";
+import ConstantTimelineBody, {
+  CONSTANT_TIMELINE_NODE_TYPE
+} from "./ConstantTimelineBody";
+import CropBody, { CROP_NODE_TYPE } from "./CropBody";
+import CurvesBody, { CURVES_NODE_TYPE } from "./CurvesBody";
+import DropShadowBody, { DROP_SHADOW_NODE_TYPE } from "./DropShadowBody";
+import ExtractVideoFrameBody, {
+  EXTRACT_VIDEO_FRAME_NODE_TYPE
+} from "./ExtractVideoFrameBody";
+import FitBody, { FIT_NODE_TYPE } from "./FitBody";
+import GeneratorBody, { GENERATOR_NODE_TYPES } from "./GeneratorBody";
+import GetVariableBody, { GET_VARIABLE_NODE_TYPE } from "./GetVariableBody";
+import HSLAdjustBody, { HSL_ADJUST_NODE_TYPE } from "./HSLAdjustBody";
+import LevelsBody, { LEVELS_NODE_TYPE } from "./LevelsBody";
+import ListGeneratorBody, {
+  LIST_GENERATOR_NODE_TYPE
+} from "./ListGeneratorBody";
+import MaskBody, { MASK_NODE_TYPE } from "./MaskBody";
+import MasksExtractorBody, {
+  MASKS_EXTRACTOR_NODE_TYPES
+} from "./MasksExtractorBody";
+import OffsetBody, { OFFSET_NODE_TYPE } from "./OffsetBody";
+import OutlineBody, { OUTLINE_NODE_TYPE } from "./OutlineBody";
+import PadBody, { PAD_NODE_TYPE } from "./PadBody";
+import PainterBody, { PAINTER_NODE_TYPE } from "./PainterBody";
+import PromptComposerBody, { PROMPT_NODE_TYPE } from "./PromptComposerBody";
+import PasteBody, { PASTE_NODE_TYPE } from "./PasteBody";
+import ResizeBody, { RESIZE_NODE_TYPE } from "./ResizeBody";
+import ResizeImageBody, { RESIZE_IMAGE_NODE_TYPE } from "./ResizeImageBody";
+import RotateAndFlipBody, {
+  ROTATE_AND_FLIP_NODE_TYPE
+} from "./RotateAndFlipBody";
+import ScaleBody, { SCALE_NODE_TYPE } from "./ScaleBody";
+import SimpleFilterBody from "./SimpleFilterBody";
+import { SIMPLE_FILTER_NODE_TYPES } from "./SimpleFilterBody.constants";
+import AudioOutBody, { AUDIO_OUT_NODE_TYPE } from "../synth/AudioOutBody";
+import SynthModuleBody from "../synth/SynthModuleBody";
+import { SYNTH_NODE_TYPES } from "../synth/synthModules";
+import { AUDIO_EFFECT_NODE_TYPES } from "../synth/audioEffectModules";
+
+export interface BespokeBodyProps {
+  id: string;
+  nodeType: string;
+  nodeMetadata: NodeMetadata;
+  data: NodeData;
+  workflowId: string;
+  status?: string;
+  isOutputNode: boolean;
+}
+
+export type BespokeBodyComponent = React.ComponentType<BespokeBodyProps>;
+
+export const BESPOKE_BODY_REGISTRY: Readonly<
+  Record<string, BespokeBodyComponent>
+> = {
+  [BLUR_NODE_TYPE]: BlurBody,
+  [CANVAS_RESIZE_NODE_TYPE]: CanvasResizeBody,
+  [CHANNELS_NODE_TYPE]: ChannelsBody,
+  [CHROMA_KEY_NODE_TYPE]: ChromaKeyBody,
+  [COLLECTION_NODE_TYPE]: CollectionBody,
+  [COLOR_OVERLAY_NODE_TYPE]: ColorOverlayBody,
+  [COMPOSITOR_NODE_TYPE]: CompositorBody,
+  [CONSTANT_SKETCH_NODE_TYPE]: ConstantSketchBody,
+  [CONSTANT_TIMELINE_NODE_TYPE]: ConstantTimelineBody,
+  [CROP_NODE_TYPE]: CropBody,
+  [CURVES_NODE_TYPE]: CurvesBody,
+  [DROP_SHADOW_NODE_TYPE]: DropShadowBody,
+  [EXTRACT_VIDEO_FRAME_NODE_TYPE]: ExtractVideoFrameBody,
+  [FIT_NODE_TYPE]: FitBody,
+  [GET_VARIABLE_NODE_TYPE]: GetVariableBody,
+  [HSL_ADJUST_NODE_TYPE]: HSLAdjustBody,
+  [LEVELS_NODE_TYPE]: LevelsBody,
+  [LIST_GENERATOR_NODE_TYPE]: ListGeneratorBody,
+  [MASK_NODE_TYPE]: MaskBody,
+  [OFFSET_NODE_TYPE]: OffsetBody,
+  [OUTLINE_NODE_TYPE]: OutlineBody,
+  [PAD_NODE_TYPE]: PadBody,
+  [PAINTER_NODE_TYPE]: PainterBody,
+  [PASTE_NODE_TYPE]: PasteBody,
+  [PROMPT_NODE_TYPE]: PromptComposerBody,
+  [RESIZE_NODE_TYPE]: ResizeBody,
+  [RESIZE_IMAGE_NODE_TYPE]: ResizeImageBody,
+  [ROTATE_AND_FLIP_NODE_TYPE]: RotateAndFlipBody,
+  [SCALE_NODE_TYPE]: ScaleBody,
+  ...Object.fromEntries(
+    GENERATOR_NODE_TYPES.map((t) => [t, GeneratorBody] as const)
+  ),
+  ...Object.fromEntries(
+    MASKS_EXTRACTOR_NODE_TYPES.map((t) => [t, MasksExtractorBody] as const)
+  ),
+  ...Object.fromEntries(
+    SIMPLE_FILTER_NODE_TYPES.map((t) => [t, SimpleFilterBody] as const)
+  ),
+  ...Object.fromEntries(
+    ADJUSTMENT_NODE_TYPES.map((t) => [t, AdjustmentBody] as const)
+  ),
+  ...Object.fromEntries(
+    SYNTH_NODE_TYPES.map((t) => [t, SynthModuleBody] as const)
+  ),
+  ...Object.fromEntries(
+    AUDIO_EFFECT_NODE_TYPES.map((t) => [t, SynthModuleBody] as const)
+  ),
+  [AUDIO_OUT_NODE_TYPE]: AudioOutBody
+};
+
+// Default node sizes live in a data-only module so the graph-loading path can
+// read them without importing every body component above.
+export {
+  BESPOKE_DEFAULT_WIDTHS,
+  BESPOKE_DEFAULT_HEIGHTS
+} from "./bespokeNodeSizes";
+
+export const getBespokeBody = (
+  metadata: NodeMetadata | undefined
+): BespokeBodyComponent | undefined => {
+  const t = metadata?.node_type;
+  return t ? BESPOKE_BODY_REGISTRY[t] : undefined;
+};

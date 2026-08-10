@@ -1,0 +1,537 @@
+import { create } from "zustand";
+import { DOWNLOAD_URL } from "./BASE_URL";
+import { QueryClient } from "@tanstack/react-query";
+import { trpc } from "../lib/trpc";
+import { useHfCacheStatusStore } from "./HfCacheStatusStore";
+import type { ModelScope } from "./ModelManagerStore";
+
+const DOWNLOAD_STATUSES = [
+  "pending",
+  "idle",
+  "running",
+  "completed",
+  "cancelled",
+  "error",
+  "start",
+  "progress"
+] as const;
+
+type DownloadStatus = (typeof DOWNLOAD_STATUSES)[number];
+
+interface DownloadProgressMessage {
+  repo_id?: string;
+  path?: string;
+  status?: DownloadStatus;
+  model_type?: string;
+  downloaded_bytes?: number;
+  total_bytes?: number;
+  total_files?: number;
+  downloaded_files?: number;
+  current_files?: string[];
+  error?: string;
+  message?: string;
+}
+
+const optionalString = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined;
+
+const optionalNumber = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+// `JSON.parse` hands back `any`, so a byte count arriving as a string would
+// otherwise reach the progress bar and render as NaN.
+const parseDownloadProgress = (
+  value: unknown
+): DownloadProgressMessage | null => {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const frame = value as Record<string, unknown>;
+  const status = optionalString(frame.status);
+  const currentFiles = frame.current_files;
+  return {
+    repo_id: optionalString(frame.repo_id),
+    path: optionalString(frame.path),
+    status: DOWNLOAD_STATUSES.includes(status as DownloadStatus)
+      ? (status as DownloadStatus)
+      : undefined,
+    model_type: optionalString(frame.model_type),
+    downloaded_bytes: optionalNumber(frame.downloaded_bytes),
+    total_bytes: optionalNumber(frame.total_bytes),
+    total_files: optionalNumber(frame.total_files),
+    downloaded_files: optionalNumber(frame.downloaded_files),
+    current_files: Array.isArray(currentFiles)
+      ? currentFiles.filter((file): file is string => typeof file === "string")
+      : undefined,
+    error: optionalString(frame.error),
+    message: optionalString(frame.message)
+  };
+};
+
+interface SpeedDataPoint {
+  bytes: number;
+  timestamp: number;
+}
+
+interface Download {
+  status: DownloadStatus;
+  id: string;
+  downloadedBytes: number;
+  totalBytes: number;
+  totalFiles?: number;
+  downloadedFiles?: number;
+  currentFiles?: string[];
+  message?: string;
+  speed: number | null;
+  speedHistory: SpeedDataPoint[];
+  abortController?: AbortController;
+  modelType?: string;
+  lastUpdated?: number; // Timestamp of last progress update
+}
+
+interface ModelDownloadStore {
+  downloads: Record<string, Download>;
+  ws: WebSocket | null;
+  wsConnectionState: "disconnected" | "connecting" | "connected";
+  reconnectAttempts: number;
+  queryClient: QueryClient | null;
+  setQueryClient: (queryClient: QueryClient) => void;
+  connectWebSocket: () => Promise<WebSocket>;
+  disconnectWebSocket: () => void;
+  reconnectWebSocket: () => void;
+  hasActiveDownloads: () => boolean;
+  addDownload: (id: string, additionalProps?: Partial<Download>) => void;
+  updateDownload: (id: string, update: Partial<Download>) => void;
+  removeDownload: (id: string) => void;
+  startDownload: (
+    repoId: string,
+    modelType: string,
+    path?: string | null,
+    allowPatterns?: string[] | null,
+    ignorePatterns?: string[] | null,
+    scope?: ModelScope
+  ) => void;
+  cancelDownload: (id: string) => void;
+  isDialogOpen: boolean;
+  openDialog: () => void;
+  closeDialog: () => void;
+}
+
+// Reconnection settings
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_BASE_DELAY_MS = 2000; // Start with 2 seconds, then exponential backoff
+
+const calculateSpeed = (speedHistory: SpeedDataPoint[]): number | null => {
+  if (speedHistory.length < 2) {return null;}
+  const oldestPoint = speedHistory[0];
+  const newestPoint = speedHistory[speedHistory.length - 1];
+  const bytesDiff = newestPoint.bytes - oldestPoint.bytes;
+  const timeDiff = newestPoint.timestamp - oldestPoint.timestamp;
+  return timeDiff > 0 ? (bytesDiff / timeDiff) * 1000 : null;
+};
+
+export const useModelDownloadStore = create<ModelDownloadStore>((set, get) => ({
+  downloads: {},
+  ws: null,
+  wsConnectionState: "disconnected",
+  reconnectAttempts: 0,
+  queryClient: null,
+  setQueryClient: (queryClient: QueryClient) => {
+    set({ queryClient });
+  },
+
+  hasActiveDownloads: () => {
+    const downloads = get().downloads;
+    return Object.values(downloads).some(
+      (d) =>
+        d.status === "running" ||
+        d.status === "progress" ||
+        d.status === "start" ||
+        d.status === "pending"
+    );
+  },
+
+  reconnectWebSocket: () => {
+    const { reconnectAttempts, hasActiveDownloads, wsConnectionState } = get();
+
+    // Only reconnect if we have active downloads and aren't already connecting
+    if (!hasActiveDownloads() || wsConnectionState === "connecting") {
+      return;
+    }
+
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      console.error(
+        "[ModelDownloadStore] Max reconnect attempts reached. Giving up."
+      );
+      // Mark active downloads as potentially stalled/errored
+      const downloads = get().downloads;
+      Object.entries(downloads).forEach(([id, download]) => {
+        if (
+          download.status === "running" ||
+          download.status === "progress" ||
+          download.status === "start"
+        ) {
+          get().updateDownload(id, {
+            message: "Connection lost. Download may still be running on server."
+          });
+        }
+      });
+      return;
+    }
+
+    const delay = RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttempts);
+
+    set({ reconnectAttempts: reconnectAttempts + 1 });
+
+    setTimeout(() => {
+      get()
+        .connectWebSocket()
+        .then(() => {
+          set({ reconnectAttempts: 0 });
+        })
+        .catch(() => {
+          get().reconnectWebSocket();
+        });
+    }, delay);
+  },
+
+  connectWebSocket: async () => {
+    let ws = get().ws;
+    if (ws?.readyState === WebSocket.OPEN) {
+      return ws;
+    }
+
+    // Prevent multiple simultaneous connection attempts
+    if (get().wsConnectionState === "connecting") {
+      // Wait for existing connection attempt with timeout to prevent memory leak
+      const CONNECTION_TIMEOUT_MS = 30000; // 30 second timeout
+      return new Promise((resolve, reject) => {
+        const checkInterval = setInterval(() => {
+          const currentWs = get().ws;
+          const state = get().wsConnectionState;
+          if (state === "connected" && currentWs) {
+            clearInterval(checkInterval);
+            clearTimeout(timeoutId);
+            resolve(currentWs);
+          } else if (state === "disconnected") {
+            clearInterval(checkInterval);
+            clearTimeout(timeoutId);
+            reject(new Error("Connection failed"));
+          }
+        }, 100);
+
+        // Add timeout to prevent interval from running forever
+        const timeoutId = setTimeout(() => {
+          clearInterval(checkInterval);
+          reject(new Error(`Connection timeout after ${CONNECTION_TIMEOUT_MS}ms`));
+        }, CONNECTION_TIMEOUT_MS);
+      });
+    }
+
+    set({ wsConnectionState: "connecting" });
+    ws = new WebSocket(DOWNLOAD_URL);
+
+    await new Promise<void>((resolve, reject) => {
+      if (ws) {
+        ws.onopen = () => {
+          set({ wsConnectionState: "connected" });
+          resolve();
+        };
+        ws.onerror = (error) => {
+          set({ wsConnectionState: "disconnected" });
+          reject(error);
+        };
+      } else {
+        set({ wsConnectionState: "disconnected" });
+        reject(new Error("WebSocket is null"));
+      }
+    });
+
+    if (ws) {
+      ws.onmessage = (event: MessageEvent<unknown>) => {
+        const data =
+          typeof event.data === "string"
+            ? parseDownloadProgress(JSON.parse(event.data))
+            : null;
+        if (data?.repo_id) {
+          const id = data.path ? data.repo_id + "/" + data.path : data.repo_id;
+          // Ignore progress for dismissed rows — otherwise removeDownload + next WS
+          // tick recreates the entry via updateDownload's "missing entry" bootstrap.
+          if (!get().downloads[id]) {
+            return;
+          }
+          get().updateDownload(id, {
+            status: data.status,
+            id,
+            modelType: data.model_type,
+            downloadedBytes: data.downloaded_bytes ?? 0,
+            totalBytes: data.total_bytes ?? 0,
+            totalFiles: data.total_files ?? 0,
+            downloadedFiles: data.downloaded_files ?? 0,
+            currentFiles: data.current_files,
+            message: data.error || data.message
+          });
+          if (data.status === "completed") {
+            const queryClient = get().queryClient;
+            // A finished download can affect any provider's model list — the
+            // user might pick the new local model in the chat selector, the
+            // image picker, etc. Invalidate every model-scoped cache.
+            const MODEL_CACHE_KEYS = [
+              "allModels",
+              "language-models",
+              "image-models",
+              "video-models",
+              "tts-models",
+              "asr-models",
+              "embedding-models",
+              "huggingFaceModels",
+              "ollamaModels",
+              // TJS picker queries by `["tjs-models", modelType]` and
+              // `["tjs-recommended", modelType]` — invalidate both so newly
+              // cached repos flip from "Download" to "Downloaded" immediately.
+              "tjs-models",
+              "tjs-recommended"
+            ] as const;
+            for (const key of MODEL_CACHE_KEYS) {
+              queryClient?.invalidateQueries({ queryKey: [key] });
+            }
+            useHfCacheStatusStore.getState().invalidate([id]);
+          }
+        } else if (data?.status === "error") {
+          // Server-side failure before the download manager attached a
+          // repo_id (e.g. the manager failed to start). There's nothing to
+          // attribute it to, so fail every entry still awaiting its first
+          // progress message so rows don't spin forever.
+          const message = data.error || data.message || "Download failed";
+          console.error("[ModelDownloadStore] Server error:", message);
+          Object.entries(get().downloads).forEach(([id, download]) => {
+            if (download.status === "pending") {
+              get().updateDownload(id, { status: "error", message });
+            }
+          });
+        }
+      };
+
+      ws.onclose = (event) => {
+        console.warn(
+          `[ModelDownloadStore] WebSocket closed: code=${event.code}, reason=${event.reason}`
+        );
+        set({ ws: null, wsConnectionState: "disconnected" });
+
+        // Attempt reconnection if we have active downloads
+        if (get().hasActiveDownloads()) {
+          get().reconnectWebSocket();
+        }
+      };
+
+      ws.onerror = (error) => {
+        console.error("[ModelDownloadStore] WebSocket error:", error);
+      };
+
+      set({ ws });
+      return ws;
+    } else {
+      throw new Error("WebSocket connection failed");
+    }
+  },
+
+  disconnectWebSocket: () => {
+    const { ws } = get();
+    if (ws) {
+      ws.close();
+      set({ ws: null, wsConnectionState: "disconnected", reconnectAttempts: 0 });
+    }
+  },
+
+  addDownload: (id: string, additionalProps?: Partial<Download>) => {
+    set((state) => ({
+      downloads: {
+        ...state.downloads,
+        [id]: {
+          status: "pending",
+          downloadedBytes: 0,
+          totalBytes: 0,
+          id: id,
+          speed: null,
+          speedHistory: [],
+          ...additionalProps
+        } as Download
+      }
+    }));
+  },
+
+  updateDownload: (id: string, update: Partial<Download>) =>
+    set((state) => {
+      const currentDownload: Download =
+        state.downloads[id] || {
+          status: "pending",
+          downloadedBytes: 0,
+          totalBytes: 0,
+          totalFiles: 0,
+          downloadedFiles: 0,
+          id,
+          speed: null,
+          speedHistory: [],
+          currentFiles: []
+        };
+
+      const nextDownloadedBytes =
+        update.downloadedBytes ?? currentDownload.downloadedBytes;
+      const nextTotalBytes = update.totalBytes ?? currentDownload.totalBytes;
+      const nextDownloadedFiles =
+        update.downloadedFiles ?? currentDownload.downloadedFiles ?? 0;
+      const nextTotalFiles =
+        update.totalFiles ?? currentDownload.totalFiles ?? 0;
+      const nextStatusRaw = update.status ?? currentDownload.status;
+
+      const incompleteBytes =
+        nextStatusRaw === "completed" &&
+        nextTotalBytes > 0 &&
+        nextDownloadedBytes < nextTotalBytes;
+      const incompleteFiles =
+        nextStatusRaw === "completed" &&
+        nextTotalFiles > 0 &&
+        nextDownloadedFiles < nextTotalFiles;
+      const nextStatus =
+        nextStatusRaw === "completed" && (incompleteBytes || incompleteFiles)
+          ? "progress"
+          : nextStatusRaw;
+
+      const newSpeedHistory = [
+        ...currentDownload.speedHistory,
+        {
+          bytes: nextDownloadedBytes,
+          timestamp: Date.now()
+        }
+      ].slice(-10); // Keep only the last 10 data points
+
+      const newSpeed = calculateSpeed(newSpeedHistory);
+
+      return {
+        downloads: {
+          ...state.downloads,
+          [id]: {
+            ...currentDownload,
+            ...update,
+            downloadedBytes: nextDownloadedBytes,
+            totalBytes: nextTotalBytes,
+            downloadedFiles: nextDownloadedFiles,
+            totalFiles: nextTotalFiles,
+            status: nextStatus,
+            speedHistory: newSpeedHistory,
+            speed: newSpeed,
+            lastUpdated: Date.now()
+          }
+        }
+      };
+    }),
+
+  removeDownload: (id) =>
+    set((state) => {
+      const { [id]: _, ...rest } = state.downloads;
+      return { downloads: rest };
+    }),
+
+  startDownload: async (
+    repoId: string,
+    modelType: string,
+    path?: string | null,
+    allowPatterns?: string[] | null,
+    ignorePatterns?: string[] | null,
+    scope: ModelScope = "local"
+  ) => {
+    if (path) {
+      if (allowPatterns) {
+        throw new Error("allowPatterns is not supported when path is provided");
+      }
+      if (ignorePatterns) {
+        throw new Error(
+          "ignorePatterns is not supported when path is provided"
+        );
+      }
+      allowPatterns = [path];
+      ignorePatterns = [];
+    }
+    const id = path ? repoId + "/" + path : repoId;
+
+    const additionalProps: Partial<Download> = {
+      modelType: modelType
+    };
+
+    get().addDownload(id, additionalProps);
+
+    if (modelType === "llama_model") {
+      try {
+        // Streaming Ollama model pulls are not available in the TS standalone server.
+        // The tRPC endpoint returns an unavailable stub; direct Ollama API should be used instead.
+        const result = await trpc.models.pullOllamaModel.mutate({ model: id });
+        get().updateDownload(id, {
+          status: result.status === "unavailable" ? "error" : "completed",
+          message: result.message
+        });
+      } catch {
+        get().updateDownload(id, { status: "error" });
+      }
+    } else {
+      try {
+        const ws = await get().connectWebSocket();
+        ws.send(
+          JSON.stringify({
+            command: "start_download",
+            repo_id: repoId,
+            path: path,
+            allow_patterns: allowPatterns,
+            ignore_patterns: ignorePatterns,
+            model_type: modelType,
+            scope
+          })
+        );
+      } catch (error) {
+        console.error(
+          "[ModelDownloadStore] Failed to connect for download:",
+          error
+        );
+        get().updateDownload(id, {
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Failed to connect to download service"
+        });
+      }
+    }
+  },
+
+  cancelDownload: async (id) => {
+    const download = get().downloads[id];
+    if (download?.abortController) {
+      download.abortController.abort();
+      get().updateDownload(id, { status: "cancelled" });
+      return;
+    }
+
+    try {
+      const ws = await get().connectWebSocket();
+      ws.send(JSON.stringify({ command: "cancel_download", id: id }));
+      get().updateDownload(id, { status: "cancelled" });
+    } catch (error) {
+      console.error(
+        "[ModelDownloadStore] Failed to connect for cancel:",
+        error
+      );
+      // We couldn't reach the server to cancel, but the user asked for the
+      // row to stop — mark it cancelled locally ("cancelled" is not an
+      // active status in hasActiveDownloads, so the spinner stops).
+      get().updateDownload(id, {
+        status: "cancelled",
+        message: "Could not reach server to cancel; download may still be running on server."
+      });
+    }
+  },
+
+  isDialogOpen: false,
+
+  openDialog: () => set({ isDialogOpen: true }),
+
+  closeDialog: () => set({ isDialogOpen: false })
+}));

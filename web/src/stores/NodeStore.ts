@@ -1,0 +1,1590 @@
+/** NodeStore manages workflow graph state for a single editor tab. */
+
+import { temporal } from "./temporal";
+import type { TemporalState } from "./temporal";
+import { create, StoreApi, UseBoundStore } from "zustand";
+import { NodeMetadata, Workflow } from "./ApiTypes";
+import { NodeData } from "./NodeData";
+import {
+  Connection,
+  Edge,
+  EdgeChange,
+  Node,
+  NodeChange,
+  XYPosition,
+  addEdge,
+  OnNodesChange,
+  OnEdgesChange,
+  OnConnect,
+  applyNodeChanges,
+  applyEdgeChanges,
+  Position,
+  Viewport
+} from "@xyflow/react";
+import { customEquality } from "./customEquality";
+import isEqual from "../utils/isEqual";
+
+import { Node as GraphNode, Edge as GraphEdge } from "./ApiTypes";
+import { migrateGraphNodeTypes } from "@nodetool-ai/protocol";
+import type { codeGen } from "@nodetool-ai/protocol/api-schemas";
+import { autoLayout } from "../core/graph";
+import { isConnectable, isCollectType } from "../utils/TypeHandler";
+import { findOutputHandle, findInputHandle } from "../utils/handleUtils";
+import { isTypedSlot, normalizeDynamicSlots } from "../utils/dynamicSlots";
+import { codeGenSubmissionToNodeData } from "../utils/codeGenSubmission";
+import { addExposedInput } from "../utils/exposedInputs";
+import { WorkflowAttributes } from "./ApiTypes";
+import { wouldCreateCycle } from "../utils/graphCycle";
+import useMetadataStore from "./MetadataStore";
+import useErrorStore from "./ErrorStore";
+import useResultsStore from "./ResultsStore";
+import {
+  getContentCardDefaultSize,
+  isContentCardNode
+} from "../components/node_types/contentCardRegistry";
+import {
+  graphEdgeToReactFlowEdge,
+  CONTROL_HANDLE_ID,
+  isAgentNodeType
+} from "./graphEdgeToReactFlowEdge";
+import { graphNodeToReactFlowNode } from "./graphNodeToReactFlowNode";
+import { reactFlowEdgeToGraphEdge } from "./reactFlowEdgeToGraphEdge";
+import { reactFlowNodeToGraphNode } from "./reactFlowNodeToGraphNode";
+import { isValidEdge, sanitizeGraph } from "../core/workflow/graphMapping";
+import { GROUP_NODE_TYPE } from "../utils/nodeUtils";
+import { PREVIEW_NODE_TYPE } from "../constants/nodeTypes";
+import { BESPOKE_DEFAULT_HEIGHTS } from "../components/node_types/editing/bespokeNodeSizes";
+import { DEFAULT_NODE_WIDTH } from "./nodeUiDefaults";
+import { applyDefaultModels } from "../utils/applyDefaultModels";
+import { reactFlowNodeChromeClassName } from "../utils/reactFlowNodeChromeClassName";
+
+// Preserve node object identity when the class doesn't actually change.
+// React Flow skips re-adopting a node whose object identity is unchanged
+// (see internal drag/measure paths), so handing back the same reference
+// on every unrelated change batch (e.g. drag pointermove) is critical for
+// avoiding O(N) re-renders of the whole canvas.
+const syncReactFlowNodeChromeClass = (node: Node<NodeData>): Node<NodeData> => {
+  const className = reactFlowNodeChromeClassName(node.data);
+  return className === node.className ? node : { ...node, className };
+};
+
+const syncAllReactFlowNodeChromeClass = (
+  nodes: Node<NodeData>[]
+): Node<NodeData>[] => {
+  let changed = false;
+  const next = nodes.map((node) => {
+    const synced = syncReactFlowNodeChromeClass(node);
+    if (synced !== node) {
+      changed = true;
+    }
+    return synced;
+  });
+  return changed ? next : nodes;
+};
+
+// Keys that only carry ReactFlow measurement state; an update setting all of
+// them to `undefined` is a re-measure request, not a user edit.
+const MEASUREMENT_RESET_KEYS = new Set(["height", "width", "measured"]);
+
+/**
+ * Generates a default name for input nodes based on their type.
+ * For example, "nodetool.input.StringInput" becomes "string_input_1"
+ */
+const generateInputNodeName = (
+  nodeType: string,
+  existingNodes: Node<NodeData>[]
+): string => {
+  // Extract the input type from the node type (e.g., "StringInput" from "nodetool.input.StringInput")
+  const match = nodeType.match(/nodetool\.input\.(\w+)Input$/);
+  if (!match) {
+    // Handle special cases like Folder
+    const folderMatch = nodeType.match(/nodetool\.input\.(\w+)$/);
+    if (folderMatch) {
+      const baseName = folderMatch[1].toLowerCase();
+      const existingCount = existingNodes.filter(
+        (n) => n.type === nodeType
+      ).length;
+      return `${baseName}_${existingCount + 1}`;
+    }
+    return "input_1";
+  }
+
+  const inputType = match[1].toLowerCase();
+  const baseName = `${inputType}_input`;
+
+  // Count existing input nodes of the same type
+  const existingCount = existingNodes.filter((n) => n.type === nodeType).length;
+
+  return `${baseName}_${existingCount + 1}`;
+};
+
+/** UUID v4, falling back to a manual implementation when crypto.randomUUID is absent. */
+const generateUUID = (): string => {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+    /[xy]/g,
+    function (char) {
+      const randomValue = (Math.random() * 16) | 0;
+      const hexValue = char === "x" ? randomValue : (randomValue & 0x3) | 0x8;
+      return hexValue.toString(16);
+    }
+  );
+};
+
+export { DEFAULT_NODE_WIDTH } from "./nodeUiDefaults";
+
+type NodeSelection = {
+  nodes: Node<NodeData>[];
+  edges: Edge[];
+};
+
+const undo_limit = 1000;
+
+export interface NodeStoreState {
+  workflow: WorkflowAttributes;
+  nodes: Node<NodeData>[];
+  viewport: Viewport | null;
+  setViewport: (viewport: Viewport) => void;
+  hoveredNodes: string[];
+  setHoveredNodes: (ids: string[]) => void;
+  edges: Edge[];
+  edgeUpdateSuccessful: boolean;
+  generateNodeId: () => string;
+  generateNodeIds: (count: number) => string[];
+  generateEdgeId: () => string;
+  getInputEdges: (nodeId: string) => Edge[];
+  getOutputEdges: (nodeId: string) => Edge[];
+  getSelection: () => NodeSelection;
+  getSelectedNodes: () => Node<NodeData>[];
+  getSelectedNodeCount: () => number;
+  setSelectedNodes: (nodes: Node<NodeData>[]) => void;
+  selectNodesByType: (nodeType: string) => void;
+  getSelectedNodeIds: () => string[];
+  setEdgeUpdateSuccessful: (value: boolean) => void;
+  setEdgeSelectionState: (edgeSelections: Record<string, boolean>) => void;
+  onNodesChange: OnNodesChange<Node<NodeData>>;
+  onEdgesChange: OnEdgesChange;
+  onEdgeUpdate: (oldEdge: Edge, newConnection: Connection) => void;
+  onConnect: OnConnect;
+  connectionAttempted: boolean;
+  setConnectionAttempted: (value: boolean) => void;
+  addNode: (node: Node<NodeData>) => void;
+  findNode: (id: string) => Node<NodeData> | undefined;
+  updateNode: (id: string, node: Partial<Node<NodeData>>) => void;
+  updateNodeData: (
+    id: string,
+    data: Partial<NodeData>,
+    options?: { quiet?: boolean }
+  ) => void;
+  updateNodeProperties: (
+    id: string,
+    properties: Record<string, unknown>
+  ) => void;
+  applyCodeGenSubmission: (
+    id: string,
+    submission: codeGen.CodeGenSubmission
+  ) => void;
+  deleteNode: (id: string) => void;
+  deleteNodes: (ids: string[]) => void;
+  findEdge: (id: string) => Edge | undefined;
+  deleteEdge: (id: string) => void;
+  deleteEdges: (ids: string[]) => void;
+  addEdge: (edge: Edge) => void;
+  updateEdge: (edge: Edge) => void;
+  updateEdgeHandle: (
+    nodeId: string,
+    oldHandle: string,
+    newHandle: string
+  ) => void;
+  setNodes: (
+    nodesOrCallback:
+      | Node<NodeData>[]
+      | ((nodes: Node<NodeData>[]) => Node<NodeData>[])
+  ) => void;
+  setEdges: (edges: Edge[]) => void;
+  getWorkflow: () => Workflow;
+  setWorkflowDirty: (dirty: boolean) => void;
+  setWorkflowUpdatedAt: (updatedAt: string) => void;
+  validateConnection: (
+    connection: Connection,
+    srcNode: Node<NodeData>,
+    targetNode: Node<NodeData>
+  ) => boolean;
+  workflowJSON: () => string;
+  createNode: (
+    metadata: NodeMetadata,
+    position: XYPosition,
+    properties?: Record<string, unknown>
+  ) => Node<NodeData>;
+  autoLayout: () => Promise<void>;
+  workflowIsDirty: boolean;
+  shouldFitToScreen: boolean;
+  fitViewTargetNodeIds: string[] | null;
+  setShouldFitToScreen: (value: boolean, nodeIds?: string[] | null) => void;
+  selectAllNodes: () => void;
+  cleanup: () => void;
+  toggleBypass: (nodeId: string) => void;
+  setBypass: (nodeId: string, bypassed: boolean) => void;
+  toggleBypassSelected: () => void;
+}
+
+export type PartializedNodeStore = Pick<
+  NodeStoreState,
+  "workflow" | "nodes" | "edges"
+>;
+
+export type NodeStore = UseBoundStore<
+  StoreApi<NodeStoreState> & {
+    temporal: StoreApi<TemporalState<PartializedNodeStore>>;
+  }
+>;
+
+/**
+ * Creates a new node store instance with default values
+ * Useful for testing or creating isolated stores
+ */
+export const createNodeStore = (
+  workflow?: Workflow,
+  state?: Partial<NodeStoreState>
+): NodeStore =>
+  create<NodeStoreState>()(
+    temporal(
+      (set, get) => {
+        const metadata = useMetadataStore.getState().metadata;
+        const nodeTypes = useMetadataStore.getState().nodeTypes;
+        const addUnknownNodeTypes =
+          useMetadataStore.getState().addUnknownNodeTypes;
+
+        // Rewrite removed node types (e.g. FormatText -> Prompt) so legacy
+        // workflows load into the editor as their replacements.
+        const migratedGraph = workflow?.graph
+          ? migrateGraphNodeTypes(workflow.graph)
+          : undefined;
+        const unsanitizedNodes =
+          workflow && migratedGraph
+            ? (migratedGraph.nodes || []).map((n: GraphNode) =>
+                graphNodeToReactFlowNode(workflow, n)
+              )
+            : [];
+        const unsanitizedEdges =
+          workflow && migratedGraph
+            ? (migratedGraph.edges || []).map((e: GraphEdge) =>
+                graphEdgeToReactFlowEdge(e)
+              )
+            : [];
+
+        const { nodes: sanitizedNodes, edges: sanitizedEdges } = sanitizeGraph(
+          unsanitizedNodes,
+          unsanitizedEdges,
+          metadata
+        );
+
+        // Record missing node types by name in one call. The surfaces that
+        // build ReactFlow's `nodeTypes` prop map them to `PlaceholderNode`;
+        // registering the component from here would pull the whole node-body
+        // tree into every bundle that touches this store. `addUnknownNodeTypes`
+        // keeps the array identity when nothing is new, since those surfaces
+        // memoize the prop on it and a fresh identity remounts the canvas.
+        // An empty registry means metadata hasn't loaded yet, not that every
+        // type in the graph is gone — recording them here would mark the whole
+        // workflow missing.
+        const registryLoaded = Object.keys(nodeTypes).length > 0;
+        const missingNodeTypes = registryLoaded
+          ? sanitizedNodes
+              .map((node) => node.type)
+              .filter((type): type is string => !!type && !nodeTypes[type])
+          : [];
+        if (missingNodeTypes.length > 0) {
+          addUnknownNodeTypes(missingNodeTypes);
+        }
+
+        // Store the unsubscribe function for cleanup
+        let unsubscribeMetadata: (() => void) | null = null;
+
+        // Subscribe to metadata changes to re-sanitize edges when metadata loads
+        unsubscribeMetadata = useMetadataStore.subscribe((state) => {
+          // Re-sanitize edges when metadata becomes available
+          const currentState = get();
+          const metadataCount = Object.keys(state.metadata).length;
+          const edgeCount = currentState.edges.length;
+
+          if (metadataCount > 0 && edgeCount > 0) {
+            const { edges: sanitizedEdges } = sanitizeGraph(
+              currentState.nodes,
+              currentState.edges,
+              state.metadata
+            );
+            // Sanitizing is a non-trivial structural pass; avoid replacing
+            // the edges array identity (and invalidating memoized consumers)
+            // when nothing actually changed.
+            const changed =
+              sanitizedEdges.length !== currentState.edges.length ||
+              sanitizedEdges.some(
+                (e, i) =>
+                  e !== currentState.edges[i] &&
+                  !isEqual(e, currentState.edges[i])
+              );
+            if (changed) {
+              set({ edges: sanitizedEdges });
+            }
+          }
+        });
+
+        let lastNodesForById: Node<NodeData>[] | null = null;
+        let nodesById: Map<string, Node<NodeData>> = new Map();
+
+        let lastNodesForSelectionCount: Node<NodeData>[] | null = null;
+        let lastSelectionCount = 0;
+        let lastNodesForSelection: Node<NodeData>[] | null = null;
+        let lastSelectedNodes: Node<NodeData>[] = [];
+        let lastNodesForSelectionIds: Node<NodeData>[] | null = null;
+        let lastSelectedNodeIdsArray: string[] = [];
+        let lastNodesForGetSelection: Node<NodeData>[] | null = null;
+        let lastEdgesForGetSelection: Edge[] | null = null;
+        let lastSelection: NodeSelection = { nodes: [], edges: [] };
+
+        return {
+          viewport: null,
+          workflow: workflow
+            ? workflow
+            : {
+                id: "",
+                name: "",
+                access: "private",
+                description: "",
+                thumbnail: "",
+                tags: [],
+                run_mode: "workflow",
+                settings: {},
+                updated_at: new Date().toISOString(),
+                created_at: new Date().toISOString()
+              },
+          workflowIsDirty: false,
+          nodes: sanitizedNodes,
+          edges: sanitizedEdges,
+          edgeUpdateSuccessful: false,
+          hoveredNodes: [],
+          shouldFitToScreen: state?.shouldFitToScreen ?? true,
+          fitViewTargetNodeIds: state?.fitViewTargetNodeIds ?? null,
+          connectionAttempted: false,
+          setConnectionAttempted: (value: boolean): void =>
+            set({ connectionAttempted: value }),
+          setHoveredNodes: (ids: string[]): void => set({ hoveredNodes: ids }),
+          generateNodeId: (): string => {
+            return generateUUID();
+          },
+          generateNodeIds: (count: number): string[] => {
+            return Array.from({ length: count }, () => generateUUID());
+          },
+          generateEdgeId: (): string => {
+            return generateUUID();
+          },
+          getInputEdges: (nodeId: string): Edge[] =>
+            get().edges.filter((e) => e.target === nodeId),
+          getOutputEdges: (nodeId: string): Edge[] =>
+            get().edges.filter((e) => e.source === nodeId),
+          getSelection: (): NodeSelection => {
+            const state = get();
+            if (
+              state.nodes === lastNodesForGetSelection &&
+              state.edges === lastEdgesForGetSelection
+            ) {
+              return lastSelection;
+            }
+            const nodes = state.nodes.filter((node) => node.selected);
+            const nodeIds: Record<string, boolean> = {};
+            for (const node of nodes) {
+              nodeIds[node.id] = true;
+            }
+            const edges = state.edges.filter(
+              (edge) => edge.source in nodeIds && edge.target in nodeIds
+            );
+
+            lastNodesForGetSelection = state.nodes;
+            lastEdgesForGetSelection = state.edges;
+            lastSelection = { nodes, edges };
+            return lastSelection;
+          },
+          getSelectedNodes: (): Node<NodeData>[] => {
+            const nodes = get().nodes;
+            if (nodes === lastNodesForSelection) {
+              return lastSelectedNodes;
+            }
+            lastNodesForSelection = nodes;
+            lastSelectedNodes = nodes.filter((node) => node.selected);
+            return lastSelectedNodes;
+          },
+          getSelectedNodeCount: (): number => {
+            const nodes = get().nodes;
+            if (nodes === lastNodesForSelectionCount) {
+              return lastSelectionCount;
+            }
+
+            lastNodesForSelectionCount = nodes;
+            let count = 0;
+            for (const node of nodes) {
+              if (node.selected) {
+                count++;
+              }
+            }
+            lastSelectionCount = count;
+            return count;
+          },
+          setSelectedNodes: (nodes: Node<NodeData>[]): void => {
+            const nodesToSelectIds = new Set(nodes.map((n) => n.id));
+            let changed = false;
+            const nextNodes = get().nodes.map((node) => {
+              const shouldBeSelected = nodesToSelectIds.has(node.id);
+              if (node.selected !== shouldBeSelected) {
+                changed = true;
+                return { ...node, selected: shouldBeSelected };
+              }
+              return node;
+            });
+            if (changed) {
+              set({ nodes: nextNodes });
+            }
+          },
+          selectNodesByType: (nodeType: string): void => {
+            const nodes = get().nodes;
+            const matchingCount = nodes.filter((node) => {
+              const currentType = node.type;
+              const originalType = node.data?.originalType;
+              return (
+                currentType === nodeType ||
+                (!!originalType && originalType === nodeType)
+              );
+            }).length;
+            console.info(
+              "[NodeStore] selectNodesByType",
+              nodeType,
+              "matching",
+              matchingCount
+            );
+            if (matchingCount === 0) {
+              return;
+            }
+            let changed = false;
+            const nextNodes = nodes.map((node) => {
+              const currentType = node.type;
+              const originalType = node.data?.originalType;
+              const isMatch =
+                currentType === nodeType ||
+                (!!originalType && originalType === nodeType);
+              if (node.selected !== isMatch) {
+                changed = true;
+                return { ...node, selected: isMatch };
+              }
+              return node;
+            });
+            if (changed) {
+              set({ nodes: nextNodes });
+            }
+          },
+          getSelectedNodeIds: (): string[] => {
+            const nodes = get().nodes;
+            if (nodes === lastNodesForSelectionIds) {
+              return lastSelectedNodeIdsArray;
+            }
+
+            const ids: string[] = [];
+            for (const node of nodes) {
+              if (node.selected) {
+                ids.push(node.id);
+              }
+            }
+
+            lastNodesForSelectionIds = nodes;
+            lastSelectedNodeIdsArray = ids;
+            return ids;
+          },
+          setEdgeUpdateSuccessful: (value: boolean): void =>
+            set({ edgeUpdateSuccessful: value }),
+          onNodesChange: (changes: NodeChange<Node<NodeData>>[]): void => {
+            // `resizing: true` is React Flow's signal for an active user resize
+            // via NodeResizer/NodeResizeControl. The `setAttributes` field is
+            // unreliable here because it also fires on initial measurement when
+            // a node has no explicit height, which would dirty every workflow
+            // on app start.
+            const hasUserResize = changes.some(
+              (change) =>
+                change.type === "dimensions" &&
+                "resizing" in change &&
+                change.resizing === true
+            );
+
+            // Treat as internal anything that React Flow emits without an explicit
+            // user drag (`dragging: true`). Position changes with `dragging: false`
+            // are drag-end frames; with `dragging: undefined` they come from
+            // programmatic adjustments like extent constraints or initial measurement
+            // and must not mark the workflow dirty.
+            const isOnlyInternalChanges =
+              !hasUserResize &&
+              changes.every(
+                (change) =>
+                  change.type === "dimensions" ||
+                  change.type === "select" ||
+                  (change.type === "position" && change.dragging !== true)
+              );
+
+            // Filter out selection changes for group nodes that have selectable: false
+            // This prevents groups from being selected during drag selection when they shouldn't be
+            const currentNodes = get().nodes;
+
+            // Optimization: Lazily initialize Map only if we encounter selection changes
+            // to avoid O(N) allocation on hot paths like dragging.
+            let lazyNodeMap: Map<string, Node<NodeData>> | null = null;
+
+            const filteredChanges = changes.filter((change) => {
+              if (change.type === "select" && change.selected) {
+                if (!lazyNodeMap) {
+                  lazyNodeMap = new Map(currentNodes.map((n) => [n.id, n]));
+                }
+                const node = lazyNodeMap.get(change.id);
+                // If node is a group and has selectable: false, don't allow selection
+                if (
+                  node &&
+                  (node.type === GROUP_NODE_TYPE ||
+                    node.data?.originalType === GROUP_NODE_TYPE) &&
+                  node.selectable === false
+                ) {
+                  return false;
+                }
+              }
+              return true;
+            });
+
+            const rawNodes = applyNodeChanges(filteredChanges, currentNodes);
+            const nodes = syncAllReactFlowNodeChromeClass(
+              rawNodes ?? currentNodes
+            );
+            set({ nodes });
+
+            // Only mark as dirty if there are actual user changes, not just internal React Flow updates
+            if (!isOnlyInternalChanges) {
+              get().setWorkflowDirty(true);
+            }
+          },
+          onEdgesChange: (changes: EdgeChange[]): void => {
+            // Check if changes are only selection-related
+            const isOnlySelectionChanges = changes.every(
+              (change) => change.type === "select"
+            );
+
+            set({
+              edges: applyEdgeChanges(changes, get().edges)
+            });
+
+            // Only mark as dirty if there are actual edge modifications, not just selection changes
+            if (!isOnlySelectionChanges) {
+              get().setWorkflowDirty(true);
+            }
+          },
+          setEdgeSelectionState: (
+            edgeSelections: Record<string, boolean>
+          ): void => {
+            const selectionEntries = Object.entries(edgeSelections);
+            if (selectionEntries.length === 0) {
+              return;
+            }
+
+            const currentEdges = get().edges;
+            let changed = false;
+
+            const updatedEdges = currentEdges.map((edge) => {
+              if (edge.id in edgeSelections) {
+                const shouldSelect = edgeSelections[edge.id];
+                const isSelected = Boolean(edge.selected);
+                if (isSelected !== shouldSelect) {
+                  changed = true;
+                  return { ...edge, selected: shouldSelect };
+                }
+              }
+              return edge;
+            });
+
+            if (changed) {
+              set({ edges: updatedEdges });
+            }
+          },
+          onEdgeUpdate: (oldEdge: Edge, newConnection: Connection): void => {
+            // A reconnect onto a handle was attempted — mark it successful
+            // immediately (canonical xyflow pattern) so onEdgeUpdateEnd never
+            // deletes the edge. If validation fails below, the original edge
+            // is left unchanged.
+            get().setEdgeUpdateSuccessful(true);
+            const edge = get().edges.find((e) => e.id === oldEdge.id);
+            if (edge) {
+              const isUnchanged =
+                edge.source === newConnection.source &&
+                edge.target === newConnection.target &&
+                (edge.sourceHandle ?? null) ===
+                  (newConnection.sourceHandle ?? null) &&
+                (edge.targetHandle ?? null) ===
+                  (newConnection.targetHandle ?? null);
+              if (isUnchanged) {
+                // Dropped back on the original handle — successful no-op.
+                // (validateConnection would reject it as a duplicate since
+                // the dragged edge itself is still in the edges array.)
+                return;
+              }
+              const srcNode = get().findNode(newConnection.source);
+              const targetNode = get().findNode(newConnection.target);
+              if (
+                srcNode &&
+                targetNode &&
+                get().validateConnection(newConnection, srcNode, targetNode)
+              ) {
+                const newEdge = {
+                  ...edge,
+                  source: newConnection.source,
+                  target: newConnection.target,
+                  sourceHandle: newConnection.sourceHandle || null,
+                  targetHandle: newConnection.targetHandle || null
+                };
+                set({
+                  edges: get().edges.map((e) =>
+                    e.id === oldEdge.id ? newEdge : e
+                  )
+                });
+                get().setWorkflowDirty(true);
+              }
+            }
+          },
+          onConnect: (connection: Connection): void => {
+            const srcNode = get().findNode(connection.source);
+            const targetNode = get().findNode(connection.target);
+            if (!connection.targetHandle) {
+              return;
+            }
+
+            const isControlEdge =
+              connection.targetHandle === CONTROL_HANDLE_ID ||
+              connection.sourceHandle === CONTROL_HANDLE_ID;
+
+            const isDynamicProperty =
+              targetNode?.data.dynamic_properties[connection.targetHandle] !==
+              undefined;
+            // A *typed* dynamic slot is gated like a static handle; only
+            // undeclared (legacy) slots keep the promiscuous bypass.
+            const targetSlot =
+              targetNode?.data.dynamic_inputs?.[connection.targetHandle];
+            const isUntypedDynamicProperty =
+              isDynamicProperty && !isTypedSlot(targetSlot);
+            if (
+              !srcNode ||
+              !targetNode ||
+              !(
+                isUntypedDynamicProperty ||
+                isControlEdge ||
+                get().validateConnection(connection, srcNode, targetNode)
+              )
+            ) {
+              return;
+            }
+
+            // For control edges, validate that source is an Agent node
+            if (isControlEdge) {
+              if (!isAgentNodeType(srcNode.type)) {
+                return;
+              }
+            }
+
+            // Check if the target handle is a "collect" handle (list[T])
+            // Collect handles allow multiple incoming connections
+            let isCollectHandle = false;
+            if (targetNode && connection.targetHandle && !isControlEdge) {
+              const targetMetadata = useMetadataStore
+                .getState()
+                .getMetadata(targetNode.type || "");
+              if (targetMetadata) {
+                const targetHandle = findInputHandle(
+                  targetNode,
+                  connection.targetHandle,
+                  targetMetadata
+                );
+                if (targetHandle?.type && isCollectType(targetHandle.type)) {
+                  isCollectHandle = true;
+                }
+              }
+            }
+
+            // Remove any existing connections to this target handle
+            // UNLESS it's a collect handle, which allows multiple connections
+            const filteredEdges = isCollectHandle
+              ? get().edges
+              : get().edges.filter(
+                  (edge) =>
+                    !(
+                      edge.target === connection.target &&
+                      edge.targetHandle === connection.targetHandle
+                    )
+                );
+
+            if (
+              wouldCreateCycle(
+                filteredEdges,
+                connection.source,
+                connection.target
+              )
+            ) {
+              return;
+            }
+
+            const newEdge: Edge = {
+              ...connection,
+              id: get().generateEdgeId(),
+              sourceHandle: connection.sourceHandle || null,
+              targetHandle: connection.targetHandle || null,
+              ...(isControlEdge
+                ? { type: "control", data: { edge_type: "control" } }
+                : {})
+            };
+
+            // Normalize handles to null if undefined for consistency
+            // This is necessary because edge comparison and serialization expect null, not undefined
+            const normalizedEdges = filteredEdges.map((edge) => ({
+              ...edge,
+              sourceHandle: edge.sourceHandle || null,
+              targetHandle: edge.targetHandle || null
+            }));
+
+            set({
+              edges: addEdge(newEdge, normalizedEdges)
+            });
+
+            // Persist the target as an exposed input so its handle survives
+            // disconnection. Skipped for dynamic props and control edges
+            // (those have their own surfaces) and for properties already
+            // declared as a handle by metadata (`input_fields` / inline rows
+            // render their own handle).
+            // Connect-time type inference: an undeclared dynamic slot adopts
+            // the source output's type, so most slots end up typed with no
+            // user effort. Slots that already carry a declaration are left be.
+            if (
+              isUntypedDynamicProperty &&
+              !isControlEdge &&
+              connection.sourceHandle
+            ) {
+              const srcMetadata = useMetadataStore
+                .getState()
+                .getMetadata(srcNode.type || "");
+              const srcHandle = srcMetadata
+                ? findOutputHandle(
+                    srcNode,
+                    connection.sourceHandle,
+                    srcMetadata
+                  )
+                : undefined;
+              if (srcHandle && srcHandle.type.type !== "any") {
+                get().updateNodeData(targetNode.id, {
+                  dynamic_inputs: {
+                    ...normalizeDynamicSlots(targetNode.data.dynamic_inputs),
+                    [connection.targetHandle]: { type: srcHandle.type }
+                  }
+                });
+              }
+            }
+
+            if (!isDynamicProperty && !isControlEdge) {
+              const targetMetadata = useMetadataStore
+                .getState()
+                .getMetadata(targetNode.type || "");
+              const inlineFields = targetMetadata?.inline_fields ?? [];
+              const inputFields = targetMetadata?.input_fields ?? [];
+              const isMetadataHandle =
+                inlineFields.includes(connection.targetHandle) ||
+                inputFields.includes(connection.targetHandle);
+              if (targetMetadata && !isMetadataHandle) {
+                const next = addExposedInput(
+                  targetNode.data.exposedInputs,
+                  connection.targetHandle
+                );
+                if (next !== targetNode.data.exposedInputs) {
+                  get().updateNodeData(targetNode.id, { exposedInputs: next });
+                }
+              }
+            }
+
+            get().setWorkflowDirty(true);
+          },
+          findNode: (id: string): Node<NodeData> | undefined => {
+            const nodes = get().nodes;
+            if (nodes !== lastNodesForById) {
+              lastNodesForById = nodes;
+              nodesById = new Map(nodes.map((n) => [n.id, n]));
+            }
+            return nodesById.get(id);
+          },
+          findEdge: (id: string): Edge | undefined =>
+            get().edges.find((e) => e.id === id),
+          addNode: (node: Node<NodeData>): void => {
+            if (get().findNode(node.id)) {
+              console.warn(`Node with id ${node.id} already exists`);
+              return;
+            }
+            const newNode = {
+              ...node,
+              expandParent: true,
+              data: { ...node.data, workflow_id: get().workflow.id }
+            };
+            set({
+              nodes: [...get().nodes, syncReactFlowNodeChromeClass(newNode)]
+            });
+            get().setWorkflowDirty(true);
+          },
+          updateNode: (
+            id: string,
+            nodeUpdate: Partial<Node<NodeData>>
+          ): void => {
+            // Check if this is only a selection change
+            const isOnlySelectionChange =
+              Object.keys(nodeUpdate).length === 1 && "selected" in nodeUpdate;
+
+            // Check if this is only a measurement reset (e.g. BaseNode forcing
+            // a re-measure via `{ height: undefined, measured: undefined }`
+            // when a result overlay appears) — never a user edit, so it
+            // shouldn't dirty the workflow / trigger autosave.
+            const isOnlyMeasurementReset = Object.keys(nodeUpdate).every(
+              (key) =>
+                MEASUREMENT_RESET_KEYS.has(key) &&
+                (nodeUpdate as Record<string, unknown>)[key] === undefined
+            );
+
+            set((state) => {
+              const nodeIndex = state.nodes.findIndex((n) => n.id === id);
+              if (nodeIndex === -1) {
+                return state;
+              }
+
+              const newNodes = [...state.nodes];
+              const updatedNode = { ...newNodes[nodeIndex], ...nodeUpdate };
+              updatedNode.className = reactFlowNodeChromeClassName(
+                updatedNode.data
+              );
+              newNodes[nodeIndex] = updatedNode;
+
+              // If parentId is being set or changed, reorder nodes
+              if (nodeUpdate.parentId !== undefined) {
+                // Remove the node from its current position
+                newNodes.splice(nodeIndex, 1);
+
+                const parentIndex = newNodes.findIndex(
+                  (n) => n.id === nodeUpdate.parentId
+                );
+
+                if (
+                  nodeUpdate.parentId === null ||
+                  nodeUpdate.parentId === undefined
+                ) {
+                  // If removing parentId, add to the end (or handle as per existing logic for no parent)
+                  newNodes.push(updatedNode);
+                } else if (parentIndex !== -1) {
+                  // Insert after the parent
+                  newNodes.splice(parentIndex + 1, 0, updatedNode);
+                } else {
+                  // Parent not found (should not happen if data is consistent), add to end
+                  // Or, if parentId is set but parent is not in the list yet,
+                  // this might still cause issues.
+                  // For safety, add child to the end if parent not found.
+                  // React Flow might still complain if parent isn't rendered.
+                  newNodes.push(updatedNode);
+                }
+              }
+              return { ...state, nodes: newNodes };
+            });
+
+            // Only mark as dirty if this is not just a selection change or a
+            // measurement reset
+            if (!isOnlySelectionChange && !isOnlyMeasurementReset) {
+              get().setWorkflowDirty(true);
+            }
+          },
+          updateNodeData: (
+            id: string,
+            data: Partial<NodeData>,
+            options?: { quiet?: boolean }
+          ): void => {
+            set((state) => {
+              const index = state.nodes.findIndex((n) => n.id === id);
+              if (index === -1) {
+                return state;
+              }
+              const nodes = state.nodes.slice();
+              const target = nodes[index];
+              const mergedData = { ...target.data, ...data };
+              nodes[index] = {
+                ...target,
+                data: mergedData,
+                className: reactFlowNodeChromeClassName(mergedData)
+              };
+              return { ...state, nodes };
+            });
+            if (!options?.quiet) {
+              get().setWorkflowDirty(true);
+            }
+          },
+          updateNodeProperties: (
+            id: string,
+            properties: Record<string, unknown>
+          ): void => {
+            const workflow_id = get().workflow.id;
+            set((state) => {
+              const index = state.nodes.findIndex((n) => n.id === id);
+              if (index === -1) {
+                return state;
+              }
+              const nodes = state.nodes.slice();
+              const target = nodes[index];
+              nodes[index] = {
+                ...target,
+                data: {
+                  ...target.data,
+                  workflow_id,
+                  properties: {
+                    ...target.data.properties,
+                    ...properties
+                  }
+                }
+              };
+              return { ...state, nodes };
+            });
+            get().setWorkflowDirty(true);
+          },
+          /**
+           * Write an accepted AI-authored submission onto a Code Node: code,
+           * title, typed input and output slots, and the slots' default values.
+           *
+           * One `updateNodeData` call, so the temporal middleware records one
+           * undo entry and a single undo restores the node exactly as it was
+           * before generation.
+           */
+          applyCodeGenSubmission: (
+            id: string,
+            submission: codeGen.CodeGenSubmission
+          ): void => {
+            const node = get().findNode(id);
+            if (!node) {
+              return;
+            }
+            get().updateNodeData(
+              id,
+              codeGenSubmissionToNodeData(submission, node.data.properties)
+            );
+          },
+          deleteNode: (id: string): void => {
+            get().deleteNodes([id]);
+          },
+          deleteNodes: (ids: string[]): void => {
+            if (ids.length === 0) {
+              return;
+            }
+
+            const idsToDelete = new Set(ids);
+            const existingNodes = get().nodes;
+            const foundIds = existingNodes
+              .filter((node) => idsToDelete.has(node.id))
+              .map((node) => node.id);
+
+            if (foundIds.length === 0) {
+              console.warn(`Node(s) not found: ${ids.join(", ")}`);
+              return;
+            }
+
+            // Note: the Delete/Backspace-while-typing guard lives in the
+            // keyboard layer (KeyPressedStore suppresses those combos when an
+            // editable element is focused), so programmatic callers (ui tools,
+            // context menus, grouping) always work here.
+            const foundIdSet = new Set(foundIds);
+            const deletedById = new Map(
+              existingNodes
+                .filter((n) => foundIdSet.has(n.id))
+                .map((n) => [n.id, n] as const)
+            );
+            const nodes: Node<NodeData>[] = [];
+
+            for (const node of existingNodes) {
+              if (!foundIdSet.has(node.id)) {
+                if (node.parentId && foundIdSet.has(node.parentId)) {
+                  const parent = deletedById.get(node.parentId);
+                  nodes.push({
+                    ...node,
+                    parentId: undefined,
+                    position: {
+                      x: (parent?.position?.x ?? 0) + (node.position?.x ?? 0),
+                      y: (parent?.position?.y ?? 0) + (node.position?.y ?? 0)
+                    }
+                  });
+                } else {
+                  nodes.push(node);
+                }
+              }
+            }
+
+            const workflowId = get().workflow.id;
+            const idSetForClear = new Set(foundIds);
+            useErrorStore.getState().clearErrors(workflowId, idSetForClear);
+            useResultsStore.getState().clearResults(workflowId, idSetForClear);
+
+            set({
+              nodes,
+              edges: get().edges.filter(
+                (edge) =>
+                  !foundIdSet.has(edge.source) && !foundIdSet.has(edge.target)
+              )
+            });
+            get().setWorkflowDirty(true);
+          },
+          deleteEdge: (id: string): void => {
+            set({ edges: get().edges.filter((e) => e.id !== id) });
+            get().setWorkflowDirty(true);
+          },
+          deleteEdges: (ids: string[]): void => {
+            if (ids.length === 0) {
+              return;
+            }
+            const idSet = new Set(ids);
+            set({ edges: get().edges.filter((edge) => !idSet.has(edge.id)) });
+            get().setWorkflowDirty(true);
+          },
+          addEdge: (edge: Edge): void => {
+            // Validate the edge before adding it
+            const sourceNode = get().findNode(edge.source);
+            const targetNode = get().findNode(edge.target);
+
+            if (!sourceNode || !targetNode) {
+              console.warn(
+                `Cannot add edge ${edge.id}: source or target node not found`
+              );
+              return;
+            }
+
+            // Validate the edge properly using the same validation logic
+            const metadata = useMetadataStore.getState().metadata;
+            const nodeMap = new Map(get().nodes.map((n) => [n.id, n]));
+
+            if (!isValidEdge(edge, nodeMap, metadata)) {
+              console.warn(
+                `Cannot add edge ${edge.id}: edge validation failed`,
+                edge
+              );
+              return;
+            }
+
+            // Ensure handles are properly set
+            const sanitizedEdge = {
+              ...edge,
+              sourceHandle: edge.sourceHandle || null,
+              targetHandle: edge.targetHandle || null
+            };
+
+            set({ edges: [...get().edges, sanitizedEdge] });
+            get().setWorkflowDirty(true);
+          },
+          updateEdge: (edge: Edge): void => {
+            set({
+              edges: [...get().edges.filter((e) => e.id !== edge.id), edge]
+            });
+            get().setWorkflowDirty(true);
+          },
+          updateEdgeHandle: (
+            nodeId: string,
+            oldHandle: string,
+            newHandle: string
+          ): void => {
+            set({
+              edges: get().edges.map((edge) =>
+                edge.target === nodeId && edge.targetHandle === oldHandle
+                  ? { ...edge, targetHandle: newHandle }
+                  : edge
+              )
+            });
+            get().setWorkflowDirty(true);
+          },
+          getWorkflow: (): Workflow => {
+            const workflow = get().workflow;
+            const edges = get().edges;
+
+            // Optimization: Build a set of connected handles for O(1) lookups
+            // instead of checking all edges for each property (O(n*m*e) -> O(n*m))
+            const connectedHandles = new Set<string>();
+            for (const edge of edges) {
+              if (edge.target && edge.targetHandle) {
+                connectedHandles.add(`${edge.target}:${edge.targetHandle}`);
+              }
+            }
+
+            const isHandleConnected = (nodeId: string, handle: string) => {
+              return connectedHandles.has(`${nodeId}:${handle}`);
+            };
+
+            const unconnectedProperties = (node: Node<NodeData>) => {
+              const properties: Record<string, unknown> = {};
+              for (const name in node.data.properties) {
+                if (!isHandleConnected(node.id, name)) {
+                  properties[name] = node.data.properties[name];
+                }
+              }
+              return properties;
+            };
+            const nodes = get().nodes.map((node) => {
+              return {
+                ...node,
+                data: {
+                  ...node.data,
+                  properties: unconnectedProperties(node)
+                }
+              };
+            });
+            const settings = workflow.settings || {};
+
+            return {
+              ...workflow,
+              settings,
+              graph: {
+                edges: edges.map(reactFlowEdgeToGraphEdge),
+                nodes: nodes.map(reactFlowNodeToGraphNode)
+              }
+            };
+          },
+          setWorkflowDirty: (dirty: boolean): void => {
+            if (get().workflowIsDirty === dirty) {
+              return;
+            }
+            set({ workflowIsDirty: dirty });
+          },
+          setWorkflowUpdatedAt: (updatedAt: string): void => {
+            set((state) => ({
+              workflow: { ...state.workflow, updated_at: updatedAt }
+            }));
+          },
+          autoLayout: async (): Promise<void> => {
+            const allNodes = get().nodes;
+            let selectedNodes = allNodes.filter((node) => node.selected);
+            const edges = get().edges;
+            if (selectedNodes.length <= 1) {
+              selectedNodes = allNodes;
+            }
+
+            // Optimization: Calculate bounds in single pass instead of 4 separate iterations
+            const getBounds = (nodes: Node<NodeData>[]) => {
+              // Note: In practice, this is never called with empty arrays since autoLayout
+              // only runs when there are nodes. Return zero bounds for consistency.
+              if (nodes.length === 0) {
+                return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+              }
+
+              let minX = Infinity;
+              let minY = Infinity;
+              let maxX = -Infinity;
+              let maxY = -Infinity;
+
+              for (const node of nodes) {
+                const nodeX = node.position.x;
+                const nodeY = node.position.y;
+                const width = node.measured?.width ?? node.width ?? 100;
+                const height = node.measured?.height ?? node.height ?? 100;
+
+                if (nodeX < minX) {
+                  minX = nodeX;
+                }
+                if (nodeY < minY) {
+                  minY = nodeY;
+                }
+                if (nodeX + width > maxX) {
+                  maxX = nodeX + width;
+                }
+                if (nodeY + height > maxY) {
+                  maxY = nodeY + height;
+                }
+              }
+
+              return { minX, minY, maxX, maxY };
+            };
+
+            const originalBounds = getBounds(selectedNodes);
+            const layoutedNodes = await autoLayout(edges, selectedNodes);
+            const layoutBounds = getBounds(layoutedNodes);
+
+            const dx = originalBounds.minX - layoutBounds.minX;
+            const dy = originalBounds.minY - layoutBounds.minY;
+
+            // Optimization: Use Map for O(1) lookups instead of O(n) find operations
+            const layoutedNodeMap = new Map(
+              layoutedNodes.map((n) => [n.id, n])
+            );
+
+            // Re-read nodes after the await: merge only layout-computed
+            // positions into the current state so concurrent edits (added,
+            // removed, or changed nodes) are preserved.
+            const updatedNodes = get().nodes.map((node) => {
+              const layoutedNode = layoutedNodeMap.get(node.id);
+              if (layoutedNode) {
+                return {
+                  ...node,
+                  position: {
+                    x: layoutedNode.position.x + dx,
+                    y: layoutedNode.position.y + dy
+                  }
+                };
+              }
+              return node;
+            });
+
+            get().setNodes(updatedNodes);
+            set({ shouldFitToScreen: true });
+          },
+          setShouldFitToScreen: (
+            value: boolean,
+            nodeIds?: string[] | null
+          ): void => {
+            set({
+              shouldFitToScreen: value,
+              fitViewTargetNodeIds: nodeIds ?? null
+            });
+          },
+          setNodes: (
+            nodesOrCallback:
+              | Node<NodeData>[]
+              | ((nodes: Node<NodeData>[]) => Node<NodeData>[])
+          ): void => {
+            if (typeof nodesOrCallback === "function") {
+              set((state) => {
+                const next = nodesOrCallback(state.nodes);
+                return {
+                  nodes: syncAllReactFlowNodeChromeClass(next ?? state.nodes)
+                };
+              });
+            } else {
+              set({
+                nodes: syncAllReactFlowNodeChromeClass(nodesOrCallback)
+              });
+            }
+            get().setWorkflowDirty(true);
+          },
+          setEdges: (edges: Edge[]): void => {
+            const metadata = useMetadataStore.getState().metadata;
+            const nodes = get().nodes;
+
+            // Only sanitize if metadata is available and edges have actually changed
+            if (Object.keys(metadata).length > 0) {
+              const { edges: sanitizedEdges } = sanitizeGraph(
+                nodes,
+                edges,
+                metadata
+              );
+              set({ edges: sanitizedEdges });
+            } else {
+              set({ edges });
+            }
+
+            get().setWorkflowDirty(true);
+          },
+          validateConnection: (
+            connection: Connection,
+            srcNode: Node<NodeData>,
+            targetNode: Node<NodeData>
+          ): boolean => {
+            // Basic validation: ensure handles are provided
+            if (!connection.sourceHandle || !connection.targetHandle) {
+              return false;
+            }
+
+            // Control edge validation: only Agent nodes can create control edges
+            if (
+              connection.targetHandle === CONTROL_HANDLE_ID ||
+              connection.sourceHandle === CONTROL_HANDLE_ID
+            ) {
+              if (!isAgentNodeType(srcNode.type)) {
+                return false;
+              }
+              // Check for existing control connection between same source and target
+              const edges = get().edges;
+              const existingConnection = edges.find(
+                (edge) =>
+                  edge.source === connection.source &&
+                  edge.target === connection.target &&
+                  edge.targetHandle === CONTROL_HANDLE_ID
+              );
+              if (existingConnection) {
+                return false;
+              }
+              return !wouldCreateCycle(
+                edges,
+                connection.source,
+                connection.target
+              );
+            }
+
+            const srcMetadata = srcNode.type
+              ? useMetadataStore.getState().getMetadata(srcNode.type)
+              : undefined;
+            const targetMetadata = targetNode.type
+              ? useMetadataStore.getState().getMetadata(targetNode.type)
+              : undefined;
+
+            // If either node doesn't have metadata (placeholder nodes), allow connection
+            if (!srcMetadata || !targetMetadata) {
+              return true;
+            }
+
+            // Check for existing connection
+            const edges = get().edges;
+            const existingConnection = edges.find(
+              (edge) =>
+                edge.source === connection.source &&
+                edge.sourceHandle === connection.sourceHandle &&
+                edge.target === connection.target &&
+                edge.targetHandle === connection.targetHandle
+            );
+            if (existingConnection) {
+              return false;
+            }
+
+            // Validate source handle exists
+            const srcHandle = findOutputHandle(
+              srcNode,
+              connection.sourceHandle,
+              srcMetadata
+            );
+            if (!srcHandle) {
+              return false;
+            }
+
+            // Validate target handle exists
+            const targetHandle = findInputHandle(
+              targetNode,
+              connection.targetHandle,
+              targetMetadata
+            );
+            if (!targetHandle) {
+              return false;
+            }
+
+            if (
+              wouldCreateCycle(
+                get().edges,
+                connection.source,
+                connection.target
+              )
+            ) {
+              return false;
+            }
+
+            // Validate type compatibility
+            return isConnectable(srcHandle.type, targetHandle.type);
+          },
+          workflowJSON: (): string => {
+            const workflow = get().getWorkflow();
+            workflow.id = "";
+            return JSON.stringify(workflow, null, 2);
+          },
+          createNode: (
+            metadata: NodeMetadata,
+            position: XYPosition,
+            properties?: Record<string, unknown>
+          ): Node<NodeData> => {
+            const defaults: Record<string, unknown> = {};
+            if (metadata.properties) {
+              for (const property of metadata.properties) {
+                if (property.name) {
+                  defaults[property.name] = property.default;
+                }
+              }
+            }
+            if (properties) {
+              for (const key in properties) {
+                defaults[key] = properties[key];
+              }
+            }
+
+            // Apply user's default models for empty model properties
+            const withModelDefaults = applyDefaultModels(
+              defaults,
+              metadata.properties
+            );
+            Object.assign(defaults, withModelDefaults);
+
+            // Generate default name for input nodes if name property exists but is empty
+            const isInputNode =
+              metadata.node_type.startsWith("nodetool.input.");
+            if (isInputNode && "name" in defaults && !defaults.name) {
+              defaults.name = generateInputNodeName(
+                metadata.node_type,
+                get().nodes
+              );
+            }
+
+            const nodeId = get().generateNodeId();
+            useResultsStore
+              .getState()
+              .clearResults(get().workflow.id, new Set([nodeId]));
+
+            // Set default size for nodes that host rich previews so content
+            // fills a stable box instead of driving the initial layout.
+            const isPreviewNode = metadata.node_type === PREVIEW_NODE_TYPE;
+            const isCompareImagesNode =
+              metadata.node_type === "nodetool.compare.CompareImages";
+            const isModel3DConstantNode =
+              metadata.node_type === "nodetool.constant.Model3D";
+            const isContentCard = isContentCardNode(metadata);
+            // Agent-style content cards use {{variable}} templating, not
+            // media preview — they should size like regular nodes (auto
+            // height) instead of inheriting the text variant's 320×220.
+            const isAgentStyle =
+              metadata.node_type === "nodetool.agents.Agent" ||
+              metadata.node_type === "openai.agents.RealtimeAgent" ||
+              metadata.node_type === "nodetool.agents.ClaudeCodeAgent";
+            let defaultStyle: { width: number; height?: number };
+            if (isPreviewNode) {
+              defaultStyle = { width: 400, height: 300 };
+            } else if (isCompareImagesNode) {
+              defaultStyle = { width: 450, height: 350 };
+            } else if (isModel3DConstantNode) {
+              defaultStyle = { width: 320, height: 320 };
+            } else if (
+              metadata.node_type === "nodetool.agents.ClaudeCodeAgent"
+            ) {
+              defaultStyle = { width: 480, height: 380 };
+            } else if (isAgentStyle) {
+              defaultStyle = { width: DEFAULT_NODE_WIDTH };
+            } else if (metadata.node_type in BESPOKE_DEFAULT_HEIGHTS) {
+              defaultStyle = {
+                width: DEFAULT_NODE_WIDTH,
+                height: BESPOKE_DEFAULT_HEIGHTS[metadata.node_type]
+              };
+            } else if (isContentCard) {
+              defaultStyle = getContentCardDefaultSize(metadata);
+            } else {
+              defaultStyle = { width: DEFAULT_NODE_WIDTH };
+            }
+
+            const defaultTitle =
+              metadata.node_type === GROUP_NODE_TYPE
+                ? metadata.title || "Group"
+                : undefined;
+
+            return {
+              id: nodeId,
+              type: metadata.node_type,
+              style: defaultStyle,
+              data: {
+                properties: defaults,
+                collapsed: false,
+                selectable: true,
+                workflow_id: get().workflow.id,
+                dynamic_properties: {},
+                dynamic_inputs: {},
+                title: defaultTitle
+              },
+              targetPosition: Position.Left,
+              position: position
+            };
+          },
+          selectAllNodes: (): void => {
+            let changed = false;
+            const nextNodes = get().nodes.map((node) => {
+              if (!node.selected) {
+                changed = true;
+                return { ...node, selected: true };
+              }
+              return node;
+            });
+            if (changed) {
+              set({ nodes: nextNodes });
+            }
+          },
+          toggleBypass: (nodeId: string): void => {
+            set((state) => {
+              const index = state.nodes.findIndex((n) => n.id === nodeId);
+              if (index === -1) {
+                return state;
+              }
+              const node = state.nodes[index];
+              const newBypassed = !node.data.bypassed;
+              const newNodes = [...state.nodes];
+              newNodes[index] = {
+                ...node,
+                className: reactFlowNodeChromeClassName({
+                  ...node.data,
+                  bypassed: newBypassed
+                }),
+                data: { ...node.data, bypassed: newBypassed }
+              };
+              return { nodes: newNodes };
+            });
+            get().setWorkflowDirty(true);
+          },
+          setBypass: (nodeId: string, bypassed: boolean): void => {
+            set((state) => {
+              const index = state.nodes.findIndex((n) => n.id === nodeId);
+              if (index === -1) {
+                return state;
+              }
+              const node = state.nodes[index];
+              const newNodes = [...state.nodes];
+              newNodes[index] = {
+                ...node,
+                className: reactFlowNodeChromeClassName({
+                  ...node.data,
+                  bypassed
+                }),
+                data: { ...node.data, bypassed }
+              };
+              return { nodes: newNodes };
+            });
+            get().setWorkflowDirty(true);
+          },
+          toggleBypassSelected: (): void => {
+            const selectedNodes = get().getSelectedNodes();
+            if (selectedNodes.length === 0) {
+              return;
+            }
+
+            // Determine if we should bypass or enable based on majority
+            const bypassedCount = selectedNodes.filter(
+              (n) => n.data.bypassed
+            ).length;
+            const shouldBypass = bypassedCount < selectedNodes.length / 2;
+
+            set((state) => ({
+              nodes: state.nodes.map((n) =>
+                n.selected
+                  ? {
+                      ...n,
+                      className: reactFlowNodeChromeClassName({
+                        ...n.data,
+                        bypassed: shouldBypass
+                      }),
+                      data: { ...n.data, bypassed: shouldBypass }
+                    }
+                  : n
+              )
+            }));
+            get().setWorkflowDirty(true);
+          },
+          cleanup: () => {
+            if (unsubscribeMetadata) {
+              unsubscribeMetadata();
+              unsubscribeMetadata = null;
+            }
+          },
+          setViewport: (viewport: Viewport): void => {
+            set({ viewport: viewport });
+          },
+          ...state
+        };
+      },
+      {
+        limit: undo_limit,
+        equality: customEquality,
+        partialize: (state): PartializedNodeStore => {
+          const { workflow, nodes, edges } = state;
+          return { workflow, nodes, edges };
+        }
+      }
+    )
+  ) as unknown as NodeStore;

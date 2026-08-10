@@ -1,0 +1,765 @@
+import { act } from "@testing-library/react";
+import {
+  useKeyPressedStore,
+  registerComboCallback,
+  unregisterComboCallback
+} from "../KeyPressedStore";
+
+describe("KeyPressedStore", () => {
+  beforeEach(() => {
+    // Reset store state before each test
+    const { setKeysPressed, resetKeyPressCount, setPaused } =
+      useKeyPressedStore.getState();
+    const pressedKeys = useKeyPressedStore.getState().getPressedKeys();
+    const keysToReset: Record<string, boolean> = {};
+    pressedKeys.forEach((key) => {
+      keysToReset[key] = false;
+    });
+    setKeysPressed(keysToReset);
+    resetKeyPressCount();
+    setPaused(false);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  describe("initial state", () => {
+    it("has no pressed keys initially", () => {
+      const state = useKeyPressedStore.getState();
+      expect(state.getPressedKeys()).toEqual([]);
+      expect(state.isAnyKeyPressed()).toBe(false);
+    });
+
+    it("has no last pressed key initially", () => {
+      const state = useKeyPressedStore.getState();
+      expect(state.lastPressedKey).toBeNull();
+    });
+
+    it("has empty key press count initially", () => {
+      const state = useKeyPressedStore.getState();
+      expect(state.getKeyPressCount("a")).toBe(0);
+    });
+
+    it("is not paused initially", () => {
+      const state = useKeyPressedStore.getState();
+      expect(state.isPaused).toBe(false);
+    });
+  });
+
+  describe("setKeysPressed", () => {
+    it("adds a pressed key", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true });
+      });
+
+      const state = useKeyPressedStore.getState();
+      expect(state.isKeyPressed("a")).toBe(true);
+      expect(state.getPressedKeys()).toContain("a");
+    });
+
+    it("removes a pressed key", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true });
+        setKeysPressed({ a: false });
+      });
+
+      const state = useKeyPressedStore.getState();
+      expect(state.isKeyPressed("a")).toBe(false);
+      expect(state.getPressedKeys()).not.toContain("a");
+    });
+
+    it("normalizes keys to lowercase", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ A: true });
+      });
+
+      const state = useKeyPressedStore.getState();
+      expect(state.isKeyPressed("a")).toBe(true);
+      expect(state.isKeyPressed("A")).toBe(true);
+    });
+
+    it("sets last pressed key", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true });
+      });
+
+      expect(useKeyPressedStore.getState().lastPressedKey).toBe("a");
+    });
+
+    it("clears last pressed key when all keys are released", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true });
+        setKeysPressed({ a: false });
+      });
+
+      expect(useKeyPressedStore.getState().lastPressedKey).toBeNull();
+    });
+
+    it("tracks multiple keys", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true, b: true });
+      });
+
+      const state = useKeyPressedStore.getState();
+      expect(state.isKeyPressed("a")).toBe(true);
+      expect(state.isKeyPressed("b")).toBe(true);
+      expect(state.getPressedKeys()).toEqual(expect.arrayContaining(["a", "b"]));
+    });
+  });
+
+  describe("key press count", () => {
+    it("increments press count for a key", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true });
+      });
+
+      expect(useKeyPressedStore.getState().getKeyPressCount("a")).toBe(1);
+    });
+
+    it("increments press count on multiple presses", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true });
+        setKeysPressed({ a: false });
+        setKeysPressed({ a: true });
+      });
+
+      expect(useKeyPressedStore.getState().getKeyPressCount("a")).toBe(2);
+    });
+
+    it("resets specific key press count", () => {
+      const { setKeysPressed, resetKeyPressCount } =
+        useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true, b: true });
+        resetKeyPressCount("a");
+      });
+
+      expect(useKeyPressedStore.getState().getKeyPressCount("a")).toBe(0);
+      expect(useKeyPressedStore.getState().getKeyPressCount("b")).toBe(1);
+    });
+
+    it("resets all key press counts", () => {
+      const { setKeysPressed, resetKeyPressCount } =
+        useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true, b: true });
+        resetKeyPressCount();
+      });
+
+      expect(useKeyPressedStore.getState().getKeyPressCount("a")).toBe(0);
+      expect(useKeyPressedStore.getState().getKeyPressCount("b")).toBe(0);
+    });
+  });
+
+  describe("isComboPressed", () => {
+    it("returns true when combo is pressed", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ control: true, s: true });
+      });
+
+      expect(useKeyPressedStore.getState().isComboPressed(["control", "s"])).toBe(
+        true
+      );
+    });
+
+    it("returns false when combo is not fully pressed", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ control: true });
+      });
+
+      expect(useKeyPressedStore.getState().isComboPressed(["control", "s"])).toBe(
+        false
+      );
+    });
+
+    it("normalizes combo keys to lowercase", () => {
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ control: true, s: true });
+      });
+
+      expect(useKeyPressedStore.getState().isComboPressed(["Control", "S"])).toBe(
+        true
+      );
+    });
+  });
+
+  describe("pause state", () => {
+    it("sets pause state", () => {
+      const { setPaused } = useKeyPressedStore.getState();
+      act(() => {
+        setPaused(true);
+      });
+
+      expect(useKeyPressedStore.getState().isPaused).toBe(true);
+    });
+
+    it("resumes from paused state", () => {
+      const { setPaused } = useKeyPressedStore.getState();
+      act(() => {
+        setPaused(true);
+        setPaused(false);
+      });
+
+      expect(useKeyPressedStore.getState().isPaused).toBe(false);
+    });
+  });
+
+  describe("combo callbacks", () => {
+    it("registers combo callback", () => {
+      const callback = jest.fn();
+      registerComboCallback("control+s", { callback, preventDefault: true });
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ control: true, s: true });
+      });
+
+      expect(callback).toHaveBeenCalled();
+      unregisterComboCallback("control+s");
+    });
+
+    it("does not execute callback when paused", () => {
+      const callback = jest.fn();
+      registerComboCallback("control+s", { callback });
+
+      const { setKeysPressed, setPaused } = useKeyPressedStore.getState();
+      act(() => {
+        setPaused(true);
+        setKeysPressed({ control: true, s: true });
+      });
+
+      expect(callback).not.toHaveBeenCalled();
+      unregisterComboCallback("control+s");
+    });
+
+    it("does not execute callback when inactive", () => {
+      const callback = jest.fn();
+      registerComboCallback("control+s", { callback, active: false });
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ control: true, s: true });
+      });
+
+      expect(callback).not.toHaveBeenCalled();
+      unregisterComboCallback("control+s");
+    });
+
+    it("unregisters combo callback", () => {
+      const callback = jest.fn();
+      registerComboCallback("control+s", { callback });
+      unregisterComboCallback("control+s");
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ control: true, s: true });
+      });
+
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    it("does not execute copy callback when an input element is focused", () => {
+      const callback = jest.fn();
+      registerComboCallback("c+control", { callback, preventDefault: false });
+
+      // Create and focus an input element
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.focus();
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", {
+        key: "c",
+        ctrlKey: true
+      });
+      act(() => {
+        setKeysPressed({ control: true, c: true }, event);
+      });
+
+      // The global copy callback should NOT fire when input is focused
+      expect(callback).not.toHaveBeenCalled();
+
+      document.body.removeChild(input);
+      unregisterComboCallback("c+control");
+    });
+
+    it("does not execute copy callback when a textarea is focused", () => {
+      const callback = jest.fn();
+      registerComboCallback("c+meta", { callback, preventDefault: false });
+
+      // Create and focus a textarea element
+      const textarea = document.createElement("textarea");
+      document.body.appendChild(textarea);
+      textarea.focus();
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", {
+        key: "c",
+        metaKey: true
+      });
+      act(() => {
+        setKeysPressed({ meta: true, c: true }, event);
+      });
+
+      // The global copy callback should NOT fire when textarea is focused
+      expect(callback).not.toHaveBeenCalled();
+
+      document.body.removeChild(textarea);
+      unregisterComboCallback("c+meta");
+    });
+
+    it("does not execute space callback when Monaco editor is focused", () => {
+      const callback = jest.fn();
+      registerComboCallback(" ", { callback, preventDefault: true });
+
+      const monacoRoot = document.createElement("div");
+      monacoRoot.className = "monaco-editor";
+      const viewLine = document.createElement("div");
+      const textarea = document.createElement("textarea");
+      monacoRoot.appendChild(viewLine);
+      monacoRoot.appendChild(textarea);
+      document.body.appendChild(monacoRoot);
+      textarea.focus();
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", { key: " " });
+      Object.defineProperty(event, "target", { value: viewLine });
+
+      act(() => {
+        setKeysPressed({ " ": true }, event);
+      });
+
+      expect(callback).not.toHaveBeenCalled();
+
+      document.body.removeChild(monacoRoot);
+      unregisterComboCallback(" ");
+    });
+
+    it("executes copy callback when no input is focused", () => {
+      const callback = jest.fn();
+      registerComboCallback("c+control", { callback, preventDefault: false });
+
+      // Ensure no input is focused (focus body)
+      (document.body as HTMLElement).focus();
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", {
+        key: "c",
+        ctrlKey: true
+      });
+      act(() => {
+        setKeysPressed({ control: true, c: true }, event);
+      });
+
+      // The global copy callback SHOULD fire when no input is focused
+      expect(callback).toHaveBeenCalled();
+
+      unregisterComboCallback("c+control");
+    });
+
+    it("allows escape callback when input is focused", () => {
+      const callback = jest.fn();
+      registerComboCallback("escape", { callback, preventDefault: true });
+
+      // Create and focus an input element
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.focus();
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", { key: "Escape" });
+      act(() => {
+        setKeysPressed({ escape: true }, event);
+      });
+
+      // Escape should still work even when input is focused
+      expect(callback).toHaveBeenCalled();
+
+      document.body.removeChild(input);
+      unregisterComboCallback("escape");
+    });
+
+    it("suppresses delete callback when input is focused", () => {
+      const callback = jest.fn();
+      registerComboCallback("delete", { callback, preventDefault: true });
+
+      // Create and focus an input element
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.focus();
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", { key: "Delete" });
+      act(() => {
+        setKeysPressed({ delete: true }, event);
+      });
+
+      // Delete should be suppressed when input is focused (to allow text editing)
+      expect(callback).not.toHaveBeenCalled();
+
+      document.body.removeChild(input);
+      unregisterComboCallback("delete");
+    });
+
+    it("suppresses backspace callback when input is focused", () => {
+      const callback = jest.fn();
+      registerComboCallback("backspace", { callback, preventDefault: true });
+
+      // Create and focus an input element
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.focus();
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", { key: "Backspace" });
+      act(() => {
+        setKeysPressed({ backspace: true }, event);
+      });
+
+      // Backspace should be suppressed when input is focused (to allow text editing)
+      expect(callback).not.toHaveBeenCalled();
+
+      document.body.removeChild(input);
+      unregisterComboCallback("backspace");
+    });
+
+    it("allows delete callback when canvas is focused", () => {
+      const callback = jest.fn();
+      registerComboCallback("delete", { callback, preventDefault: true });
+
+      // Create and focus a canvas element (simulating react-flow__pane)
+      const canvas = document.createElement("div");
+      canvas.classList.add("react-flow__pane");
+      document.body.appendChild(canvas);
+      canvas.focus();
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", { key: "Delete" });
+      act(() => {
+        setKeysPressed({ delete: true }, event);
+      });
+
+      // Delete should work when canvas is focused
+      expect(callback).toHaveBeenCalled();
+
+      document.body.removeChild(canvas);
+      unregisterComboCallback("delete");
+    });
+
+    it("does not trigger single-key callback when modifier is released while key is held", () => {
+      const singleKeyCallback = jest.fn();
+      const comboCallback = jest.fn();
+      registerComboCallback("1", {
+        callback: singleKeyCallback,
+        preventDefault: false
+      });
+      registerComboCallback("1+meta", {
+        callback: comboCallback,
+        preventDefault: false
+      });
+
+      (document.body as HTMLElement).focus();
+      const { setKeysPressed } = useKeyPressedStore.getState();
+
+      // Press Cmd+1
+      const cmdDown = new KeyboardEvent("keydown", {
+        key: "Meta",
+        metaKey: true
+      });
+      const oneDown = new KeyboardEvent("keydown", {
+        key: "1",
+        metaKey: true
+      });
+      act(() => {
+        setKeysPressed({ meta: true }, cmdDown);
+        setKeysPressed(
+          { "1": true, shift: false, control: false, alt: false, meta: true },
+          oneDown
+        );
+      });
+
+      expect(comboCallback).toHaveBeenCalledTimes(1);
+      expect(singleKeyCallback).not.toHaveBeenCalled();
+
+      // Release Cmd while "1" is still held - must NOT fire single-key "1"
+      const cmdUp = new KeyboardEvent("keyup", {
+        key: "Meta",
+        metaKey: false
+      });
+      act(() => {
+        setKeysPressed(
+          { meta: false, shift: false, control: false, alt: false },
+          cmdUp
+        );
+      });
+
+      expect(singleKeyCallback).not.toHaveBeenCalled();
+
+      unregisterComboCallback("1");
+      unregisterComboCallback("1+meta");
+    });
+
+    it("allows backspace callback when canvas is focused", () => {
+      const callback = jest.fn();
+      registerComboCallback("backspace", { callback, preventDefault: true });
+
+      // Create and focus a canvas element (simulating react-flow__renderer)
+      const canvas = document.createElement("div");
+      canvas.classList.add("react-flow__renderer");
+      document.body.appendChild(canvas);
+      canvas.focus();
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", { key: "Backspace" });
+      act(() => {
+        setKeysPressed({ backspace: true }, event);
+      });
+
+      // Backspace should work when canvas is focused
+      expect(callback).toHaveBeenCalled();
+
+      document.body.removeChild(canvas);
+      unregisterComboCallback("backspace");
+    });
+  });
+
+  describe("stacked combo registrations (scoping)", () => {
+    // These cover the regression where a single shared slot per combo meant the
+    // last mount overwrote earlier bindings and the first unmount deleted the
+    // binding for every still-mounted component (e.g. several modals + the
+    // toolbar all bind "escape"), so shortcuts intermittently stopped working.
+
+    const pressEscape = () => {
+      (document.body as HTMLElement).focus();
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed(
+          { escape: true },
+          new KeyboardEvent("keydown", { key: "Escape" })
+        );
+        setKeysPressed({ escape: false });
+      });
+    };
+
+    it("fires the most recently registered binding for a shared combo", () => {
+      const first = jest.fn();
+      const second = jest.fn();
+      const disposeFirst = registerComboCallback("escape", { callback: first });
+      const disposeSecond = registerComboCallback("escape", {
+        callback: second
+      });
+
+      pressEscape();
+
+      expect(second).toHaveBeenCalledTimes(1);
+      expect(first).not.toHaveBeenCalled();
+
+      disposeFirst();
+      disposeSecond();
+    });
+
+    it("keeps other bindings for the same combo when one is disposed", () => {
+      const toolbar = jest.fn();
+      const modal = jest.fn();
+      const disposeToolbar = registerComboCallback("escape", {
+        callback: toolbar
+      });
+      const disposeModal = registerComboCallback("escape", { callback: modal });
+
+      // Modal (registered last) unmounts — the toolbar binding must survive.
+      disposeModal();
+      pressEscape();
+
+      expect(toolbar).toHaveBeenCalledTimes(1);
+      expect(modal).not.toHaveBeenCalled();
+
+      disposeToolbar();
+    });
+
+    it("disposes the exact binding by identity, not the newest", () => {
+      const a = jest.fn();
+      const b = jest.fn();
+      const disposeA = registerComboCallback("escape", { callback: a });
+      const disposeB = registerComboCallback("escape", { callback: b });
+
+      // Dispose the FIRST registration; the second (topmost) must still win.
+      disposeA();
+      pressEscape();
+
+      expect(b).toHaveBeenCalledTimes(1);
+      expect(a).not.toHaveBeenCalled();
+
+      disposeB();
+    });
+
+    it("falls through to an active binding when the topmost is inactive", () => {
+      const background = jest.fn();
+      const foreground = jest.fn();
+      const disposeBg = registerComboCallback("escape", {
+        callback: background
+      });
+      const disposeFg = registerComboCallback("escape", {
+        callback: foreground,
+        active: false
+      });
+
+      pressEscape();
+
+      expect(background).toHaveBeenCalledTimes(1);
+      expect(foreground).not.toHaveBeenCalled();
+
+      disposeBg();
+      disposeFg();
+    });
+  });
+
+  describe("escape releases in-canvas editor focus", () => {
+    // Regression: focus left in an in-node text editor (textarea, contentEditable,
+    // Monaco) keeps every canvas/global shortcut suppressed, because suppression
+    // keys off document.activeElement being editable. Native editors do not blur
+    // themselves on Escape, so without this the only recovery was clicking the
+    // empty pane. Escape now hands focus back to the canvas.
+
+    const renderEditorInCanvas = (editable: HTMLElement) => {
+      const renderer = document.createElement("div");
+      renderer.classList.add("react-flow__renderer");
+      renderer.appendChild(editable);
+      document.body.appendChild(renderer);
+      return renderer;
+    };
+
+    const pressEscape = (target: HTMLElement, defaultPrevented = false) => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        cancelable: true
+      });
+      Object.defineProperty(event, "target", { value: target });
+      if (defaultPrevented) {
+        event.preventDefault();
+      }
+      act(() => {
+        useKeyPressedStore.getState().setKeysPressed({ escape: true }, event);
+      });
+    };
+
+    it("blurs a focused in-canvas textarea so canvas shortcuts resume", () => {
+      const textarea = document.createElement("textarea");
+      const renderer = renderEditorInCanvas(textarea);
+      textarea.focus();
+      expect(document.activeElement).toBe(textarea);
+
+      pressEscape(textarea);
+
+      expect(document.activeElement).not.toBe(textarea);
+
+      document.body.removeChild(renderer);
+    });
+
+    it("blurs a focused in-canvas Monaco editor on Escape", () => {
+      const monacoRoot = document.createElement("div");
+      monacoRoot.className = "monaco-editor";
+      const textarea = document.createElement("textarea");
+      monacoRoot.appendChild(textarea);
+      const renderer = renderEditorInCanvas(monacoRoot);
+      textarea.focus();
+
+      pressEscape(textarea);
+
+      expect(document.activeElement).not.toBe(textarea);
+
+      document.body.removeChild(renderer);
+    });
+
+    it("keeps focus when the editor already handled Escape (defaultPrevented)", () => {
+      const textarea = document.createElement("textarea");
+      const renderer = renderEditorInCanvas(textarea);
+      textarea.focus();
+
+      pressEscape(textarea, true);
+
+      expect(document.activeElement).toBe(textarea);
+
+      document.body.removeChild(renderer);
+    });
+
+    it("does not blur inputs outside the workflow canvas", () => {
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.focus();
+      expect(document.activeElement).toBe(input);
+
+      pressEscape(input);
+
+      expect(document.activeElement).toBe(input);
+
+      document.body.removeChild(input);
+    });
+
+    it("still fires the escape combo while blurring the editor", () => {
+      const callback = jest.fn();
+      const dispose = registerComboCallback("escape", { callback });
+      const textarea = document.createElement("textarea");
+      const renderer = renderEditorInCanvas(textarea);
+      textarea.focus();
+
+      pressEscape(textarea);
+
+      expect(callback).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).not.toBe(textarea);
+
+      dispose();
+      document.body.removeChild(renderer);
+    });
+  });
+
+  describe("helper functions", () => {
+    it("isKeyPressed returns correct value", () => {
+      const { setKeysPressed, isKeyPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true });
+      });
+
+      expect(isKeyPressed("a")).toBe(true);
+      expect(isKeyPressed("b")).toBe(false);
+    });
+
+    it("isAnyKeyPressed returns true when keys are pressed", () => {
+      const { setKeysPressed, isAnyKeyPressed } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true });
+      });
+
+      expect(isAnyKeyPressed()).toBe(true);
+    });
+
+    it("isAnyKeyPressed returns false when no keys are pressed", () => {
+      const { isAnyKeyPressed } = useKeyPressedStore.getState();
+      expect(isAnyKeyPressed()).toBe(false);
+    });
+
+    it("getPressedKeys returns all pressed keys", () => {
+      const { setKeysPressed, getPressedKeys } = useKeyPressedStore.getState();
+      act(() => {
+        setKeysPressed({ a: true, b: true, c: true });
+      });
+
+      const pressedKeys = getPressedKeys();
+      expect(pressedKeys).toHaveLength(3);
+      expect(pressedKeys).toContain("a");
+      expect(pressedKeys).toContain("b");
+      expect(pressedKeys).toContain("c");
+    });
+  });
+});

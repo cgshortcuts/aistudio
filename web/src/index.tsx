@@ -1,0 +1,758 @@
+/** @jsxImportSource @emotion/react */
+// Ensure global MUI/Emotion type augmentations are loaded in the TS program
+import type {} from "./theme";
+import type {} from "./emotion";
+import type {} from "./material-ui";
+import type {} from "./window";
+
+// Early polyfills / globals must come before other imports.
+import "./cryptoUUIDPolyfill";
+// `prismGlobal` (Prism core + 13 grammars) is NOT imported here: nothing on the
+// boot path highlights code. Every consumer — CodeBlock, CodeHighlightPlugin,
+// JSONRenderer, ToolCallRenderer — imports Prism and the grammars it needs
+// itself, and all of them are behind a lazy chunk.
+// Auto-reload when a lazy chunk 404s after a deploy (stale-asset recovery).
+import "./lib/preloadErrorReload";
+
+import React, { Suspense, useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useMenuHandler } from "./hooks/useIpcRenderer";
+import type { MenuEventData } from "./window";
+import ReactDOM from "react-dom/client";
+
+import {
+  Navigate,
+  RouteObject,
+  RouterProvider,
+  createBrowserRouter
+} from "react-router-dom";
+
+import ErrorBoundary from "./ErrorBoundary";
+
+import { LoadingSpinner } from "./components/ui_primitives";
+import { ThemeProvider } from "@mui/material/styles";
+import InitColorSchemeScript from "@mui/system/InitColorSchemeScript";
+import ThemeNodetool from "./components/themes/ThemeNodetool";
+import { CssBaseline } from "@mui/material";
+
+import "@xyflow/react/dist/style.css";
+import "@xyflow/react/dist/base.css";
+import "./styles/vars.css";
+import "./styles/index.css";
+import "./styles/microtip.css";
+import "./styles/command_menu.css";
+import "./styles/mobile.css";
+import "./lib/dragdrop/dragdrop.css";
+import { queryClient } from "./queryClient";
+import { TRPCProvider } from "./trpc/Provider";
+import { useAssetStore } from "./stores/AssetStore";
+import Login from "./components/Login";
+import ProtectedRoute from "./components/ProtectedRoute";
+import useAuth from "./stores/useAuth";
+import { isLocalhost } from "./lib/env";
+import { loadRuntimeConfig, isAuthRequired } from "./lib/runtimeConfig";
+import { initAnalytics } from "./lib/analytics";
+import { initSupabaseFromConfig } from "./lib/supabaseClient";
+import { initKeyListeners } from "./stores/KeyPressedStore";
+import useOnboardingStore, { startRouteFor } from "./stores/OnboardingStore";
+import { useSettingsStore } from "./stores/SettingsStore";
+import useRemoteSettingsStore from "./stores/RemoteSettingStore";
+import { loadMetadata, prefetchMetadata } from "./serverState/useMetadata";
+import { WorkflowManagerProvider } from "./contexts/WorkflowManagerContext";
+import KeyboardProvider from "./components/KeyboardProvider";
+import { MenuProvider } from "./providers/MenuProvider";
+const DownloadManagerDialog = React.lazy(
+  () => import("./components/hugging_face/DownloadManagerDialog")
+);
+const RunWarningDialog = React.lazy(
+  () => import("./components/dialogs/RunWarningDialog")
+);
+const SearchProviderSetupDialog = React.lazy(
+  () => import("./components/dialogs/SearchProviderSetupDialog")
+);
+const ProviderOnboardingDialog = React.lazy(
+  () => import("./components/provider_onboarding/ProviderOnboardingDialog")
+);
+
+import { installIpcLogBridge } from "./logging/ipcLogBridge";
+import MobileClassProvider from "./components/MobileClassProvider";
+import { registerAppRouter } from "./lib/appNavigation";
+import { SkipLinks } from "./components/ui_primitives";
+
+// Lazy-loaded route components for code splitting
+const AcceptSharePage = React.lazy(
+  () => import("./components/workflows/AcceptSharePage")
+);
+const ModelsPage = React.lazy(
+  () => import("./components/hugging_face/model_list/ModelsPage")
+);
+const WorkspacesPage = React.lazy(
+  () => import("./components/workspaces/WorkspacesPage")
+);
+const PackagesPage = React.lazy(
+  () => import("./components/packages/PackagesPage")
+);
+const WorkflowGraphView = React.lazy(
+  () => import("./components/graph_view/WorkflowGraphView")
+);
+const AssetExplorer = React.lazy(
+  () => import("./components/assets/AssetExplorer")
+);
+const CollectionsExplorer = React.lazy(
+  () => import("./components/collections/CollectionsExplorer")
+);
+const ExamplesPage = React.lazy(
+  () => import("./components/portal/ExamplesPage")
+);
+const TutorialsPage = React.lazy(
+  () => import("./components/tutorials/TutorialsPage")
+);
+const ChainEditorPage = React.lazy(
+  () => import("./components/chain_editor/ChainEditorPage")
+);
+const Portal = React.lazy(() => import("./components/portal/Portal"));
+const CostsDashboard = React.lazy(
+  () => import("./components/costs/CostsDashboard")
+);
+const LayoutTest = React.lazy(() => import("./components/LayoutTest"));
+const ChatMarkdownTest = React.lazy(
+  () => import("./components/ChatMarkdownTest")
+);
+const CodeEditorDebug = React.lazy(
+  () => import("./components/CodeEditorDebug")
+);
+const ComponentPreview = React.lazy(
+  () => import("./components/preview/ComponentPreview")
+);
+const SettingsPage = React.lazy(
+  () => import("./components/menus/SettingsMenu")
+);
+const TimelineEditor = React.lazy(
+  () => import("./components/timeline/TimelineEditor")
+);
+const SketchEditorPage = React.lazy(
+  () => import("./components/sketch/SketchEditorPage")
+);
+const WorkspaceShell = React.lazy(
+  () => import("./components/workspace/WorkspaceShell")
+);
+// Studio — the beginner-facing agentic-video shell (see docs/agentic-video-product.md)
+const StudioHome = React.lazy(() => import("./studio/StudioHome"));
+const StudioStoryboardPage = React.lazy(
+  () => import("./studio/StudioStoryboardPage")
+);
+const StudioScriptPage = React.lazy(() => import("./studio/StudioScriptPage"));
+const StudioTimelinePage = React.lazy(
+  () => import("./studio/StudioTimelinePage")
+);
+const StudioAccountPage = React.lazy(
+  () => import("./studio/StudioAccountPage")
+);
+import {
+  ChatThreadRedirect,
+  WorkflowEditorRedirect
+} from "./components/workspace/RouteRedirects";
+const LegacyAppRedirect = React.lazy(
+  () => import("./components/applications/LegacyAppRedirect")
+);
+
+// Defer frontend tool registrations until after initial render. The module list
+// lives in builtin/index.ts so this path and the agent WebSocket bridge
+// register exactly the same tools.
+const registerFrontendTools = () => {
+  import("./lib/tools/builtin").catch((error) => {
+    console.error("Failed to register frontend tools:", error);
+  });
+};
+import { useModelDownloadStore } from "./stores/ModelDownloadStore";
+
+import { BORDER_RADIUS, SPACING, getSpacingPx } from "./components/ui_primitives";
+installIpcLogBridge();
+
+if (isLocalhost) {
+  useRemoteSettingsStore
+    .getState()
+    .fetchSettings()
+    .catch((err) => console.error(err));
+}
+
+const NavigateToStart = () => {
+  const state = useAuth((auth) => auth.state);
+  const navigate = useNavigate();
+
+  // The tabbed workspace is the app entry point for returning users;
+  // previously-open workflows are restored as tabs from localStorage by the
+  // WorkspaceTabsStore. Users who still have getting-started steps open land on
+  // the dashboard instead, where the welcome hero, templates and tutorials are.
+  useEffect(() => {
+    if (state === "init") {
+      return;
+    }
+    if (!isAuthRequired() || state === "logged_in") {
+      // Both stores persist to sync localStorage, so their state is already
+      // rehydrated by the time this effect runs — reading it non-reactively
+      // here decides the entry route once, with no post-hydration redirect.
+      const { completedSteps, dismissed } = useOnboardingStore.getState();
+      const { showWelcomeOnStartup } = useSettingsStore.getState().settings;
+      navigate(
+        startRouteFor({ completedSteps, dismissed }, showWelcomeOnStartup),
+        { replace: true }
+      );
+    } else if (state === "logged_out" || state === "error") {
+      navigate("/login", { replace: true });
+    }
+  }, [state, navigate]);
+
+  return null;
+};
+
+function getRoutes() {
+  const routes: RouteObject[] = [
+    {
+      path: "/",
+      element: <NavigateToStart />
+    },
+    {
+      path: "/dashboard",
+      element: (
+        <ProtectedRoute>
+          <Portal />
+        </ProtectedRoute>
+      )
+    },
+    {
+      // Legacy route — chat threads are workspace tabs now.
+      path: "/chat/:thread_id?",
+      element: (
+        <ProtectedRoute>
+          <ChatThreadRedirect />
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "/welcome",
+      element: <Navigate to="/workspace" replace />
+    },
+    {
+      path: "/settings",
+      element: (
+        <ProtectedRoute>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: "100%",
+              height: "100%"
+            }}
+          >
+            <SettingsPage />
+          </div>
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "/costs",
+      element: (
+        <ProtectedRoute>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: "100%",
+              height: "100%"
+            }}
+          >
+            <React.Suspense fallback={<LoadingSpinner />}>
+              <CostsDashboard />
+            </React.Suspense>
+          </div>
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "/login",
+      element: <Login />
+    },
+    {
+      // Legacy links keyed by workflow id. An app is its own resource now, so
+      // these resolve to the app built on that workflow, or 404.
+      path: "/miniapp/:workflowId",
+      element: (
+        <ProtectedRoute>
+          <React.Suspense fallback={<LoadingSpinner />}>
+            <LegacyAppRedirect />
+          </React.Suspense>
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "/share/:token",
+      element: (
+        <ProtectedRoute>
+          <React.Suspense fallback={<LoadingSpinner />}>
+            <AcceptSharePage />
+          </React.Suspense>
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "/editor",
+      element: <NavigateToStart />
+    },
+    {
+      path: "assets",
+      element: (
+        <ProtectedRoute>
+          <AssetExplorer />
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "collections",
+      element: (
+        <ProtectedRoute>
+          <CollectionsExplorer />
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "examples",
+      element: (
+        <ProtectedRoute>
+          <ExamplesPage />
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "tutorials",
+      element: (
+        <ProtectedRoute>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: "100%",
+              height: "100%"
+            }}
+          >
+            <React.Suspense fallback={<LoadingSpinner />}>
+              <TutorialsPage />
+            </React.Suspense>
+          </div>
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "editor/:workflow",
+      element: (
+        <ProtectedRoute>
+          <WorkflowEditorRedirect />
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "models",
+      element: (
+        <ProtectedRoute>
+          <ModelsPage />
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "packages",
+      element: (
+        <ProtectedRoute>
+          <PackagesPage />
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "workspaces",
+      element: (
+        <ProtectedRoute>
+          <WorkspacesPage />
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "graph/:workflowId",
+      element: <WorkflowGraphView />
+    },
+    {
+      path: "chain/:workflowId?",
+      element: (
+        <ProtectedRoute>
+          <div
+            className="page-enter"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: "100%",
+              height: "100%"
+            }}
+          >
+            <SkipLinks />
+            <ChainEditorPage />
+          </div>
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "/timeline/:sequenceId",
+      element: (
+        <ProtectedRoute>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: "100%",
+              height: "100%"
+            }}
+          >
+            <SkipLinks />
+            <React.Suspense fallback={<LoadingSpinner />}>
+              <TimelineEditor />
+            </React.Suspense>
+          </div>
+        </ProtectedRoute>
+      )
+    },
+    {
+      path: "/sketch/:documentId",
+      element: (
+        <ProtectedRoute>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: "100%",
+              height: "100%"
+            }}
+          >
+            <SkipLinks />
+            <React.Suspense fallback={<LoadingSpinner />}>
+              <SketchEditorPage />
+            </React.Suspense>
+          </div>
+        </ProtectedRoute>
+      )
+    },
+    // Studio: the beginner shell for agentic video creation. Two creation
+    // paths (storyboard, script) that both finish in the timeline editor.
+    ...(
+      [
+        { path: "/studio", el: <StudioHome /> },
+        { path: "/studio/storyboard/:boardId", el: <StudioStoryboardPage /> },
+        { path: "/studio/script/:scriptId", el: <StudioScriptPage /> },
+        { path: "/studio/timeline/:sequenceId", el: <StudioTimelinePage /> },
+        { path: "/studio/account", el: <StudioAccountPage /> }
+      ] as const
+    ).map(({ path, el }) => ({
+      path,
+      element: (
+        <ProtectedRoute>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: "100%",
+              height: "100%"
+            }}
+          >
+            <SkipLinks />
+            <React.Suspense fallback={<LoadingSpinner />}>{el}</React.Suspense>
+          </div>
+        </ProtectedRoute>
+      )
+    })),
+    {
+      // New tabbed-document workspace (in progress). Lives alongside the
+      // existing routes; will become the default once all document types
+      // are wired. See docs/superpowers/specs/2026-05-30-tabbed-workspace-modes-design.md
+      path: "/workspace",
+      element: (
+        <ProtectedRoute>
+          <div
+            className="page-enter"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              width: "100%",
+              height: "100%"
+            }}
+          >
+            <SkipLinks />
+            <React.Suspense fallback={<LoadingSpinner />}>
+              <WorkspaceShell />
+            </React.Suspense>
+          </div>
+        </ProtectedRoute>
+      )
+    }
+  ];
+
+  // Add the LayoutTest page only in local development
+  if (isLocalhost) {
+    routes.push({
+      path: "/layouttest",
+      element: <LayoutTest />
+    });
+    routes.push({
+      path: "/chatmarkdowntest",
+      element: <ChatMarkdownTest />
+    });
+    routes.push({
+      path: "/code-editor-debug",
+      element: <CodeEditorDebug />
+    });
+    // Component preview routes for isolated documentation screenshots
+    routes.push({
+      path: "/preview/:component?",
+      element: <ComponentPreview />
+    });
+  }
+
+  routes.forEach((route) => {
+    route.ErrorBoundary = ErrorBoundary;
+  });
+
+  return routes satisfies RouteObject[];
+}
+
+useAssetStore.getState().setQueryClient(queryClient);
+useModelDownloadStore.getState().setQueryClient(queryClient);
+
+// Handle hash route for packaged Electron apps
+// When loading index.html#/path, convert hash to regular route
+const handleHashRoute = () => {
+  const hash = window.location.hash;
+  if (hash && hash.startsWith("#/")) {
+    // Convert hash route to regular route
+    // e.g., #/miniapp/workflowId -> /miniapp/workflowId
+    const route = hash.slice(1); // Remove the leading #
+    window.history.replaceState(null, "", route);
+  }
+};
+handleHashRoute();
+
+const router = createBrowserRouter(getRoutes());
+// Expose the router singleton to components rendered outside the router tree
+// (global dialogs), so they can navigate without the useNavigate hook.
+registerAppRouter(router);
+const rootElement = document.getElementById("root");
+if (!rootElement) throw new Error("Root element #root not found");
+const root = ReactDOM.createRoot(rootElement);
+
+/**
+ * Routes Electron menu/tray "Settings" actions to the in-app settings page.
+ * The desktop shell sends an `openSettings` menu event (instead of opening a
+ * separate window); navigating via the router singleton works from any route.
+ */
+const MenuNavigationBridge = () => {
+  const handleMenuEvent = useCallback((data: MenuEventData) => {
+    if (data.type === "openSettings") {
+      void router.navigate("/settings");
+    }
+  }, []);
+  useMenuHandler(handleMenuEvent);
+  return null;
+};
+
+const AppWrapper = ({ configReady }: { configReady: Promise<unknown> }) => {
+  const [status, setStatus] = useState<string>("pending");
+  const [configLoaded, setConfigLoaded] = useState(false);
+  const authState = useAuth((s) => s.state);
+
+  // Allow dev-only test pages to render without backend metadata
+  const isDevTestRoute =
+    isLocalhost &&
+    ["/layouttest", "/chatmarkdowntest", "/graph", "/preview"].some((p) =>
+      window.location.pathname.startsWith(p)
+    );
+
+  useEffect(() => {
+    // Register frontend tools after initial render
+    registerFrontendTools();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    configReady.then(() => {
+      if (active) setConfigLoaded(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [configReady]);
+
+  useEffect(() => {
+    // The auth-mode decision below depends on runtime config; wait for it so a
+    // Supabase backend isn't hit with an unauthenticated metadata request.
+    if (!configLoaded) {
+      return;
+    }
+
+    // When auth is enforced, wait until the user is logged in before fetching
+    // metadata. When logged out, skip metadata so the router can render and
+    // redirect to /login.
+    if (isAuthRequired() && authState !== "logged_in") {
+      if (authState === "logged_out" || authState === "error") {
+        setStatus("logged_out");
+      }
+      return;
+    }
+
+    loadMetadata()
+      .then((data) => {
+        setStatus(data);
+      })
+      .catch((error) => {
+        console.error("Failed to load metadata:", error);
+        setStatus("error");
+      });
+  }, [authState, configLoaded]);
+
+  const shouldRenderRouter =
+    isDevTestRoute || status === "success" || status === "logged_out";
+
+  return (
+    <React.StrictMode>
+      <TRPCProvider>
+        <InitColorSchemeScript attribute="class" defaultMode="dark" />
+        <ThemeProvider theme={ThemeNodetool} defaultMode="dark">
+          <CssBaseline />
+          <MobileClassProvider>
+            <MenuProvider>
+              <MenuNavigationBridge />
+              <WorkflowManagerProvider queryClient={queryClient}>
+                <KeyboardProvider active={true}>
+                  {status === "pending" && !isDevTestRoute && (
+                    <div
+                      role="status"
+                      aria-label="Loading NodeTool"
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        height: "100vh",
+                        gap: getSpacingPx(SPACING.xl)
+                      }}
+                    >
+                      <LoadingSpinner size="large" />
+                      <span
+                        style={{
+                          color: "var(--palette-text-secondary)",
+                          fontSize: "var(--fontSizeNormal)"
+                        }}
+                      >
+                        Loading NodeTool…
+                      </span>
+                    </div>
+                  )}
+                  {status === "error" && !isDevTestRoute && (
+                    <div
+                      role="alert"
+                      style={{
+                        display: "flex",
+                        justifyContent: "center",
+                        alignItems: "center",
+                        height: "100vh",
+                        flexDirection: "column",
+                        gap: getSpacingPx(SPACING.lg)
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: "var(--palette-text-primary)",
+                          fontSize: "var(--fontSizeNormal)"
+                        }}
+                      >
+                        Error loading application metadata.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => window.location.reload()}
+                        style={{
+                          padding: `${getSpacingPx(SPACING.md)} ${getSpacingPx(SPACING.xl)}`,
+                          borderRadius: BORDER_RADIUS.md,
+                          border: "1px solid var(--palette-divider)",
+                          backgroundColor: "transparent",
+                          color: "var(--palette-text-primary)",
+                          cursor: "pointer",
+                          fontSize: "var(--fontSizeNormal)"
+                        }}
+                      >
+                        Refresh Page
+                      </button>
+                    </div>
+                  )}
+                  {/* Render RouterProvider only when metadata is successfully loaded */}
+                  {shouldRenderRouter && (
+                    <>
+                      <Suspense
+                        fallback={
+                          <div
+                            role="status"
+                            aria-label="Loading"
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              justifyContent: "center",
+                              alignItems: "center",
+                              height: "100vh",
+                              width: "100%",
+                              gap: getSpacingPx(SPACING.xl)
+                            }}
+                          >
+                            <LoadingSpinner size="large" />
+                            <span
+                              style={{
+                                color: "var(--palette-text-secondary)",
+                                fontSize: "var(--fontSizeNormal)"
+                              }}
+                            >
+                              Preparing workspace…
+                            </span>
+                          </div>
+                        }
+                      >
+                        <RouterProvider router={router} />
+                      </Suspense>
+                      <DownloadManagerDialog />
+                      <RunWarningDialog />
+                      <SearchProviderSetupDialog />
+                      <ProviderOnboardingDialog />
+                    </>
+                  )}
+                </KeyboardProvider>
+              </WorkflowManagerProvider>
+            </MenuProvider>
+          </MobileClassProvider>
+        </ThemeProvider>
+      </TRPCProvider>
+    </React.StrictMode>
+  );
+};
+
+// Start the largest boot payload (node metadata) immediately so its download
+// overlaps the runtime-config round-trip below instead of running after it.
+prefetchMetadata();
+
+// Learn auth mode and Supabase credentials from the backend before wiring up
+// the client and auth, so the frontend reflects the server's configuration
+// without any build-time VITE_* values.
+const configReady = loadRuntimeConfig().then((config) => {
+  initSupabaseFromConfig(config);
+  useAuth.getState().initialize();
+  initKeyListeners();
+  // Load Plausible on the production website only (never local/dev/Electron).
+  initAnalytics();
+  return config;
+});
+configReady.catch((err) => console.error(err));
+
+// Render the shell right away — the loading spinner appears without waiting on
+// the /api/config round-trip. AppWrapper holds back the router (and any
+// auth-mode metadata decision) until `configReady` resolves.
+root.render(<AppWrapper configReady={configReady} />);

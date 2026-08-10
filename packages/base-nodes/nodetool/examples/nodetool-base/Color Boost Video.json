@@ -1,0 +1,251 @@
+{
+  "id": "310d885a341811f0942e0000191c0ba5",
+  "access": "public",
+  "created_at": "2025-05-19T06:50:36.746389",
+  "updated_at": "2026-06-22T12:00:00.000Z",
+  "name": "Color Boost Video",
+  "description": "Grade a video by splitting it into frames, applying exposure/contrast and saturation/vibrance adjustments per frame, then reassembling the result — differentiator: bring your own clip and a single Grading Intensity slider drives the saturation pass live, no per-node tweaking.",
+  "tags": [
+    "video",
+    "start"
+  ],
+  "thumbnail": "Color Boost Video.jpg",
+  "thumbnail_url": null,
+  "graph": {
+    "nodes": [
+      {
+        "id": "7074f109-83b1-4864-8e37-17a89fcbf46d",
+        "parent_id": null,
+        "type": "nodetool.input.VideoInput",
+        "data": {
+          "name": "source_video",
+          "description": "The clip to color-grade. Defaults to a short demo clip so Run works immediately.",
+          "value": {
+            "type": "video",
+            "asset_id": "727208e4dbe811ef97c1000071d82eaa",
+            "uri": "http://127.0.0.1:8000/api/storage/727208e4dbe811ef97c1000071d82eaa.mp4"
+          }
+        },
+        "ui_properties": {
+          "title": "1️⃣ Source video",
+          "position": {
+            "x": 50,
+            "y": 50
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true
+        },
+        "dynamic_properties": {}
+      },
+      {
+        "id": "grading-intensity",
+        "parent_id": null,
+        "type": "nodetool.input.FloatInput",
+        "data": {
+          "name": "grading_intensity",
+          "description": "How strong the saturation pass is. 0 = grayscale, 0.5 = the default boost, 1 = maximum, fully saturated look.",
+          "value": 0.5,
+          "min": -1,
+          "max": 1
+        },
+        "ui_properties": {
+          "title": "Grading intensity",
+          "position": {
+            "x": 680,
+            "y": 320
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true
+        },
+        "dynamic_properties": {}
+      },
+      {
+        "id": "abb8ee0b-dbf0-4969-8046-c2e690b7d1e4",
+        "parent_id": null,
+        "type": "nodetool.video.ForEachFrame",
+        "data": {
+          "start": 0,
+          "end": 2
+        },
+        "ui_properties": {
+          "title": "2️⃣ Split into frames",
+          "position": {
+            "x": 360,
+            "y": 54
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true
+        },
+        "dynamic_properties": {}
+      },
+      {
+        "id": "e30d1d60-0a2a-4c28-9844-3d9a1e09c85b",
+        "parent_id": null,
+        "type": "lib.image.color_grading.Exposure",
+        "data": {
+          "exposure": 0.2,
+          "contrast": 0.1,
+          "highlights": -0.1,
+          "shadows": 0.1
+        },
+        "ui_properties": {
+          "title": "3️⃣ Exposure & contrast",
+          "position": {
+            "x": 680,
+            "y": 60
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true
+        },
+        "dynamic_properties": {}
+      },
+      {
+        "id": "s41e2d70-1b3b-5d39-0955-4e0b2f1ac96c",
+        "parent_id": null,
+        "type": "lib.image.color_grading.SaturationVibrance",
+        "data": {
+          "vibrance": 0.4
+        },
+        "ui_properties": {
+          "title": "4️⃣ Saturation & vibrance",
+          "position": {
+            "x": 1000,
+            "y": 140
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true
+        },
+        "dynamic_properties": {}
+      },
+      {
+        "id": "4ca8874f-5caa-413c-a329-936d90358e8e",
+        "parent_id": null,
+        "type": "nodetool.video.FrameToVideo",
+        "data": {},
+        "ui_properties": {
+          "title": "5️⃣ Reassemble video",
+          "position": {
+            "x": 1320,
+            "y": 112
+          },
+          "zIndex": 0,
+          "width": 416,
+          "selectable": true,
+          "height": 360
+        },
+        "dynamic_properties": {}
+      },
+      {
+        "id": "60677785-41d5-4795-bdba-15003d0dec86",
+        "parent_id": null,
+        "type": "nodetool.workflows.base_node.Comment",
+        "data": {
+          "comment": "# 🎨 Color Boost Video\n\nGrade a clip frame-by-frame, then reassemble it. Each frame gets an exposure and saturation pass; the Grading Intensity input feeds the saturation strength so it can be bound to a slider in the app view.\n\n**Pipeline:** Video → Split frames → Exposure → Saturation (driven by Grading intensity) → Reassemble\n\n**Try this:** drag Grading intensity, tweak the exposure settings, or set a start/end frame range."
+        },
+        "ui_properties": {
+          "selected": false,
+          "position": {
+            "x": 48,
+            "y": -209
+          },
+          "zIndex": 0,
+          "width": 520,
+          "height": 220,
+          "selectable": true
+        },
+        "dynamic_properties": {}
+      },
+      {
+        "id": "output-graded-video",
+        "parent_id": null,
+        "type": "nodetool.output.Output",
+        "data": {
+          "name": "graded_video"
+        },
+        "ui_properties": {
+          "title": "6️⃣ Graded output",
+          "position": {
+            "x": 1640,
+            "y": 112
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true
+        },
+        "dynamic_properties": {}
+      }
+    ],
+    "edges": [
+      {
+        "id": "19458a09-f1f7-4496-bb74-6bed2bf53532",
+        "source": "7074f109-83b1-4864-8e37-17a89fcbf46d",
+        "sourceHandle": "output",
+        "target": "abb8ee0b-dbf0-4969-8046-c2e690b7d1e4",
+        "targetHandle": "video",
+        "ui_properties": null
+      },
+      {
+        "id": "5239206d-e632-47cb-878c-4568d9ee0d3e",
+        "source": "abb8ee0b-dbf0-4969-8046-c2e690b7d1e4",
+        "sourceHandle": "frame",
+        "target": "e30d1d60-0a2a-4c28-9844-3d9a1e09c85b",
+        "targetHandle": "image",
+        "ui_properties": {
+          "className": "image"
+        }
+      },
+      {
+        "id": "f52b58cb-77ce-42fe-a412-2aef5dfd79be",
+        "source": "e30d1d60-0a2a-4c28-9844-3d9a1e09c85b",
+        "sourceHandle": "output",
+        "target": "s41e2d70-1b3b-5d39-0955-4e0b2f1ac96c",
+        "targetHandle": "image",
+        "ui_properties": {
+          "className": "image"
+        }
+      },
+      {
+        "id": "edge-grading-intensity",
+        "source": "grading-intensity",
+        "sourceHandle": "output",
+        "target": "s41e2d70-1b3b-5d39-0955-4e0b2f1ac96c",
+        "targetHandle": "saturation",
+        "ui_properties": null
+      },
+      {
+        "id": "b14f7601-b826-4b1c-8298-90f55b6022e1",
+        "source": "s41e2d70-1b3b-5d39-0955-4e0b2f1ac96c",
+        "sourceHandle": "output",
+        "target": "4ca8874f-5caa-413c-a329-936d90358e8e",
+        "targetHandle": "frame",
+        "ui_properties": null
+      },
+      {
+        "id": "f9de3335-3122-4d71-8f28-f6c7ada89c84",
+        "source": "abb8ee0b-dbf0-4969-8046-c2e690b7d1e4",
+        "sourceHandle": "fps",
+        "target": "4ca8874f-5caa-413c-a329-936d90358e8e",
+        "targetHandle": "fps",
+        "ui_properties": null
+      },
+      {
+        "id": "edge-output-graded-video",
+        "source": "4ca8874f-5caa-413c-a329-936d90358e8e",
+        "sourceHandle": "output",
+        "target": "output-graded-video",
+        "targetHandle": "value",
+        "ui_properties": null
+      }
+    ]
+  },
+  "input_schema": null,
+  "output_schema": null,
+  "settings": null,
+  "package_name": "nodetool-base",
+  "path": null
+}

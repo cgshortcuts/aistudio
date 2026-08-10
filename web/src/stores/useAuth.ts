@@ -1,0 +1,269 @@
+import { create } from "zustand";
+import { createErrorMessage } from "../utils/errorHandling";
+import { supabase } from "../lib/supabaseClient"; // Import Supabase client
+import type { Session, User, Provider } from "@supabase/supabase-js"; // Import Supabase types
+import {
+  getRuntimeConfig,
+  isAuthRequired,
+  isGoogleWorkspaceEnabled,
+  isRuntimeConfigFromBackend
+} from "../lib/runtimeConfig";
+import { getBuildEnv } from "../lib/buildEnv";
+import { syncGoogleProviderToken } from "../lib/googleSession";
+
+type OAuthProviderSupabase = Extract<Provider, "google" | "facebook">;
+
+/**
+ * Resolve the OAuth redirect URL.
+ *
+ * Supabase's `signInWithOAuth` only honors `redirectTo` values that are on the
+ * project's allow list. If the value is missing or not allow listed, Supabase
+ * falls back to the "Site URL" configured in the Supabase dashboard, which is
+ * typically `http://localhost:3000` — producing the classic "login lands on
+ * localhost" bug even when the app is served from a production domain.
+ *
+ * Resolution order:
+ *   1. `VITE_AUTH_REDIRECT_URL` build-time env var (explicit override for
+ *      deployments behind proxies, custom domains, or Electron shells where
+ *      `window.location.origin` is not the public URL).
+ *   2. `window.location.origin + "/"` at runtime.
+ */
+export const getAuthRedirectUrl = (): string => {
+  // Runtime config from the backend wins when present.
+  const fromRuntime = getRuntimeConfig().authRedirectUrl;
+  if (fromRuntime) {
+    return fromRuntime;
+  }
+  const configured = getBuildEnv("VITE_AUTH_REDIRECT_URL");
+  if (typeof configured === "string" && configured.length > 0) {
+    return configured;
+  }
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin + "/";
+  }
+  return "/";
+};
+
+type SupabaseSubscription = {
+  unsubscribe: () => void;
+};
+
+interface LoginStore {
+  /** The current Supabase session object, or null if not logged in. */
+  session: Session | null;
+  /** The current Supabase user object derived from the session, or null. */
+  user: User | { id: string } | null;
+  /** The current state of the authentication process. */
+  state: "init" | "loading" | "error" | "logged_in" | "logged_out";
+  /** Stores the error message if an authentication operation fails. */
+  error: string | null;
+  /** Internal subscription to auth state changes for cleanup. */
+  _authSubscription: SupabaseSubscription | null;
+  /** Initiates the OAuth sign-in flow with the specified provider. */
+  signInWithProvider: (provider: OAuthProviderSupabase) => Promise<void>;
+  /** Signs the current user out. */
+  signOut: () => Promise<void>;
+  /** Initializes the auth store, checking for existing sessions and setting up listeners. */
+  initialize: () => Promise<void>;
+  /** Cleans up the auth subscription to prevent memory leaks. */
+  cleanup: () => void;
+}
+
+/**
+ * Zustand store for managing Supabase authentication state.
+ *
+ * Handles user session, login/logout operations, and listens for authentication state changes.
+ * Automatically initializes upon application load.
+ *
+ * IMPORTANT: This store manages a Supabase subscription that must be cleaned up to prevent
+ * memory leaks. The subscription is automatically unsubscribed when the user signs out
+ * or when cleanup() is called.
+ */
+export const useAuth = create<LoginStore>((set, get) => ({
+  session: null,
+  user: null,
+  state: "init",
+  error: null,
+  _authSubscription: null,
+
+  /**
+   * Cleanup function to unsubscribe from auth state changes.
+   * Should be called when the application unmounts or when resetting auth state.
+   */
+  cleanup: () => {
+    const subscription = get()._authSubscription;
+    if (subscription) {
+      subscription.unsubscribe();
+      set({ _authSubscription: null });
+      console.info("Auth: Subscription cleaned up");
+    }
+  },
+
+  /**
+   * Initializes the authentication state.
+   * - Checks for an existing Supabase session on load.
+   * - Sets up `onAuthStateChange` listener to react to login/logout events.
+   * - Skips the Supabase check when the backend does not enforce auth
+   *   (Local mode), auto-logging in as the single local user.
+   */
+  initialize: async () => {
+    console.info("Auth: Initializing...");
+
+    // Clean up any existing subscription before initializing
+    get().cleanup();
+
+    if (!isAuthRequired()) {
+      // Backend runs in Local mode — no login screen, single local user.
+      console.info(
+        isRuntimeConfigFromBackend()
+          ? "Auth: Local mode, setting state to logged_in."
+          : "Auth: Local mode inferred (backend config unreachable, no " +
+              "build-time Supabase credentials); setting state to logged_in."
+      );
+      set({
+        state: "logged_in", // Assume logged in for local dev
+        session: null,
+        user: {
+          id: "1"
+        },
+        error: null,
+        _authSubscription: null
+      });
+      return;
+    }
+
+    set({ state: "loading" });
+    try {
+      // Check initial session state from Supabase
+      const {
+        data: { session },
+        error
+      } = await supabase.auth.getSession();
+
+      if (error)
+        {throw new Error("Failed to get initial session: " + error.message);}
+
+      set({
+        session,
+        user: session?.user ?? null,
+        state: session ? "logged_in" : "logged_out",
+        error: null,
+        _authSubscription: null
+      });
+      console.info(
+        "Auth: Initial session checked.",
+        session ? "Found" : "Not found"
+      );
+      void syncGoogleProviderToken(session);
+
+      // Subscribe to auth state changes and store the subscription for cleanup
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        console.info(
+          "Auth: State Change Event -",
+          event,
+          "; Session:",
+          session ? "Exists" : "Null"
+        );
+        set({
+          session,
+          user: session?.user ?? null,
+          state: session ? "logged_in" : "logged_out",
+          error: null
+        });
+        // A fresh sign-in is the only moment Supabase exposes the Google
+        // provider token; forward it before it drops out of the session.
+        if (event === "SIGNED_IN") {
+          void syncGoogleProviderToken(session);
+        }
+      });
+
+      // Store subscription reference for cleanup
+      set({ _authSubscription: subscription });
+    } catch (error: unknown) {
+      const errorMessage = createErrorMessage(error, "Auth initialization failed");
+      console.info("Auth: Initialization error", errorMessage);
+      set({
+        state: "error",
+        error: errorMessage.message,
+        session: null,
+        user: null,
+        _authSubscription: null
+      });
+    }
+  },
+
+  /**
+   * Initiates the OAuth sign-in flow with the specified provider using Supabase.
+   * Handles the redirect to the provider's login page.
+   *
+   * @param provider The OAuth provider (e.g., 'google').
+   */
+  signInWithProvider: async (provider: OAuthProviderSupabase) => {
+    set({ state: "loading", error: null });
+    try {
+      // Ask Google for the Workspace scopes up front so one consent screen
+      // covers login and the Drive/Gmail/Docs/Sheets/Calendar tools.
+      // `access_type=offline` is what yields a refresh token, and Google only
+      // re-issues one when consent is shown again.
+      const googleScopes =
+        provider === "google" && isGoogleWorkspaceEnabled()
+          ? getRuntimeConfig().googleScopes
+          : [];
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: provider,
+        options: {
+          ...(googleScopes.length > 0
+            ? {
+                scopes: googleScopes.join(" "),
+                queryParams: { access_type: "offline", prompt: "consent" }
+              }
+            : {}),
+          // URL to redirect to after successful authentication.
+          // Must be added to your Supabase project's redirect allow list,
+          // otherwise Supabase falls back to the project's Site URL
+          // (often localhost). Override via VITE_AUTH_REDIRECT_URL when the
+          // app is served from a domain that differs from window.location.
+          redirectTo: getAuthRedirectUrl()
+        }
+      });
+      if (error) {throw error;}
+      // State update (to 'logged_in') is handled by the onAuthStateChange listener.
+    } catch (error: unknown) {
+      const errorMessage = createErrorMessage(error, `Failed to sign in with ${provider}`);
+      console.info(`Auth: Sign in with ${provider} error`, errorMessage);
+      set({
+        state: "error",
+        error: errorMessage.message
+      });
+    }
+  },
+
+  /**
+   * Signs the user out using Supabase.
+   */
+  signOut: async () => {
+    set({ state: "loading", error: null });
+    try {
+      // Clean up subscription before signing out
+      get().cleanup();
+
+      const { error } = await supabase.auth.signOut();
+      if (error) {throw error;}
+      // Explicitly set state to logged_out here, although onAuthStateChange
+      // will also fire and update the state.
+      set({ session: null, user: null, state: "logged_out", error: null });
+    } catch (error: unknown) {
+      const errorMessage = createErrorMessage(error, "Failed to sign out");
+      console.info("Auth: Sign out error", errorMessage);
+      // If sign-out fails, remain in an error state but clear session/user
+      set({
+        state: "error",
+        error: errorMessage.message,
+        session: null,
+        user: null
+      });
+    }
+  }
+}));
+
+export default useAuth;

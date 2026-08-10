@@ -1,0 +1,486 @@
+/** @jsxImportSource @emotion/react */
+import React, { memo, useCallback, useMemo } from "react";
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import AspectRatioIcon from "@mui/icons-material/CropOriginal";
+import AppsIcon from "@mui/icons-material/Apps";
+import AccessTimeIcon from "@mui/icons-material/AccessTime";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import TvIcon from "@mui/icons-material/Tv";
+import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOver";
+import SpeedIcon from "@mui/icons-material/Speed";
+import TuneIcon from "@mui/icons-material/Tune";
+import LayersIcon from "@mui/icons-material/Layers";
+import AddToCanvasIcon from "@mui/icons-material/AddPhotoAlternate";
+import {
+  BORDER_RADIUS,
+  FlexColumn,
+  FlexRow,
+  MagicGenerationFill,
+  MOTION,
+  Text,
+  ToolbarIconButton,
+  FONT_SIZE_SANS,
+  SPACING,
+  Z_INDEX,
+  getSpacingPx
+} from "../../ui_primitives";
+import ImageView from "../../node/ImageView";
+import type {
+  Message,
+  MessageContent
+} from "../../../stores/ApiTypes";
+import type { MediaGenerationRequest } from "../../../stores/MediaGenerationStore";
+import {
+  isAudioContent,
+  isImageContent,
+  isVideoContent
+} from "./MediaOutputGroup.helpers";
+import {
+  useAddMediaToCanvas,
+  type MediaContentBlock
+} from "../../../hooks/handlers/useGenerationToCanvas";
+import { serializeDragData } from "../../../lib/dragdrop";
+
+/** Edge length of a generated-media thumbnail tile (px). */
+const THUMBNAIL_SIZE = 120;
+
+const VIDEO_STYLE: React.CSSProperties = { width: "100%", height: "100%" };
+const AUDIO_STYLE: React.CSSProperties = { width: "100%", padding: getSpacingPx(SPACING.lg) };
+
+type ChatMessageWithMedia = Message & {
+  media_generation?: MediaGenerationRequest | null;
+};
+
+interface MediaOutputGroupProps {
+  message: ChatMessageWithMedia;
+  mediaContents: MessageContent[];
+  /**
+   * True while this turn's media is still being generated: renders the same
+   * header + grid shell as a finished turn, but with shimmering tiles in
+   * place of `mediaContents` (which is empty at this point).
+   */
+  isPending?: boolean;
+}
+
+/** `"16:9"` → `"16 / 9"` for the CSS `aspect-ratio` property. */
+function cssAspectRatio(aspectRatio: string | null | undefined): string | undefined {
+  if (!aspectRatio) return undefined;
+  const [w, h] = aspectRatio.split(":");
+  const wNum = Number(w);
+  const hNum = Number(h);
+  if (!wNum || !hNum) return undefined;
+  return `${wNum} / ${hNum}`;
+}
+
+/** How many shimmering placeholder tiles to show, and their shape, for a
+ * pending `media_generation` request — mirrors what the finished grid will
+ * actually contain (one tile per variation for images, one for video/audio). */
+function pendingTiles(gen: MediaGenerationRequest | null): {
+  count: number;
+  aspectRatio: string | undefined;
+  kind: "image" | "video" | "audio";
+} {
+  if (gen?.mode === "image" || gen?.mode === "image_edit") {
+    return {
+      count: Math.max(1, gen.variations ?? 1),
+      aspectRatio: cssAspectRatio(gen.aspect_ratio),
+      kind: "image"
+    };
+  }
+  if (gen?.mode === "video" || gen?.mode === "image_to_video") {
+    return { count: 1, aspectRatio: cssAspectRatio(gen.aspect_ratio), kind: "video" };
+  }
+  return { count: 1, aspectRatio: undefined, kind: "audio" };
+}
+
+
+const styles = (theme: Theme) =>
+  css({
+    width: "100%",
+    borderRadius: BORDER_RADIUS.xl,
+    backgroundColor: theme.vars.palette.background.paper,
+    border: `1px solid ${theme.vars.palette.divider}`,
+    padding: 8,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+
+    ".media-output-header": {
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 8,
+      flexWrap: "wrap",
+      color: theme.vars.palette.text.secondary
+    },
+
+    ".media-output-meta": {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      flexWrap: "wrap"
+    },
+
+    ".media-meta-chip": {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 4,
+      padding: `${getSpacingPx(SPACING.micro)} ${getSpacingPx(SPACING.md)}`,
+      borderRadius: BORDER_RADIUS.pill,
+      background: theme.vars.palette.c_overlay_subtle,
+      color: theme.vars.palette.text.secondary,
+      fontSize: FONT_SIZE_SANS.caption,
+      "& svg": { fontSize: 14, opacity: 0.75 }
+    },
+
+    ".media-grid": {
+      display: "grid",
+      gap: 8,
+      width: "100%",
+      gridTemplateColumns: `repeat(auto-fill, ${THUMBNAIL_SIZE}px)`,
+      justifyContent: "start"
+    },
+
+    ".media-grid > *": {
+      position: "relative",
+      width: THUMBNAIL_SIZE,
+      height: THUMBNAIL_SIZE,
+      borderRadius: BORDER_RADIUS.lg,
+      overflow: "hidden",
+      background: theme.vars.palette.grey[900],
+      cursor: "grab"
+    },
+
+    ".media-grid > *:active": {
+      cursor: "grabbing"
+    },
+
+    // Audio has no meaningful thumbnail — let its player span the full row.
+    ".media-grid > .audio-tile": {
+      gridColumn: "1 / -1",
+      width: "100%",
+      height: "auto"
+    },
+
+    ".media-grid img, .media-grid video": {
+      width: "100%",
+      height: "100%",
+      display: "block",
+      objectFit: "cover"
+    },
+
+    // Same shell every generating surface uses to host `MagicGenerationFill`
+    // (sketch canvas/layers panel, timeline clips + preview compositor): a
+    // positioned, clipped box the wash + shimmer sweep fills edge to edge.
+    ".media-tile-shimmer": {
+      position: "relative",
+      minHeight: 96,
+      overflow: "hidden",
+      backgroundColor: theme.vars.palette.c_overlay_subtle
+    },
+
+    ".media-tile-shimmer.audio-shimmer": {
+      minHeight: 54,
+      borderRadius: BORDER_RADIUS.lg
+    },
+
+    ".add-to-canvas-button": {
+      position: "absolute",
+      top: getSpacingPx(SPACING.xs),
+      left: getSpacingPx(SPACING.xs),
+      zIndex: Z_INDEX.dropdown,
+      opacity: 0,
+      transition: `opacity ${MOTION.normal}`,
+      backgroundColor: "var(--palette-c_scrim)",
+      color: "var(--palette-grey-0)",
+      borderRadius: BORDER_RADIUS.sm,
+      width: 24,
+      height: 24,
+      padding: getSpacingPx(SPACING.xs),
+      "&:hover": {
+        backgroundColor: "var(--palette-c_scrim_strong)"
+      },
+      "& svg": {
+        fontSize: 14
+      }
+    },
+
+    ".media-grid > *:hover .add-to-canvas-button": {
+      opacity: 1
+    },
+
+    ".media-output-header:hover .add-all-button, .media-output-group:hover .add-all-button": {
+      opacity: 1
+    },
+
+    ".add-all-button": {
+      opacity: 0.6,
+      transition: `opacity ${MOTION.normal}`
+    },
+
+    // No hover on touch, so these would stay invisible while still catching
+    // taps over the media tiles.
+    "@media (hover: none)": {
+      ".add-to-canvas-button": { opacity: 1 },
+      ".add-all-button": { opacity: 1 }
+    }
+  });
+
+function titleFromPrompt(prompt: string | null | undefined): string {
+  if (!prompt) return "Generated";
+  const words = prompt.trim().split(/\s+/).slice(0, 4).join(" ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * Renders the grouped output of a media-generation turn: a header with model
+ * name, variation count, and resolution/aspect metadata plus a responsive
+ * grid of the generated image / video blocks.
+ */
+const MediaOutputGroup: React.FC<MediaOutputGroupProps> = ({
+  message,
+  mediaContents,
+  isPending = false
+}) => {
+  const theme = useTheme();
+  const cssStyles = useMemo(() => styles(theme), [theme]);
+  const gen = message.media_generation ?? null;
+  const { isCanvasAvailable, addBlocksToCanvas } = useAddMediaToCanvas();
+
+  const addOne = useCallback(
+    (block: MediaContentBlock) => addBlocksToCanvas([block]),
+    [addBlocksToCanvas]
+  );
+  const handleDragStart = useCallback(
+    (e: React.DragEvent, block: MediaContentBlock) => {
+      serializeDragData({ type: "chat-media", payload: block }, e.dataTransfer);
+      e.dataTransfer.effectAllowed = "copy";
+    },
+    []
+  );
+  const addAll = useCallback(
+    () =>
+      addBlocksToCanvas(
+        mediaContents.filter(
+          (c): c is MediaContentBlock =>
+            isImageContent(c) || isVideoContent(c) || isAudioContent(c)
+        )
+      ),
+    [addBlocksToCanvas, mediaContents]
+  );
+
+  const prompt = useMemo(() => {
+    const content = message.content;
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      const text = content.find((c) => c && (c as MessageContent).type === "text");
+      if (text && (text as { text?: string }).text) {
+        return (text as { text?: string }).text as string;
+      }
+    }
+    return null;
+  }, [message.content]);
+
+  const title = titleFromPrompt(prompt);
+
+  const pending = useMemo(() => pendingTiles(gen), [gen]);
+
+  return (
+    <div css={cssStyles} className="media-output-group">
+      <div className="media-output-header">
+        <FlexColumn gap={0.5} sx={{ minWidth: 0 }}>
+          <Text size="normal" weight={600} truncate>
+            {title}
+          </Text>
+          {prompt && prompt !== title && (
+            <Text size="small" color="secondary" truncate>
+              {prompt}
+            </Text>
+          )}
+        </FlexColumn>
+        <FlexRow className="media-output-meta" align="center">
+          {gen?.model && (
+            <span className="media-meta-chip">
+              <AutoAwesomeIcon fontSize="small" />
+              {gen.model}
+            </span>
+          )}
+          {gen?.resolution && (
+            <span className="media-meta-chip">
+              <TvIcon fontSize="small" />
+              {gen.resolution}
+            </span>
+          )}
+          {gen?.aspect_ratio && (
+            <span className="media-meta-chip">
+              <AspectRatioIcon fontSize="small" />
+              {gen.aspect_ratio}
+            </span>
+          )}
+          {(gen?.mode === "image" || gen?.mode === "image_edit") &&
+            typeof gen.variations === "number" && (
+              <span className="media-meta-chip">
+                <AppsIcon fontSize="small" />
+                {gen.variations}
+              </span>
+            )}
+          {(gen?.mode === "video" || gen?.mode === "image_to_video") &&
+            typeof gen.duration === "number" && (
+              <span className="media-meta-chip">
+                <AccessTimeIcon fontSize="small" />
+                {gen.duration}s
+              </span>
+            )}
+          {gen?.mode === "image_edit" &&
+            typeof gen.strength === "number" && (
+              <span className="media-meta-chip">
+                <TuneIcon fontSize="small" />
+                {gen.strength.toFixed(2)}
+              </span>
+            )}
+          {(gen?.mode === "image_edit" ||
+            gen?.mode === "image_to_video") &&
+            typeof gen.num_inference_steps === "number" && (
+              <span className="media-meta-chip">
+                <LayersIcon fontSize="small" />
+                {gen.num_inference_steps} steps
+              </span>
+            )}
+          {gen?.mode === "audio" && gen.voice && (
+            <span className="media-meta-chip">
+              <RecordVoiceOverIcon fontSize="small" />
+              {gen.voice}
+            </span>
+          )}
+          {gen?.mode === "audio" && typeof gen.speed === "number" && (
+            <span className="media-meta-chip">
+              <SpeedIcon fontSize="small" />
+              {gen.speed}x
+            </span>
+          )}
+          {!isPending && isCanvasAvailable && mediaContents.length > 1 && (
+            <ToolbarIconButton
+              className="add-all-button"
+              tooltip="Add all to canvas"
+              size="small"
+              onClick={addAll}
+            >
+              <AddToCanvasIcon fontSize="small" />
+            </ToolbarIconButton>
+          )}
+        </FlexRow>
+      </div>
+
+      <div className="media-grid">
+        {isPending
+          ? Array.from({ length: pending.count }, (_, i) => (
+              <div
+                key={`pending-${i}`}
+                className={`media-tile-shimmer${
+                  pending.kind === "audio" ? " audio-shimmer audio-tile" : ""
+                }`}
+                style={
+                  pending.kind !== "audio" && pending.aspectRatio
+                    ? { aspectRatio: pending.aspectRatio }
+                    : undefined
+                }
+                aria-hidden="true"
+              >
+                <MagicGenerationFill />
+              </div>
+            ))
+          : mediaContents.map((c, i) => {
+          if (isImageContent(c)) {
+            const src =
+              c.image?.uri || (c.image?.data as string | undefined) || "";
+            const key = c.image?.asset_id || c.image?.uri || `media-${i}`;
+            return (
+              <div
+                key={key}
+                draggable
+                onDragStart={(e) => handleDragStart(e, c)}
+              >
+                <ImageView source={src} />
+                {isCanvasAvailable && (
+                  <ToolbarIconButton
+                    className="add-to-canvas-button"
+                    tooltip="Add to canvas"
+                    size="small"
+                    onClick={() => addOne(c)}
+                  >
+                    <AddToCanvasIcon />
+                  </ToolbarIconButton>
+                )}
+              </div>
+            );
+          }
+          if (isVideoContent(c)) {
+            const src = c.video?.uri || "";
+            const key = c.video?.asset_id || c.video?.uri || `media-${i}`;
+            return (
+              <div
+                key={key}
+                draggable
+                onDragStart={(e) => handleDragStart(e, c)}
+              >
+                <video
+                  src={src}
+                  controls
+                  preload="metadata"
+                  playsInline
+                  aria-label="Generated video"
+                  style={VIDEO_STYLE}
+                />
+                {isCanvasAvailable && (
+                  <ToolbarIconButton
+                    className="add-to-canvas-button"
+                    tooltip="Add to canvas"
+                    size="small"
+                    onClick={() => addOne(c)}
+                  >
+                    <AddToCanvasIcon />
+                  </ToolbarIconButton>
+                )}
+              </div>
+            );
+          }
+          if (isAudioContent(c)) {
+            const src = c.audio?.uri || "";
+            const key = c.audio?.asset_id || c.audio?.uri || `media-${i}`;
+            return (
+              <div
+                key={key}
+                className="audio-tile"
+                draggable
+                onDragStart={(e) => handleDragStart(e, c)}
+              >
+                <audio
+                  src={src}
+                  controls
+                  preload="metadata"
+                  aria-label="Generated audio"
+                  style={AUDIO_STYLE}
+                />
+                {isCanvasAvailable && (
+                  <ToolbarIconButton
+                    className="add-to-canvas-button"
+                    tooltip="Add to canvas"
+                    size="small"
+                    onClick={() => addOne(c)}
+                  >
+                    <AddToCanvasIcon />
+                  </ToolbarIconButton>
+                )}
+              </div>
+            );
+          }
+          return null;
+        })}
+      </div>
+    </div>
+  );
+};
+
+export default memo(MediaOutputGroup);

@@ -1,0 +1,115 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { Component } from "react";
+import type { ReactNode, ErrorInfo } from "react";
+import { EditorButton, Text, Box, BORDER_RADIUS } from "./ui_primitives";
+import { ThemeContext } from "@emotion/react";
+import type { Theme } from "@mui/material/styles";
+
+
+const searchErrorBoundaryStyles = (theme: Theme) =>
+  css({
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    height: "200px",
+    textAlign: "center",
+    background: theme.vars.palette.c_gray0,
+    border: `1px solid ${theme.vars.palette.c_gray1}`,
+    borderRadius: BORDER_RADIUS.lg,
+    margin: "1rem",
+    padding: "2rem",
+
+    ".error-title": {
+      color: theme.vars.palette.error.main,
+      marginBottom: theme.spacing?.(1) || "8px",
+      fontSize: theme.fontSizeNormal
+    },
+
+    ".error-message": {
+      maxWidth: 400,
+      marginBottom: theme.spacing?.(2) || "16px",
+      color: theme.vars.palette.c_gray4,
+      fontSize: theme.fontSizeSmaller
+    },
+
+    ".retry-button": {
+      backgroundColor: theme.vars.palette.c_hl1,
+      color: theme.vars.palette.grey[1000],
+      textTransform: "none",
+      fontSize: theme.fontSizeSmaller,
+      "&:hover": {
+        backgroundColor: theme.vars.palette.c_hl2
+      }
+    }
+  });
+
+interface SearchErrorBoundaryState {
+  hasError: boolean;
+  error?: Error;
+}
+
+interface SearchErrorBoundaryProps {
+  children: ReactNode;
+  fallbackTitle?: string;
+  onRetry?: () => void;
+}
+
+class SearchErrorBoundary extends Component<
+  SearchErrorBoundaryProps,
+  SearchErrorBoundaryState
+> {
+  static contextType = ThemeContext;
+
+  declare context: Theme;
+
+  constructor(props: SearchErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(error: Error): SearchErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("Search component error:", error, errorInfo);
+  }
+
+  handleRetry = () => {
+    this.setState({ hasError: false, error: undefined });
+    this.props.onRetry?.();
+  };
+
+  render() {
+    const theme = this.context as Theme;
+    const boundaryStyles = searchErrorBoundaryStyles(theme);
+
+    if (this.state.hasError) {
+      return (
+        <Box css={boundaryStyles}>
+          <Text size="normal" weight={600} className="error-title">
+            {this.props.fallbackTitle || "Search Error"}
+          </Text>
+          <Text size="small" className="error-message">
+            Something went wrong with the search functionality. Please try
+            again.
+          </Text>
+          <EditorButton
+            variant="contained"
+            onClick={this.handleRetry}
+            className="retry-button"
+            density="normal"
+          >
+            Try Again
+          </EditorButton>
+        </Box>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+export default SearchErrorBoundary;

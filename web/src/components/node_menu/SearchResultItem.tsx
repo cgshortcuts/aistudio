@@ -1,0 +1,540 @@
+/** @jsxImportSource @emotion/react */
+import { memo, useCallback, useState, useMemo, type Ref } from "react";
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import {
+  Text,
+  Box,
+  Collapse,
+  MOTION,
+  BORDER_RADIUS,
+  FONT_WEIGHT,
+  Z_INDEX,
+  SPACING,
+  getSpacingPx
+} from "../ui_primitives";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import { NodeMetadata } from "../../stores/ApiTypes";
+import useNodeMenuStore from "../../stores/NodeMenuStore";
+import { formatNodeDocumentation } from "../../stores/formatNodeDocumentation";
+import { colorForType } from "../../config/data_types";
+import { IconForType } from "../../config/IconForType";
+import { HighlightText } from "../ui_primitives";
+import { getProviderKindForNamespace } from "../../utils/nodeProvider";
+import { useFavoriteNodesStore } from "../../stores/FavoriteNodesStore";
+import { useNotificationStore } from "../../stores/NotificationStore";
+import { FavoriteButton } from "../ui_primitives";
+import { NOTIFICATION_TIMEOUT_SHORT } from "../../config/constants";
+
+const COMPACT_SVG_PROPS = { width: "14px", height: "14px" } as const;
+const EXPANDED_SVG_PROPS = { width: "16px", height: "16px" } as const;
+const COMPACT_TITLE_SX = {
+  flex: 1,
+  minWidth: 0,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis"
+} as const;
+
+interface SearchResultItemProps {
+  node: NodeMetadata;
+  onDragStart: (
+    node: NodeMetadata,
+    event: React.DragEvent<HTMLDivElement>
+  ) => void;
+  onDragEnd?: () => void;
+  onClick: (node: NodeMetadata) => void;
+  isKeyboardSelected?: boolean;
+  /**
+   * Compact mode: single-line title-only row, no description / tags /
+   * expandable I/O details. Used by the left-panel sidebar where horizontal
+   * space is narrow (~280 px). Default false.
+   */
+  compact?: boolean;
+  ref?: Ref<HTMLDivElement>;
+}
+
+const searchResultStyles = (theme: Theme, compact: boolean) =>
+  css({
+    "&.search-result-item": {
+      display: "flex",
+      flexDirection: compact ? "row" : "column",
+      alignItems: compact ? "center" : "stretch",
+      gap: compact ? theme.spacing(1) : 0,
+      padding: compact ? theme.spacing(1, 1) : theme.spacing(3, 3),
+      margin: compact ? theme.spacing(0.5, 0) : theme.spacing(0.5, 0),
+      borderRadius: BORDER_RADIUS.md,
+      cursor: "pointer",
+      transition: MOTION.all,
+      border: "1px solid transparent",
+      backgroundColor: "transparent",
+      position: "relative",
+      zIndex: Z_INDEX.raised,
+      "&:hover": {
+        backgroundColor: theme.vars.palette.action.hover,
+        border: `1px solid ${theme.vars.palette.divider}`
+      },
+      "&.expanded": {
+        backgroundColor: theme.vars.palette.action.hover,
+        border: `1px solid ${theme.vars.palette.divider}`,
+        zIndex: Z_INDEX.dropdown
+      },
+      "&.keyboard-selected": {
+        backgroundColor: "rgba(var(--palette-primary-mainChannel) / 0.15)",
+        border: `1px solid rgba(var(--palette-primary-mainChannel) / 0.4)`,
+        boxShadow: "0 0 0 2px rgba(var(--palette-primary-mainChannel) / 0.1)"
+      },
+      ".result-header": {
+        display: "flex",
+        alignItems: "flex-start",
+        justifyContent: "space-between",
+        gap: theme.spacing(2)
+      },
+      ".result-header-right": {
+        display: "flex",
+        alignItems: "center",
+        gap: theme.spacing(1.5)
+      },
+      ".result-main": {
+        flex: 1,
+        minWidth: 0
+      },
+      ".result-title-row": {
+        display: "flex",
+        alignItems: "center",
+        gap: theme.spacing(2)
+      },
+      ".result-title": {
+        fontSize: "var(--fontSizeNormal)",
+        fontWeight: FONT_WEIGHT.normal,
+        color: theme.vars.palette.text.primary,
+        lineHeight: 1.3,
+        "& .highlight": {
+          color: "var(--palette-primary-main)"
+        }
+      },
+      ".result-namespace": {
+        fontFamily: theme.fontFamily2,
+        fontSize: "var(--fontSizeSmaller)",
+        color: theme.vars.palette.text.secondary,
+        textTransform: "uppercase",
+        letterSpacing: "0.5px",
+        "& .highlight": {
+          color: "var(--palette-primary-main)"
+        }
+      },
+      ".result-description": {
+        fontSize: "var(--fontSizeSmall)",
+        color: theme.vars.palette.text.secondary,
+        lineHeight: 1.4,
+        marginTop: theme.spacing(1),
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        "& .highlight": {
+          color: "var(--palette-primary-main)"
+        }
+      },
+      ".expand-indicator": {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "20px",
+        height: "20px",
+        borderRadius: BORDER_RADIUS.sm,
+        color: theme.vars.palette.text.secondary,
+        transition: `${MOTION.transform}, color ${MOTION.fast}`,
+        "&.expanded": {
+          transform: "rotate(180deg)",
+          color: "var(--palette-primary-main)"
+        },
+        "& svg": {
+          fontSize: "var(--fontSizeNormal)"
+        }
+      },
+      ".matched-tags-inline": {
+        display: "flex",
+        gap: theme.spacing(1),
+        marginLeft: theme.spacing(1)
+      },
+      ".result-tags": {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: theme.spacing(1),
+        marginTop: theme.spacing(1.5)
+      },
+      ".result-tag": {
+        fontSize: "var(--fontSizeSmaller)",
+        padding: theme.spacing(0.5, 1.5),
+        borderRadius: BORDER_RADIUS.lg,
+        backgroundColor: theme.vars.palette.action.selected,
+        color: theme.vars.palette.text.secondary,
+        letterSpacing: "0.3px"
+      },
+      ".provider-tag": {
+        fontSize: "var(--fontSizeSmaller)",
+        padding: `${theme.spacing(0.5)} ${theme.spacing(1.5)}`,
+        borderRadius: BORDER_RADIUS.md,
+        letterSpacing: "0.3px",
+        opacity: 1,
+        border: "none"
+      },
+      ".io-info-wrapper": {
+        position: "absolute",
+        left: 0,
+        right: 0,
+        top: "100%",
+        zIndex: Z_INDEX.overlay,
+        padding: theme.spacing(0, 3, 3, 3)
+      },
+      ".io-info": {
+        padding: theme.spacing(2),
+        backgroundColor: theme.vars.palette.background.paper,
+        border: `1px solid ${theme.vars.palette.divider}`,
+        borderRadius: `0 0 ${BORDER_RADIUS.md} ${BORDER_RADIUS.md}`,
+        display: "flex",
+        flexDirection: "column",
+        gap: theme.spacing(1),
+        boxShadow: `0 4px 12px ${theme.vars.palette.c_scrim_soft}`
+      },
+      ".io-row": {
+        display: "flex",
+        alignItems: "center",
+        gap: theme.spacing(2),
+        fontSize: "var(--fontSizeSmaller)"
+      },
+      ".io-label": {
+        color: theme.vars.palette.text.secondary,
+        minWidth: "45px",
+        textTransform: "uppercase",
+        letterSpacing: "0.3px"
+      },
+      ".io-items": {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: theme.spacing(1)
+      },
+      ".io-item": {
+        padding: theme.spacing(0.5, 1),
+        borderRadius: BORDER_RADIUS.sm,
+        fontSize: "var(--fontSizeSmaller)",
+        borderLeft: "2px solid",
+        backgroundColor: theme.vars.palette.action.hover
+      }
+    }
+  });
+
+const SearchResultItem = memo(function SearchResultItem({
+  node,
+  onDragStart,
+  onDragEnd,
+  onClick,
+  isKeyboardSelected = false,
+  compact = false,
+  ref
+}: SearchResultItemProps) {
+  const theme = useTheme();
+  const outputType = node.outputs.length > 0 ? node.outputs[0].type.type : "";
+  const providerKind = getProviderKindForNamespace(node.namespace);
+  const searchTerm = useNodeMenuStore((state) => state.searchTerm);
+  const isFavorite = useFavoriteNodesStore((state) =>
+    state.isFavorite(node.node_type)
+  );
+  const toggleFavorite = useFavoriteNodesStore((state) => state.toggleFavorite);
+  const addNotification = useNotificationStore(
+    (state) => state.addNotification
+  );
+
+  const handleFavoriteToggle = useCallback(
+    (next: boolean) => {
+      toggleFavorite(node.node_type);
+      addNotification({
+        type: "info",
+        content: next
+          ? "Node added to favorites"
+          : "Node removed from favorites",
+        timeout: NOTIFICATION_TIMEOUT_SHORT
+      });
+    },
+    [toggleFavorite, addNotification, node.node_type]
+  );
+
+  const { description, tags } = useMemo(
+    () =>
+      formatNodeDocumentation(node.description, searchTerm, node.searchInfo),
+    [node.description, searchTerm, node.searchInfo]
+  );
+
+  const matchingTags = useMemo(() => {
+    if (!searchTerm) {
+      return [];
+    }
+    const searchLower = searchTerm.toLowerCase();
+    return tags.filter((tag) => tag.toLowerCase().includes(searchLower));
+  }, [searchTerm, tags]);
+
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const handleClick = useCallback(() => {
+    onClick(node);
+  }, [onClick, node]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onClick(node);
+      }
+    },
+    [onClick, node]
+  );
+
+  const handleToggleExpand = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsExpanded((prev) => !prev);
+  }, []);
+
+  const handleExpandKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsExpanded((prev) => !prev);
+    }
+  }, []);
+
+  const handleDragStart = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      onDragStart(node, event);
+    },
+    [onDragStart, node]
+  );
+
+  const compactBgStyle = useMemo(
+    () => ({
+      backgroundColor: theme.vars.palette.grey[900],
+      width: "18px",
+      height: "18px",
+      margin: 0,
+      padding: getSpacingPx(SPACING.micro),
+      borderRadius: BORDER_RADIUS.sm
+    }),
+    [theme.vars.palette.grey[900]]
+  );
+
+  const expandedContainerStyle = useMemo(
+    () => ({
+      marginLeft: "0",
+      marginTop: "0"
+    }),
+    []
+  );
+
+  const expandedBgStyle = useMemo(
+    () => ({
+      backgroundColor: theme.vars.palette.action.hover,
+      border: `1px solid ${theme.vars.palette.divider}`,
+      margin: "0",
+      padding: getSpacingPx(SPACING.xs),
+      borderRadius: BORDER_RADIUS.md,
+      width: "28px",
+      height: "28px"
+    }),
+    [theme.vars.palette.action.hover, theme.vars.palette.divider]
+  );
+
+  const cssStyles = useMemo(
+    () => searchResultStyles(theme, compact),
+    [theme, compact]
+  );
+
+  const providerTagStyle = useMemo(
+    () => ({
+      color:
+        providerKind === "api"
+          ? theme.vars.palette.c_provider_api
+          : theme.vars.palette.c_provider_local
+    }),
+    [
+      providerKind,
+      theme.vars.palette.c_provider_api,
+      theme.vars.palette.c_provider_local
+    ]
+  );
+
+  if (compact) {
+    return (
+      <div
+        ref={ref}
+        className={`search-result-item ${isKeyboardSelected ? "keyboard-selected" : ""}`}
+        css={cssStyles}
+        role="button"
+        tabIndex={0}
+        draggable
+        onClick={handleClick}
+        onKeyDown={handleKeyDown}
+        onDragStart={handleDragStart}
+        onDragEnd={onDragEnd}
+      >
+        <IconForType
+          iconName={outputType}
+          bgStyle={compactBgStyle}
+          svgProps={COMPACT_SVG_PROPS}
+        />
+        <Text className="result-title" component="div" sx={COMPACT_TITLE_SX}>
+          <HighlightText
+            text={node.title}
+            query={searchTerm}
+            matchStyle="primary"
+          />
+        </Text>
+        <span className="provider-tag" style={providerTagStyle}>
+          {providerKind === "api" ? "API" : "Local"}
+        </span>
+        <FavoriteButton
+          isFavorite={isFavorite}
+          onToggle={handleFavoriteToggle}
+          buttonSize="small"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={ref}
+      className={`search-result-item ${isExpanded ? "expanded" : ""} ${isKeyboardSelected ? "keyboard-selected" : ""}`}
+      css={cssStyles}
+      role="button"
+      tabIndex={0}
+      draggable
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      onDragStart={handleDragStart}
+      onDragEnd={onDragEnd}
+    >
+      <div className="result-header">
+        <div className="result-main">
+          <div className="result-title-row">
+            <IconForType
+              iconName={outputType}
+              containerStyle={expandedContainerStyle}
+              bgStyle={expandedBgStyle}
+              svgProps={EXPANDED_SVG_PROPS}
+            />
+            <Text className="result-title" component="div">
+              <HighlightText
+                text={node.title}
+                query={searchTerm}
+                matchStyle="primary"
+              />
+            </Text>
+            {matchingTags.length > 0 && (
+              <div className="matched-tags-inline">
+                {matchingTags.slice(0, 2).map((tag, idx) => (
+                  <span
+                    key={`${node.node_type}-tag-${tag}-${idx}`}
+                    className="result-tag matched"
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
+            <span className="provider-tag" style={providerTagStyle}>
+              {providerKind === "api" ? "API" : "Local"}
+            </span>
+          </div>
+        </div>
+        <div className="result-header-right">
+          <Text className="result-namespace" component="div">
+            <HighlightText
+              text={node.namespace}
+              query={searchTerm}
+              matchStyle="primary"
+            />
+          </Text>
+          <FavoriteButton
+            isFavorite={isFavorite}
+            onToggle={handleFavoriteToggle}
+            buttonSize="small"
+          />
+          <div
+            className={`expand-indicator ${isExpanded ? "expanded" : ""}`}
+            role="button"
+            tabIndex={0}
+            onClick={handleToggleExpand}
+            onKeyDown={handleExpandKeyDown}
+            aria-expanded={isExpanded}
+            aria-label={isExpanded ? "Collapse details" : "Show details"}
+            title={isExpanded ? "Collapse details" : "Show details"}
+          >
+            <ExpandMoreIcon />
+          </div>
+        </div>
+      </div>
+
+      {description && (
+        <Text className="result-description" component="div">
+          <HighlightText
+            text={description}
+            query={searchTerm}
+            matchStyle="primary"
+          />
+        </Text>
+      )}
+
+      {/* Input/Output info - click to expand (absolutely positioned overlay) */}
+      <Collapse in={isExpanded} timeout={150} className="io-info-wrapper">
+        <Box className="io-info">
+          {node.properties.length > 0 && (
+            <Box className="io-row">
+              <span className="io-label">Input:</span>
+              <Box className="io-items">
+                {node.properties.slice(0, 6).map((prop) => (
+                  <span
+                    key={prop.name}
+                    className="io-item"
+                    style={{
+                      borderColor: colorForType(prop.type.type)
+                    }}
+                  >
+                    {prop.name}
+                  </span>
+                ))}
+                {node.properties.length > 6 && (
+                  <span
+                    className="io-item"
+                    style={{ borderColor: "var(--palette-grey-500)" }}
+                  >
+                    +{node.properties.length - 6}
+                  </span>
+                )}
+              </Box>
+            </Box>
+          )}
+          {node.outputs.length > 0 && (
+            <Box className="io-row">
+              <span className="io-label">Output:</span>
+              <Box className="io-items">
+                {node.outputs.map((output) => (
+                  <span
+                    key={output.name}
+                    className="io-item"
+                    style={{
+                      borderColor: colorForType(output.type.type)
+                    }}
+                  >
+                    {output.type.type}
+                  </span>
+                ))}
+              </Box>
+            </Box>
+          )}
+        </Box>
+      </Collapse>
+    </div>
+  );
+});
+
+export default SearchResultItem;

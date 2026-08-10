@@ -1,0 +1,62 @@
+{
+  "name": "@nodetool-ai/auth",
+  "version": "0.7.0-rc.34",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "node ../../scripts/build-typescript-workspace.mjs",
+    "test": "vitest run",
+    "test:mutation": "stryker run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "jose": "^6.2.0"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "^9.6.1",
+    "@stryker-mutator/vitest-runner": "^9.6.1",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.2"
+  },
+  "exports": {
+    ".": {
+      "nodetool-dev": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodetool-ai/nodetool.git",
+    "directory": "packages/auth"
+  },
+  "homepage": "https://nodetool.ai",
+  "bugs": {
+    "url": "https://github.com/nodetool-ai/nodetool/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "description": "Authentication and authorization for NodeTool — pluggable auth providers (local, static token, Supabase), user management, and Fastify HTTP middleware",
+  "keywords": [
+    "nodetool",
+    "ai",
+    "workflow",
+    "workflow-automation",
+    "typescript",
+    "authentication",
+    "authorization",
+    "middleware",
+    "fastify"
+  ]
+}

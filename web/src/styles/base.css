@@ -1,0 +1,185 @@
+/* NODE EDITOR BASE STYLES */
+
+ul li {
+  list-style-type: square;
+}
+
+/* Main container */
+#root {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+#root .node-editor {
+  background: var(--c_editor_bg_color);
+  margin: 0;
+  padding: 0;
+  top: 0px;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  display: block;
+}
+
+#root .MuiGrid2-root.MuiGrid2-container {
+  width: 100%;
+  margin: 0;
+}
+
+/* ReactFlow wrapper */
+.reactflow-wrapper {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+/* Loading overlay */
+.loading-overlay {
+  position: absolute;
+  width: 250px;
+  height: 100px;
+  right: 0;
+  top: 1em;
+  background-color: transparent;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+/* Suppress native text selection while box-selecting nodes (Shift+drag).
+   The class is toggled on <body> by useSelectionEvents for the duration of
+   the marquee gesture, so normal text selection/copy stays available
+   otherwise. */
+body.is-marquee-selecting .react-flow {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Pane */
+.react-flow__pane.selection {
+  cursor: default;
+}
+
+.react-flow .react-flow__pane {
+  cursor: default !important;
+}
+
+.react-flow .react-flow__pane.dragging {
+  cursor: grabbing !important;
+}
+
+/* Tooltip */
+span.tooltip-small {
+  font-size: var(--fontSizeSmall);
+  color: var(--palette-grey-0) !important;
+}
+
+/* tooltips */
+.tooltip-span {
+  background-color: transparent;
+  display: flex;
+  margin:0;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1em;
+}
+
+.tooltip-title {
+  font-size: var(--fontSizeNormal);
+  font-weight: 400 !important;
+  text-transform: uppercase;
+  color: var(--palette-grey-50);
+  margin:0;
+  font-size: var(--fontSizeSmaller);
+  padding:.2em .5em;
+}
+.tooltip-key {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  background-color: transparent;
+  color: var(--palette-grey-50);
+  word-spacing: 1em;
+  font-size: var(--fontSizeNormal);
+  font-family: var(--fontFamily2);
+  letter-spacing: 0.15em;
+  margin: 0;
+}
+.tooltip-description {
+  max-width: 13em;
+  font-size: var(--fontSizeSmall);
+  line-height: 1.2em;
+  text-align: center;
+  color: var(--palette-grey-200);
+  margin:0;
+  padding:.5em;
+}
+
+/* keyboard keys */
+kbd {
+  color: var(--palette-grey-100);
+  background-color: var(--palette-grey-700);
+  padding: 0.2em 0.25em;
+  margin: .1em 0.25em .1em 0;
+  border: 1px solid var(--palette-grey-500);
+  border-radius: var(--rounded-sm);
+  display: inline-block;
+  font-size: var(--fontSizeSmaller);
+  font-family: var(--fontFamily2);
+  letter-spacing: 0.05em;
+  line-height: 1.1;
+  box-shadow: 1px 1px 0 0px var(--palette-grey-300);
+}
+
+/* Status message animations */
+@keyframes status-color-cycle {
+  0% {
+    color: var(--palette-error-main);
+  }
+  20% {
+    color: var(--palette-warning-main);
+  }
+  40% {
+    color: var(--palette-success-light);
+  }
+  60% {
+    color: var(--palette-info-light);
+  }
+  80% {
+    color: var(--palette-primary-light);
+  }
+  100% {
+    color: var(--palette-secondary-main);
+  }
+}
+
+@keyframes status-slide-in {
+  from {
+    transform: translateY(-10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.status-message {
+  display: inline-block;
+  padding: var(--spacing-xs) var(--spacing-md);
+  text-shadow: 0 1px 2px var(--palette-grey-1000);
+}
+
+.status-message.animating {
+  animation: status-color-cycle var(--motion-spin) linear infinite,
+    status-slide-in var(--motion-slow) ease-out;
+}

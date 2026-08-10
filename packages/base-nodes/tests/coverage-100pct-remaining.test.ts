@@ -1,0 +1,1392 @@
+/**
+ * Tests targeting exact uncovered lines for 100% statement coverage across:
+ * workspace.ts, agents.ts, text-extra.ts,
+ * data.ts, document.ts, code.ts, uuid.ts, vector.ts
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { BaseProvider } from "@nodetool-ai/runtime";
+
+// AgentNode drives the provider through generateLoop (the
+// agents-provider-tool-loop refactor). Wrap a bare provider mock so its
+// generateMessages generator runs under BaseProvider's real tool-calling loop.
+function asLoopProvider(p: any): any {
+  return {
+    ...p,
+    async *generateMessagesTraced(...a: any[]) {
+      yield* (this as any).generateMessages(...a);
+    },
+    generateLoop(loopArgs: unknown) {
+      return (
+        BaseProvider.prototype as { generateLoop: (a: unknown) => unknown }
+      ).generateLoop.call(this, loopArgs);
+    }
+  };
+}
+
+/**
+ * Helper: assign props to a node AND patch serialize() so that
+ * workspace_dir (which is not a declared @prop on most workspace nodes)
+ * appears in the serialized output used by workspaceDirFrom().
+ */
+function assignWithWorkspaceDir(
+  node: any,
+  props: Record<string, unknown>
+): void {
+  node.assign(props);
+  if ("workspace_dir" in props) {
+    const origSerialize = node.serialize.bind(node);
+    node.serialize = () => ({
+      ...origSerialize(),
+      workspace_dir: props.workspace_dir
+    });
+  }
+}
+
+// ============================================================================
+// 3. AGENTS NODES
+// ============================================================================
+
+import {
+  SummarizerNode,
+  CreateThreadNode,
+  ExtractorNode,
+  ClassifierNode,
+  AgentNode
+} from "@nodetool-ai/llm-nodes";
+
+describe("agents nodes", () => {
+  describe("SummarizerNode", () => {
+    it("throws 'Select a model' when no model is configured", async () => {
+      const node = new SummarizerNode();
+      node.assign({ text: "Hello world. This is a test. Another sentence." });
+      await expect(node.process()).rejects.toThrow("Select a model");
+    });
+  });
+
+  describe("CreateThreadNode", () => {
+    it("creates new thread with auto id", async () => {
+      const node = new CreateThreadNode();
+      const result = await node.process();
+      expect(result.thread_id).toBeDefined();
+      expect((result.thread_id as string).startsWith("thread_")).toBe(true);
+    });
+
+    it("creates or reuses thread with given id", async () => {
+      const node = new CreateThreadNode();
+      node.assign({ thread_id: "my-thread", title: "Custom" });
+      const result = await node.process();
+      expect(result.thread_id).toBe("my-thread");
+      // Call again to hit the existing thread branch
+      node.assign({ thread_id: "my-thread" });
+      const result2 = await node.process();
+      expect(result2.thread_id).toBe("my-thread");
+    });
+  });
+
+  describe("ExtractorNode", () => {
+    it("throws 'Select a model' when no model is configured", async () => {
+      const node = new ExtractorNode();
+      node.assign({ text: '{"name": "test", "value": 42}' });
+      await expect(node.process()).rejects.toThrow("Select a model");
+    });
+  });
+
+  describe("ClassifierNode", () => {
+    it("throws for empty categories before checking the model", async () => {
+      const node = new ClassifierNode();
+      node.assign({ text: "hello", categories: [] });
+      await expect(node.process()).rejects.toThrow(
+        "At least 2 categories are required"
+      );
+    });
+
+    it("throws 'Select a model' when categories are valid but no model is set", async () => {
+      const node = new ClassifierNode();
+      node.assign({
+        text: "I love programming in python",
+        categories: ["python", "javascript", "rust"]
+      });
+      await expect(node.process()).rejects.toThrow("Select a model");
+    });
+  });
+
+  describe("AgentNode", () => {
+    it("requires a selected model", async () => {
+      const node = new AgentNode();
+      node.assign({ prompt: "What is 2+2?" });
+      await expect(node.process()).rejects.toThrow("Select a model");
+    });
+
+    it("streams provider output through process()", async () => {
+      const node = new AgentNode();
+      node.assign({
+        prompt: "hello",
+        model: { provider: "openai", id: "gpt-4" }
+      });
+      const result = await node.process({
+        getProvider: vi.fn().mockResolvedValue(
+          asLoopProvider({
+            async *generateMessages() {
+              yield {
+                type: "chunk",
+                content: "AI",
+                content_type: "text",
+                done: false
+              };
+              yield {
+                type: "chunk",
+                content: " response",
+                content_type: "text",
+                done: true
+              };
+            }
+          })
+        )
+      } as any);
+      expect(result.text).toBe("AI response");
+    });
+
+    it("uses provider when available", async () => {
+      const mockProvider = {
+        generateMessages: vi.fn(async function* () {
+          yield {
+            type: "chunk",
+            content: "AI response",
+            content_type: "text",
+            done: true
+          };
+        })
+      };
+      const mockContext = {
+        getProvider: vi.fn().mockResolvedValue(asLoopProvider(mockProvider))
+      };
+      const node = new AgentNode();
+      node.assign({
+        prompt: "hello",
+        system: "sys",
+        history: [
+          { role: "user", content: "prev" },
+          { role: "invalid_role", content: "skip" }
+        ],
+        model: { provider: "openai", id: "gpt-4" },
+        max_tokens: 512
+      });
+      const result = await node.process(mockContext as any);
+      expect(result.text).toBe("AI response");
+      expect(mockProvider.generateMessages).toHaveBeenCalled();
+    });
+
+    it("loads and saves thread history through context model interfaces", async () => {
+      const created: any[] = [];
+      const mockProvider = {
+        generateMessages: vi.fn(async function* ({ messages }: any) {
+          expect(
+            messages.some(
+              (m: any) => m.role === "user" && m.content === "persisted-user"
+            )
+          ).toBe(true);
+          yield {
+            type: "chunk",
+            content: "threaded",
+            content_type: "text",
+            done: true
+          };
+        })
+      };
+      const mockContext = {
+        getProvider: vi.fn().mockResolvedValue(asLoopProvider(mockProvider)),
+        hasModelInterface: (name: string) =>
+          name === "getMessages" || name === "createMessage",
+        getThreadMessages: vi.fn().mockResolvedValue({
+          messages: [{ role: "user", content: "persisted-user" }],
+          next: null
+        }),
+        createMessage: vi.fn(async (req: any) => {
+          created.push(req);
+        })
+      };
+      const node = new AgentNode();
+      node.assign({
+        prompt: "hello",
+        thread_id: "thread-test",
+        model: { provider: "test", id: "model" }
+      });
+      const result = await node.process(mockContext as any);
+      expect(result.text).toBe("threaded");
+      expect(created).toHaveLength(2);
+      expect(created[0].role).toBe("user");
+      expect(created[1].role).toBe("assistant");
+    });
+
+    it("replays thread history when local persistence is used", async () => {
+      const createNode = new CreateThreadNode();
+      createNode.assign({ thread_id: "coverage-thread-replay" });
+      const { thread_id } = await createNode.process();
+      const mockProvider = {
+        generateMessages: vi.fn(async function* () {
+          yield {
+            type: "chunk",
+            content: "reply-1",
+            content_type: "text",
+            done: true
+          };
+        })
+      };
+      const node = new AgentNode();
+      node.assign({
+        prompt: "hello",
+        thread_id,
+        model: { provider: "test", id: "model" }
+      });
+      await node.process({
+        getProvider: vi.fn().mockResolvedValue(asLoopProvider(mockProvider))
+      } as any);
+      const secondProvider = {
+        generateMessages: vi.fn(async function* ({ messages }: any) {
+          expect(
+            messages.some(
+              (m: any) =>
+                Array.isArray(m.content) && m.content[0]?.text === "hello"
+            )
+          ).toBe(true);
+          expect(
+            messages.some(
+              (m: any) =>
+                Array.isArray(m.content) && m.content[0]?.text === "reply-1"
+            )
+          ).toBe(true);
+          yield {
+            type: "chunk",
+            content: "reply-2",
+            content_type: "text",
+            done: true
+          };
+        })
+      };
+      node.assign({
+        prompt: "follow up",
+        thread_id: thread_id as string,
+        model: { provider: "test", id: "model" }
+      });
+      const result = await node.process({
+        getProvider: vi.fn().mockResolvedValue(asLoopProvider(secondProvider))
+      } as any);
+      expect(result.text).toBe("reply-2");
+    });
+  });
+
+  // Research node coverage is handled by the general Agent node in agents.ts
+});
+
+// ============================================================================
+// 4. TEXT-EXTRA NODES — comprehensive coverage
+// ============================================================================
+
+import {
+  SplitTextNode,
+  ExtractTextNode,
+  ChunkTextNode,
+  ExtractRegexNode,
+  FindAllRegexNode,
+  TextParseJSONNode,
+  ExtractJSONNode,
+  RegexMatchNode,
+  RegexReplaceNode,
+  RegexSplitNode,
+  RegexValidateNode,
+  CompareTextNode,
+  EqualsTextNode,
+  ToUppercaseNode,
+  ToLowercaseNode,
+  ToTitlecaseNode,
+  CapitalizeTextNode,
+  SliceTextNode,
+  StartsWithTextNode,
+  EndsWithTextNode,
+  ContainsTextNode,
+  TrimWhitespaceNode,
+  CollapseWhitespaceNode,
+  IsEmptyTextNode,
+  RemovePunctuationNode,
+  StripAccentsNode,
+  SlugifyNode,
+  HasLengthTextNode,
+  TruncateTextNode,
+  PadTextNode,
+  IndexOfTextNode,
+  AutomaticSpeechRecognitionNode,
+  LoadTextAssetsNode,
+  LoadTextFolderNode
+} from "@nodetool-ai/text-nodes";
+
+describe("text-extra nodes full coverage", () => {
+  it("SplitTextNode", async () => {
+    const node = new SplitTextNode();
+    node.assign({ text: "a,b,c" });
+    expect((await node.process()).output).toEqual(["a", "b", "c"]);
+  });
+
+  it("ExtractTextNode", async () => {
+    const node = new ExtractTextNode();
+    node.assign({ text: "hello world", start: 0, end: 5 });
+    expect((await node.process()).output).toBe("hello");
+  });
+
+  it("ChunkTextNode", async () => {
+    const node = new ChunkTextNode();
+    node.assign({ text: "a b c d e", length: 2, overlap: 0 });
+    const result = await node.process();
+    expect((result.output as string[]).length).toBeGreaterThan(0);
+  });
+
+  it("ChunkTextNode throws on invalid params", async () => {
+    const node = new ChunkTextNode();
+    node.assign({ text: "a b", length: 2, overlap: 3 });
+    await expect(node.process()).rejects.toThrow();
+  });
+
+  it("ExtractRegexNode with flags", async () => {
+    const node = new ExtractRegexNode();
+    node.assign({
+      text: "Hello World",
+      regex: "(hello)",
+      ignorecase: true,
+      multiline: true,
+      dotall: true
+    });
+    const result = await node.process();
+    expect((result.output as string[]).length).toBe(1);
+  });
+
+  it("ExtractRegexNode no match", async () => {
+    const node = new ExtractRegexNode();
+    node.assign({ text: "hello", regex: "(xyz)" });
+    const result = await node.process();
+    expect(result.output).toEqual([]);
+  });
+
+  it("FindAllRegexNode", async () => {
+    const node = new FindAllRegexNode();
+    node.assign({ text: "abc 123 def 456", regex: "\\d+" });
+    const result = await node.process();
+    expect(result.output).toEqual(["123", "456"]);
+  });
+
+  it("TextParseJSONNode", async () => {
+    const node = new TextParseJSONNode();
+    node.assign({ text: '{"a":1}' });
+    expect((await node.process()).output).toEqual({ a: 1 });
+  });
+
+  it("ExtractJSONNode with find_all", async () => {
+    const node = new ExtractJSONNode();
+    node.assign({ text: '{"a":1,"b":2}', json_path: "$.*", find_all: true });
+    const result = await node.process();
+    expect(result.output).toEqual([1, 2]);
+  });
+
+  it("ExtractJSONNode single match", async () => {
+    const node = new ExtractJSONNode();
+    node.assign({ text: '{"a":1}', json_path: "$.a" });
+    const result = await node.process();
+    expect(result.output).toBe(1);
+  });
+
+  it("ExtractJSONNode no match throws", async () => {
+    const node = new ExtractJSONNode();
+    node.assign({ text: '{"a":1}', json_path: "$.nonexistent" });
+    await expect(node.process()).rejects.toThrow("did not match");
+  });
+
+  it("ExtractJSONNode invalid path (no $) returns empty", async () => {
+    const node = new ExtractJSONNode();
+    node.assign({ text: '{"a":1}', json_path: "a", find_all: true });
+    const result = await node.process();
+    expect(result.output).toEqual([]);
+  });
+
+  it("jsonPathFind with wildcard on array", async () => {
+    const node = new ExtractJSONNode();
+    node.assign({ text: "[[1,2],[3,4]]", json_path: "$.*", find_all: true });
+    const result = await node.process();
+    expect(result.output).toEqual([
+      [1, 2],
+      [3, 4]
+    ]);
+  });
+
+  it("jsonPathFind array index access", async () => {
+    const node = new ExtractJSONNode();
+    // Use an object wrapping an array so $ resolves correctly
+    node.assign({ text: '{"arr":[10,20,30]}', json_path: "$.arr[1]" });
+    const result = await node.process();
+    expect(result.output).toBe(20);
+  });
+
+  it("RegexMatchNode with group=null", async () => {
+    const node = new RegexMatchNode();
+    node.assign({ text: "abc 123", pattern: "\\d+", group: null });
+    const result = await node.process();
+    expect(result.output).toEqual(["123"]);
+  });
+
+  it("RegexMatchNode with group number", async () => {
+    const node = new RegexMatchNode();
+    node.assign({ text: "abc 123", pattern: "(\\d+)", group: 1 });
+    const result = await node.process();
+    expect(result.output).toEqual(["123"]);
+  });
+
+  it("RegexReplaceNode unlimited", async () => {
+    const node = new RegexReplaceNode();
+    node.assign({ text: "a1b2c3", pattern: "\\d", replacement: "X" });
+    const result = await node.process();
+    expect(result.output).toBe("aXbXcX");
+  });
+
+  it("RegexReplaceNode with count limit", async () => {
+    const node = new RegexReplaceNode();
+    node.assign({ text: "a1b2c3", pattern: "\\d", replacement: "X", count: 2 });
+    const result = await node.process();
+    expect(result.output).toBe("aXbXc3");
+  });
+
+  it("RegexSplitNode unlimited", async () => {
+    const node = new RegexSplitNode();
+    node.assign({ text: "a,b,c", pattern: "," });
+    const result = await node.process();
+    expect(result.output).toEqual(["a", "b", "c"]);
+  });
+
+  it("RegexSplitNode with maxsplit", async () => {
+    const node = new RegexSplitNode();
+    node.assign({ text: "a,b,c", pattern: ",", maxsplit: 1 });
+    const result = await node.process();
+    expect(result.output).toEqual(["a", "b,c"]);
+  });
+
+  it("RegexValidateNode", async () => {
+    const node = new RegexValidateNode();
+    // Anchored at start (Python re.match behavior): "hello123" does NOT start with digits
+    node.assign({ text: "hello123", pattern: "\\d+" });
+    expect((await node.process()).output).toBe(false);
+    node.assign({ text: "123hello", pattern: "\\d+" });
+    expect((await node.process()).output).toBe(true);
+    node.assign({ text: "hello", pattern: "^\\d+$" });
+    expect((await node.process()).output).toBe(false);
+  });
+
+  it("CompareTextNode less/greater/equal", async () => {
+    const node = new CompareTextNode();
+    node.assign({ text_a: "a", text_b: "b" });
+    expect((await node.process()).output).toBe("less");
+    node.assign({ text_a: "b", text_b: "a" });
+    expect((await node.process()).output).toBe("greater");
+    node.assign({ text_a: "a", text_b: "a" });
+    expect((await node.process()).output).toBe("equal");
+  });
+
+  it("CompareTextNode case insensitive + trim", async () => {
+    const node = new CompareTextNode();
+    node.assign({
+      text_a: " Hello ",
+      text_b: "hello",
+      case_sensitive: false,
+      trim_whitespace: true
+    });
+    const result = await node.process();
+    expect(result.output).toBe("equal");
+  });
+
+  it("EqualsTextNode", async () => {
+    const node = new EqualsTextNode();
+    node.assign({ text_a: "a", text_b: "a" });
+    expect((await node.process()).output).toBe(true);
+    node.assign({ text_a: "a", text_b: "b" });
+    expect((await node.process()).output).toBe(false);
+  });
+
+  it("ToUppercaseNode", async () => {
+    const node = new ToUppercaseNode();
+    node.assign({ text: "hello" });
+    expect((await node.process()).output).toBe("HELLO");
+  });
+
+  it("ToLowercaseNode", async () => {
+    const node = new ToLowercaseNode();
+    node.assign({ text: "HELLO" });
+    expect((await node.process()).output).toBe("hello");
+  });
+
+  it("ToTitlecaseNode", async () => {
+    const node = new ToTitlecaseNode();
+    node.assign({ text: "hello world" });
+    expect((await node.process()).output).toBe("Hello World");
+  });
+
+  it("CapitalizeTextNode", async () => {
+    const node = new CapitalizeTextNode();
+    node.assign({ text: "hello" });
+    expect((await node.process()).output).toBe("Hello");
+    node.assign({ text: "" });
+    expect((await node.process()).output).toBe("");
+  });
+
+  it("SliceTextNode step=1", async () => {
+    const node = new SliceTextNode();
+    node.assign({ text: "abcdef", start: 1, stop: 4, step: 1 });
+    expect((await node.process()).output).toBe("bcd");
+  });
+
+  it("SliceTextNode step>1", async () => {
+    const node = new SliceTextNode();
+    node.assign({ text: "abcdef", start: 0, stop: 6, step: 2 });
+    expect((await node.process()).output).toBe("ace");
+  });
+
+  it("SliceTextNode step<0 (reverse)", async () => {
+    const node = new SliceTextNode();
+    // stop=0 is treated as stop=len when effectiveStop logic applies,
+    // so use a negative stop to get actual reverse slice behavior
+    node.assign({ text: "abcdef", start: 4, stop: -6, step: -1 });
+    const result = await node.process();
+    expect(result.output).toBe("edcb");
+  });
+
+  it("SliceTextNode step=0 throws", async () => {
+    const node = new SliceTextNode();
+    node.assign({ text: "abc", start: 0, stop: 3, step: 0 });
+    await expect(node.process()).rejects.toThrow("zero");
+  });
+
+  it("SliceTextNode negative indices", async () => {
+    const node = new SliceTextNode();
+    node.assign({ text: "abcdef", start: -3, stop: -1, step: 1 });
+    const result = await node.process();
+    expect(result.output).toBe("de");
+  });
+
+  it("StartsWithTextNode", async () => {
+    const node = new StartsWithTextNode();
+    node.assign({ text: "hello", prefix: "hel" });
+    expect((await node.process()).output).toBe(true);
+    node.assign({ text: "hello", prefix: "xyz" });
+    expect((await node.process()).output).toBe(false);
+  });
+
+  it("EndsWithTextNode", async () => {
+    const node = new EndsWithTextNode();
+    node.assign({ text: "hello", suffix: "llo" });
+    expect((await node.process()).output).toBe(true);
+  });
+
+  it("ContainsTextNode any/all/none modes", async () => {
+    const node = new ContainsTextNode();
+    node.assign({
+      text: "hello world",
+      search_values: ["hello", "xyz"],
+      match_mode: "any"
+    });
+    expect((await node.process()).output).toBe(true);
+    node.assign({
+      text: "hello world",
+      search_values: ["hello", "xyz"],
+      match_mode: "all"
+    });
+    expect((await node.process()).output).toBe(false);
+    node.assign({
+      text: "hello world",
+      search_values: ["xyz", "abc"],
+      match_mode: "none"
+    });
+    expect((await node.process()).output).toBe(true);
+  });
+
+  it("ContainsTextNode case insensitive", async () => {
+    const node = new ContainsTextNode();
+    node.assign({ text: "Hello", substring: "hello", case_sensitive: false });
+    expect((await node.process()).output).toBe(true);
+  });
+
+  it("ContainsTextNode empty targets", async () => {
+    const node = new ContainsTextNode();
+    node.assign({ text: "hello", search_values: [], substring: "" });
+    expect((await node.process()).output).toBe(false);
+  });
+
+  it("TrimWhitespaceNode both", async () => {
+    const node = new TrimWhitespaceNode();
+    node.assign({ text: "  hello  " });
+    expect((await node.process()).output).toBe("hello");
+  });
+
+  it("TrimWhitespaceNode start only", async () => {
+    const node = new TrimWhitespaceNode();
+    node.assign({ text: "  hello  ", trim_start: true, trim_end: false });
+    expect((await node.process()).output).toBe("hello  ");
+  });
+
+  it("TrimWhitespaceNode end only", async () => {
+    const node = new TrimWhitespaceNode();
+    node.assign({ text: "  hello  ", trim_start: false, trim_end: true });
+    expect((await node.process()).output).toBe("  hello");
+  });
+
+  it("TrimWhitespaceNode neither", async () => {
+    const node = new TrimWhitespaceNode();
+    node.assign({ text: "  hello  ", trim_start: false, trim_end: false });
+    expect((await node.process()).output).toBe("  hello  ");
+  });
+
+  it("CollapseWhitespaceNode preserve newlines", async () => {
+    const node = new CollapseWhitespaceNode();
+    node.assign({ text: "a  b\n\nc", preserve_newlines: true });
+    const result = await node.process();
+    expect(result.output).toContain("\n");
+  });
+
+  it("CollapseWhitespaceNode no preserve, trim=false", async () => {
+    const node = new CollapseWhitespaceNode();
+    node.assign({ text: "  a  b  ", trim_edges: false, replacement: "_" });
+    const result = await node.process();
+    expect(result.output).toBe("_a_b_");
+  });
+
+  it("IsEmptyTextNode", async () => {
+    const node = new IsEmptyTextNode();
+    node.assign({ text: "", trim_whitespace: true });
+    expect((await node.process()).output).toBe(true);
+    node.assign({ text: "  ", trim_whitespace: true });
+    expect((await node.process()).output).toBe(true);
+    node.assign({ text: "  ", trim_whitespace: false });
+    expect((await node.process()).output).toBe(false);
+  });
+
+  it("RemovePunctuationNode", async () => {
+    const node = new RemovePunctuationNode();
+    // Use a simpler punctuation set to avoid regex escaping issues in the source defaults
+    node.assign({ text: "Hello, world!", punctuation: ",!" });
+    const result = await node.process();
+    expect(result.output).toBe("Hello world");
+  });
+
+  it("StripAccentsNode preserve non-ascii", async () => {
+    const node = new StripAccentsNode();
+    node.assign({ text: "cafe\u0301" });
+    expect((await node.process()).output).toBe("cafe");
+  });
+
+  it("StripAccentsNode remove non-ascii", async () => {
+    const node = new StripAccentsNode();
+    node.assign({ text: "cafe\u0301 \u00e9", preserve_non_ascii: false });
+    const result = await node.process();
+    expect(typeof result.output).toBe("string");
+  });
+
+  it("SlugifyNode", async () => {
+    const node = new SlugifyNode();
+    node.assign({ text: "Hello World!" });
+    expect((await node.process()).output).toBe("hello-world");
+  });
+
+  it("SlugifyNode with unicode", async () => {
+    const node = new SlugifyNode();
+    node.assign({ text: "cafe\u0301", allow_unicode: true, lowercase: false });
+    const result = await node.process();
+    expect(typeof result.output).toBe("string");
+  });
+
+  it("HasLengthTextNode exact match", async () => {
+    const node = new HasLengthTextNode();
+    node.assign({ text: "hello", exact_length: 5 });
+    expect((await node.process()).output).toBe(true);
+    node.assign({ text: "hi", exact_length: 5 });
+    expect((await node.process()).output).toBe(false);
+  });
+
+  // Note: lines 733-739 are dead code since Number(x) !== null is always true
+  // The exact_length check at line 730 always returns before min/max checks
+  // We can only test the exact_length branch
+
+  it("TruncateTextNode no truncation needed", async () => {
+    const node = new TruncateTextNode();
+    node.assign({ text: "hi", max_length: 10 });
+    expect((await node.process()).output).toBe("hi");
+  });
+
+  it("TruncateTextNode with ellipsis", async () => {
+    const node = new TruncateTextNode();
+    node.assign({ text: "hello world", max_length: 8, ellipsis: "..." });
+    expect((await node.process()).output).toBe("hello...");
+  });
+
+  it("TruncateTextNode max_length <= 0", async () => {
+    const node = new TruncateTextNode();
+    node.assign({ text: "hello", max_length: 0, ellipsis: "..." });
+    // max_length is a hard cap: nothing fits in 0 characters.
+    expect((await node.process()).output).toBe("");
+  });
+
+  it("TruncateTextNode no ellipsis, truncate", async () => {
+    const node = new TruncateTextNode();
+    node.assign({ text: "hello world", max_length: 5 });
+    expect((await node.process()).output).toBe("hello");
+  });
+
+  it("TruncateTextNode ellipsis longer than max_length", async () => {
+    const node = new TruncateTextNode();
+    node.assign({ text: "hello world", max_length: 2, ellipsis: "..." });
+    // The ellipsis itself is truncated to fit the cap.
+    expect((await node.process()).output).toBe("..");
+  });
+
+  it("PadTextNode right", async () => {
+    const node = new PadTextNode();
+    node.assign({
+      text: "hi",
+      length: 5,
+      pad_character: ".",
+      direction: "right"
+    });
+    expect((await node.process()).output).toBe("hi...");
+  });
+
+  it("PadTextNode left", async () => {
+    const node = new PadTextNode();
+    node.assign({
+      text: "hi",
+      length: 5,
+      pad_character: ".",
+      direction: "left"
+    });
+    expect((await node.process()).output).toBe("...hi");
+  });
+
+  it("PadTextNode both", async () => {
+    const node = new PadTextNode();
+    node.assign({
+      text: "hi",
+      length: 6,
+      pad_character: ".",
+      direction: "both"
+    });
+    expect((await node.process()).output).toBe("..hi..");
+  });
+
+  it("PadTextNode no padding needed", async () => {
+    const node = new PadTextNode();
+    node.assign({ text: "hello", length: 3 });
+    expect((await node.process()).output).toBe("hello");
+  });
+
+  it("PadTextNode invalid pad_character", async () => {
+    const node = new PadTextNode();
+    node.assign({ text: "hi", length: 5, pad_character: "ab" });
+    await expect(node.process()).rejects.toThrow("single character");
+  });
+});
+
+// ============================================================================
+// 4b. TEXT-EXTRA — IndexOfTextNode, AutomaticSpeechRecognitionNode, LoadTextAssetsNode
+// ============================================================================
+
+describe("IndexOfTextNode", () => {
+  it("finds substring at correct index", async () => {
+    const node = new IndexOfTextNode();
+    node.assign({ text: "hello world", substring: "world", end_index: 11 });
+    const result = await node.process();
+    expect(result.output).toBe(6);
+  });
+
+  it("returns -1 when substring not found", async () => {
+    const node = new IndexOfTextNode();
+    node.assign({ text: "hello world", substring: "xyz", end_index: 11 });
+    const result = await node.process();
+    expect(result.output).toBe(-1);
+  });
+
+  it("case insensitive search", async () => {
+    const node = new IndexOfTextNode();
+    node.assign({
+      text: "Hello World",
+      substring: "hello",
+      case_sensitive: false,
+      end_index: 11
+    });
+    const result = await node.process();
+    expect(result.output).toBe(0);
+  });
+
+  it("case sensitive search misses different case", async () => {
+    const node = new IndexOfTextNode();
+    node.assign({
+      text: "Hello World",
+      substring: "hello",
+      case_sensitive: true,
+      end_index: 11
+    });
+    const result = await node.process();
+    expect(result.output).toBe(-1);
+  });
+
+  it("search with start_index and end_index", async () => {
+    const node = new IndexOfTextNode();
+    node.assign({
+      text: "abcabc",
+      substring: "abc",
+      start_index: 1,
+      end_index: 6
+    });
+    const result = await node.process();
+    expect(result.output).toBe(3);
+  });
+
+  it("search_from_end finds last occurrence", async () => {
+    const node = new IndexOfTextNode();
+    node.assign({
+      text: "abcabc",
+      substring: "abc",
+      search_from_end: true,
+      end_index: 6
+    });
+    const result = await node.process();
+    expect(result.output).toBe(3);
+  });
+
+  it("default end_index 0 searches full text", async () => {
+    const node = new IndexOfTextNode();
+    node.assign({ text: "hello", substring: "hello" });
+    const result = await node.process();
+    // end_index defaults to 0, which means search the full text
+    expect(result.output).toBe(0);
+  });
+});
+
+describe("AutomaticSpeechRecognitionNode", () => {
+  it("throws without provider context and audio", async () => {
+    const node = new AutomaticSpeechRecognitionNode();
+    node.assign({
+      model: {
+        type: "asr_model",
+        provider: "fal_ai",
+        id: "openai/whisper-large-v3"
+      },
+      audio: { type: "audio", uri: "", data: null }
+    });
+    await expect(node.process()).rejects.toThrow(
+      "AutomaticSpeechRecognition requires a provider-backed model and audio input."
+    );
+  });
+
+  it("calls runProviderPrediction with base64 audio data", async () => {
+    const node = new AutomaticSpeechRecognitionNode();
+    const base64Audio = Buffer.from("fake audio data").toString("base64");
+    node.assign({
+      model: {
+        type: "asr_model",
+        provider: "fal_ai",
+        id: "openai/whisper-large-v3"
+      },
+      audio: { type: "audio", uri: "", data: base64Audio }
+    });
+    const mockContext = {
+      runProviderPrediction: vi.fn().mockResolvedValue("transcribed text")
+    };
+    const result = await node.process(mockContext as any);
+    expect(result.text).toBe("transcribed text");
+    expect(result.output).toBe("transcribed text");
+    expect(mockContext.runProviderPrediction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "fal_ai",
+        capability: "automatic_speech_recognition",
+        model: "openai/whisper-large-v3"
+      })
+    );
+  });
+
+  it("reads audio from Uint8Array data", async () => {
+    const node = new AutomaticSpeechRecognitionNode();
+    node.assign({
+      model: {
+        type: "asr_model",
+        provider: "fal_ai",
+        id: "openai/whisper-large-v3"
+      },
+      audio: { type: "audio", uri: "", data: new Uint8Array([1, 2, 3]) }
+    });
+    const mockContext = {
+      runProviderPrediction: vi.fn().mockResolvedValue("hello world")
+    };
+    const result = await node.process(mockContext as any);
+    expect(result.text).toBe("hello world");
+  });
+
+  it("throws when no audio bytes provided even with context", async () => {
+    const node = new AutomaticSpeechRecognitionNode();
+    node.assign({
+      model: {
+        type: "asr_model",
+        provider: "fal_ai",
+        id: "openai/whisper-large-v3"
+      },
+      audio: { type: "audio", uri: "", data: null }
+    });
+    const mockContext = {
+      runProviderPrediction: vi.fn()
+    };
+    await expect(node.process(mockContext as any)).rejects.toThrow(
+      "AutomaticSpeechRecognition requires a provider-backed model and audio input."
+    );
+  });
+});
+
+describe("LoadTextAssetsNode", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "load-text-assets-"));
+    await fs.writeFile(path.join(tmpDir, "file1.txt"), "content one");
+    await fs.writeFile(path.join(tmpDir, "file2.txt"), "content two");
+    await fs.writeFile(path.join(tmpDir, "ignore.bin"), "binary data");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("process() returns first file and lists", async () => {
+    const node = new LoadTextAssetsNode();
+    node.assign({ folder: { type: "folder", uri: "", path: tmpDir } });
+    const result = await node.process();
+    expect(result.text).toBeDefined();
+    expect(Array.isArray(result.texts)).toBe(true);
+  });
+
+  it("genProcess yields text files from folder", async () => {
+    const node = new LoadTextAssetsNode();
+    node.assign({ folder: { type: "folder", uri: "", path: tmpDir } });
+    const items: Record<string, unknown>[] = [];
+    for await (const item of node.genProcess()) {
+      items.push(item);
+    }
+    // 2 files + 1 final list yield
+    expect(items.length).toBe(3);
+    const texts = items.filter((i) => i.text).map((i) => i.text).sort();
+    expect(texts).toEqual(["content one", "content two"]);
+  });
+
+  it("genProcess throws on empty folder", async () => {
+    const node = new LoadTextAssetsNode();
+    node.assign({ folder: "" });
+    const gen = node.genProcess();
+    await expect(gen.next()).rejects.toThrow("folder cannot be empty");
+  });
+});
+
+describe("LoadTextFolderNode", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "load-text-folder-"));
+    await fs.writeFile(path.join(tmpDir, "a.txt"), "alpha");
+    await fs.writeFile(path.join(tmpDir, "b.md"), "bravo");
+    await fs.writeFile(path.join(tmpDir, "c.png"), "not text");
+    await fs.mkdir(path.join(tmpDir, "sub"));
+    await fs.writeFile(path.join(tmpDir, "sub", "d.txt"), "delta");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("yields only matching extensions", async () => {
+    const node = new LoadTextFolderNode();
+    node.assign({
+      folder: tmpDir,
+      extensions: [".txt"],
+      include_subdirectories: false
+    });
+    const items: { text: string; path: string }[] = [];
+    for await (const item of node.genProcess()) {
+      if ("texts" in item) continue; // skip final list yield
+      items.push(item as { text: string; path: string });
+    }
+    expect(items.length).toBe(1);
+    expect(items[0].text).toBe("alpha");
+  });
+
+  it("includes subdirectories when enabled", async () => {
+    const node = new LoadTextFolderNode();
+    node.assign({
+      folder: tmpDir,
+      extensions: [".txt"],
+      include_subdirectories: true
+    });
+    const items: { text: string; path: string }[] = [];
+    for await (const item of node.genProcess()) {
+      if ("texts" in item) continue; // skip final list yield
+      items.push(item as { text: string; path: string });
+    }
+    expect(items.length).toBe(2);
+    const texts = items.map((i) => i.text).sort();
+    expect(texts).toEqual(["alpha", "delta"]);
+  });
+
+  it("throws on empty folder", async () => {
+    const node = new LoadTextFolderNode();
+    node.assign({ folder: "" });
+    const gen = node.genProcess();
+    await expect(gen.next()).rejects.toThrow("folder cannot be empty");
+  });
+});
+
+// ============================================================================
+// 5. DATA — remaining uncovered lines
+// ============================================================================
+
+import * as dataModule from "@nodetool-ai/data-nodes";
+
+describe("data.ts uncovered lines", () => {
+  it("asRows returns [] for non-object, non-array input (line 17-18)", async () => {
+    const node = new dataModule.FilterDataframeNode();
+    // df as a number (not object/array) => asRows returns []
+    node.assign({ df: 42, condition: "" });
+    const result = await node.process();
+    expect((result.output as any).rows).toEqual([]);
+  });
+
+  it("asRows with obj.rows path", async () => {
+    const node = new dataModule.FilterDataframeNode();
+    node.assign({
+      df: { rows: [{ a: 1 }] },
+      condition: ""
+    });
+    const result = await node.process();
+    expect((result.output as any).rows).toEqual([{ a: 1 }]);
+  });
+
+  it("asRows with obj.data path", async () => {
+    const node = new dataModule.FilterDataframeNode();
+    node.assign({
+      df: { data: [{ b: 2 }] },
+      condition: ""
+    });
+    const result = await node.process();
+    expect((result.output as any).rows).toEqual([{ b: 2 }]);
+  });
+
+  it("applyFilter surfaces invalid conditions instead of silently returning empty", async () => {
+    const node = new dataModule.FilterDataframeNode();
+    // An unparseable condition must throw rather than be swallowed to an
+    // empty result (which previously hid filter typos as "no matches").
+    node.assign({
+      df: [{ a: 1 }, { b: 2 }],
+      condition: "throw new Error('boom')"
+    });
+    await expect(node.process()).rejects.toThrow();
+  });
+
+  it("LoadCSVURLNode (lines 211-218)", async () => {
+    const node = new dataModule.LoadCSVURLNode();
+    // Mock fetch
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        text: vi.fn().mockResolvedValue("name,age\nAlice,30\nBob,25")
+      })
+    );
+    node.assign({ url: "http://example.com/data.csv" });
+    const result = await node.process();
+    expect((result.output as any).rows.length).toBe(2);
+    vi.unstubAllGlobals();
+  });
+
+  it("LoadCSVURLNode fetch error", async () => {
+    const node = new dataModule.LoadCSVURLNode();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404
+      })
+    );
+    node.assign({ url: "http://example.com/missing.csv" });
+    await expect(node.process()).rejects.toThrow("404");
+    vi.unstubAllGlobals();
+  });
+
+  it("FromListNode non-array values (line 250)", async () => {
+    const node = new dataModule.FromListNode();
+    // assign coerces scalar string into ["not-array"] for list[any] prop,
+    // so process() sees a single non-dict element and throws
+    node.assign({ values: "not-array" });
+    await expect(node.process()).rejects.toThrow("List must contain dicts.");
+  });
+
+  it("AddColumnNode non-array values (line 361)", async () => {
+    const node = new dataModule.AddColumnNode();
+    node.assign({
+      dataframe: [{ a: 1 }],
+      column_name: "b",
+      values: "not-array"
+    });
+    const result = await node.process();
+    // assign coerces scalar string into ["not-array"] for list[any] prop,
+    // so values[0] = "not-array" and is added as the column value
+    expect((result.output as any).rows[0].b).toBe("not-array");
+  });
+
+  it("ForEachRowNode.process returns empty (line 549-550)", async () => {
+    const node = new dataModule.ForEachRowNode();
+    expect(await node.process()).toEqual({});
+  });
+
+  it("ForEachRowNode.genProcess streams rows", async () => {
+    const node = new dataModule.ForEachRowNode();
+    const results: any[] = [];
+    node.assign({ dataframe: [{ x: 1 }, { x: 2 }] });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(results.length).toBe(2);
+    expect(results[0].index).toBe(0);
+    expect(results[1].index).toBe(1);
+  });
+
+  it("LoadCSVAssetsNode.process returns empty (line 570-571)", async () => {
+    const emptyDir = await fs.mkdtemp(path.join(os.tmpdir(), "csv-empty-"));
+    try {
+      const node = new dataModule.LoadCSVAssetsNode();
+      node.assign({ folder: emptyDir });
+      const result = await node.process();
+      expect(result).toMatchObject({ dataframes: [], names: [] });
+    } finally {
+      await fs.rm(emptyDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("LoadCSVAssetsNode.genProcess streams CSV files", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "csv-test-"));
+    try {
+      await fs.writeFile(path.join(tmpDir, "a.csv"), "col1,col2\n1,2\n3,4");
+      await fs.writeFile(path.join(tmpDir, "b.txt"), "not csv");
+      await fs.mkdir(path.join(tmpDir, "subdir"));
+      const node = new dataModule.LoadCSVAssetsNode();
+      const results: any[] = [];
+      node.assign({ folder: tmpDir });
+      for await (const item of node.genProcess()) {
+        if ("dataframes" in item) continue; // skip final list yield
+        results.push(item);
+      }
+      expect(results.length).toBe(1);
+      expect(results[0].name).toBe("a.csv");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
+// ============================================================================
+// 6. DOCUMENT — remaining uncovered lines
+// ============================================================================
+
+import {
+  LoadDocumentFileNode,
+  SaveDocumentFileNode,
+  ListDocumentsNode,
+  SplitDocumentNode,
+  SplitHTMLNode,
+  SplitJSONNode,
+  SplitRecursivelyNode,
+  SplitMarkdownNode
+} from "@nodetool-ai/document-nodes";
+
+describe("document.ts uncovered lines", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "doc-test-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("readDocumentText with string path (line 37-38)", async () => {
+    await fs.writeFile(path.join(tmpDir, "test.txt"), "hello from file");
+    const node = new SplitDocumentNode();
+    const results: any[] = [];
+    node.assign({ document: path.join(tmpDir, "test.txt") });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].chunk).toContain("hello from file");
+  });
+
+  it("readDocumentText with file:// uri (line 47-48)", async () => {
+    await fs.writeFile(path.join(tmpDir, "uri.txt"), "from uri");
+    const node = new SplitDocumentNode();
+    const results: any[] = [];
+    node.assign({
+      document: { uri: `file://${path.join(tmpDir, "uri.txt")}` }
+    });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(results[0].chunk).toContain("from uri");
+  });
+
+  it("readDocumentText with data bytes (line 43-45)", async () => {
+    const node = new SplitDocumentNode();
+    const data = Buffer.from("binary doc text").toString("base64");
+    const results: any[] = [];
+    node.assign({
+      document: { data }
+    });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(results[0].chunk).toContain("binary doc text");
+  });
+
+  it("readDocumentText with empty/unknown returns empty (line 51)", async () => {
+    const node = new SplitDocumentNode();
+    const results: any[] = [];
+    node.assign({ document: {} });
+    for await (const item of node.genProcess()) {
+      if ("chunks" in item) continue; // skip final list yield
+      results.push(item);
+    }
+    expect(results.length).toBe(0);
+  });
+
+  it("readDocumentText with non-object returns empty", async () => {
+    const node = new SplitDocumentNode();
+    const results: any[] = [];
+    node.assign({ document: 42 });
+    for await (const item of node.genProcess()) {
+      if ("chunks" in item) continue; // skip final list yield
+      results.push(item);
+    }
+    expect(results.length).toBe(0);
+  });
+
+  it("streaming node process() returns collected lists (lines 114, 153, 177, 202, 233, 259)", async () => {
+    const listDocsNode = new ListDocumentsNode();
+    listDocsNode.assign({ folder: tmpDir });
+    const listDocsResult = await listDocsNode.process();
+    expect(listDocsResult).toHaveProperty("documents");
+    const splitDocResult = await new SplitDocumentNode().process();
+    expect(splitDocResult).toHaveProperty("chunks");
+    expect(Array.isArray(splitDocResult.chunks)).toBe(true);
+    const splitHtmlResult = await new SplitHTMLNode().process();
+    expect(splitHtmlResult).toHaveProperty("chunks");
+    expect(Array.isArray(splitHtmlResult.chunks)).toBe(true);
+    const splitJsonResult = await new SplitJSONNode().process();
+    expect(splitJsonResult).toHaveProperty("chunks");
+    expect(Array.isArray(splitJsonResult.chunks)).toBe(true);
+    const splitRecResult = await new SplitRecursivelyNode().process();
+    expect(splitRecResult).toHaveProperty("chunks");
+    expect(Array.isArray(splitRecResult.chunks)).toBe(true);
+    const splitMdResult = await new SplitMarkdownNode().process();
+    expect(splitMdResult).toHaveProperty("chunks");
+    expect(Array.isArray(splitMdResult.chunks)).toBe(true);
+  });
+
+  it("ListDocumentsNode streams document files", async () => {
+    await fs.writeFile(path.join(tmpDir, "a.txt"), "text");
+    await fs.writeFile(path.join(tmpDir, "b.pdf"), "pdf");
+    await fs.writeFile(path.join(tmpDir, "c.xyz"), "unknown");
+    const node = new ListDocumentsNode();
+    const results: any[] = [];
+    node.assign({ folder: tmpDir });
+    for await (const item of node.genProcess()) {
+      if ("documents" in item) continue; // skip final list yield
+      results.push(item);
+    }
+    expect(results.length).toBe(2); // .txt and .pdf
+  });
+
+  it("ListDocumentsNode recursive", async () => {
+    await fs.mkdir(path.join(tmpDir, "sub"));
+    await fs.writeFile(path.join(tmpDir, "sub", "deep.md"), "markdown");
+    const node = new ListDocumentsNode();
+    const results: any[] = [];
+    node.assign({ folder: tmpDir, recursive: true });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(
+      results.some((r) => (r.document?.uri as string)?.includes("deep.md"))
+    ).toBe(true);
+  });
+
+  it("SplitHTMLNode strips tags", async () => {
+    const node = new SplitHTMLNode();
+    const results: any[] = [];
+    node.assign({
+      document: { text: "<p>Hello</p><p>World</p>" }
+    });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(results[0].chunk).toContain("Hello");
+    expect(results[0].chunk).not.toContain("<p>");
+  });
+
+  it("SplitJSONNode with valid JSON", async () => {
+    const node = new SplitJSONNode();
+    const results: any[] = [];
+    node.assign({
+      document: { text: '{"key":"value"}' }
+    });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(results[0].chunk).toContain("key");
+  });
+
+  it("SplitJSONNode with invalid JSON", async () => {
+    const node = new SplitJSONNode();
+    const results: any[] = [];
+    node.assign({
+      document: { text: "not json {" }
+    });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(results[0].chunk).toContain("not json");
+  });
+
+  it("SplitRecursivelyNode", async () => {
+    const node = new SplitRecursivelyNode();
+    const results: any[] = [];
+    node.assign({
+      document: { text: "Para one.\n\nPara two.\n\nPara three." }
+    });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it("SplitMarkdownNode", async () => {
+    const node = new SplitMarkdownNode();
+    const results: any[] = [];
+    node.assign({
+      document: { text: "# Heading\nContent here\n# Another\nMore content" },
+      chunk_size: 20
+    });
+    for await (const item of node.genProcess()) {
+      results.push(item);
+    }
+    expect(results.length).toBeGreaterThan(0);
+  });
+});
+

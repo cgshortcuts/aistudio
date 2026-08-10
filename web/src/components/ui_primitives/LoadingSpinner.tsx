@@ -1,0 +1,135 @@
+/** @jsxImportSource @emotion/react */
+import React from "react";
+import { css, keyframes } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { Box, CircularProgress, Typography } from "@mui/material";
+import { reducedMotion } from "./tokens";
+
+const pulse = keyframes`
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.3;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+`;
+
+const styles = (theme: Theme, size: string) =>
+  css({
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing(1),
+    
+    ".dots-container": {
+      display: "flex",
+      gap: size === "small" ? 4 : size === "large" ? 8 : 6
+    },
+    ".dot": {
+      width: size === "small" ? 6 : size === "large" ? 12 : 8,
+      height: size === "small" ? 6 : size === "large" ? 12 : 8,
+      borderRadius: theme.rounded?.circle ?? "50%",
+      backgroundColor: theme.vars?.palette?.primary?.main ?? theme.palette.primary.main,
+      animation: `${pulse} 1.4s infinite ease-in-out`,
+      "&:nth-of-type(1)": { animationDelay: "-0.32s" },
+      "&:nth-of-type(2)": { animationDelay: "-0.16s" },
+      "&:nth-of-type(3)": { animationDelay: "0s" },
+      ...reducedMotion({ animation: "none", opacity: 0.6 })
+    },
+    ".loading-text": {
+      color: theme.vars?.palette?.text?.secondary ?? theme.palette.text.secondary,
+      fontSize: size === "small" ? 12 : size === "large" ? 16 : 14
+    }
+  });
+
+export type LoadingVariant = "circular" | "dots";
+
+export interface LoadingSpinnerProps {
+  /** Loading variant */
+  variant?: LoadingVariant;
+  /** Size of the spinner. Preset strings map to fixed pixel sizes; a number
+   * overrides the preset (useful for inline spinners inside buttons, e.g. 16). */
+  size?: "small" | "medium" | "large" | number;
+  /** Optional loading text */
+  text?: string;
+  /** Color override */
+  color?: "primary" | "secondary" | "inherit";
+  /** Render just the spinner without the centered wrapper/role, for use inside
+   * buttons, chips, or other inline contexts. */
+  inline?: boolean;
+  /** CircularProgress stroke thickness (defaults to MUI default). */
+  thickness?: number;
+  /** Custom class name */
+  className?: string;
+}
+
+export const LoadingSpinner: React.FC<LoadingSpinnerProps> = ({
+  variant = "circular",
+  size = "medium",
+  text,
+  color = "primary",
+  inline = false,
+  thickness,
+  className
+}) => {
+  const theme = useTheme();
+
+  const circularSize =
+    typeof size === "number"
+      ? size
+      : size === "small"
+        ? 20
+        : size === "large"
+          ? 48
+          : 32;
+  const sizePreset = typeof size === "number" ? "small" : size;
+
+  const renderContent = () => {
+    switch (variant) {
+      case "dots":
+        return (
+          <Box className="dots-container">
+            <span className="dot" />
+            <span className="dot" />
+            <span className="dot" />
+          </Box>
+        );
+      case "circular":
+      default:
+        return (
+          <CircularProgress
+            size={circularSize}
+            color={color}
+            thickness={thickness}
+          />
+        );
+    }
+  };
+
+  if (inline) {
+    return renderContent();
+  }
+
+  return (
+    <Box
+      css={styles(theme, sizePreset)}
+      className={`loading-spinner ${className || ""}`}
+      role="status"
+      aria-live="polite"
+      aria-label={text || "Loading"}
+    >
+      {renderContent()}
+      {text && (
+        <Typography className="loading-text" variant="body2">
+          {text}
+        </Typography>
+      )}
+    </Box>
+  );
+};
+
+export default LoadingSpinner;

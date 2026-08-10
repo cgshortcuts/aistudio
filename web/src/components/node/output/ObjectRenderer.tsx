@@ -1,0 +1,77 @@
+/** @jsxImportSource @emotion/react */
+import React, { memo, useMemo } from "react";
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { Text, Box, BORDER_RADIUS } from "../../ui_primitives";
+import isEqual from "../../../utils/isEqual";
+
+const objectStyles = (theme: Theme) =>
+  css({
+    "&": {
+      width: "100%",
+      display: "flex",
+      flexDirection: "column",
+      gap: "0.5em"
+    },
+    ".object-entry": {
+      display: "flex",
+      flexDirection: "column",
+      gap: "0.25em",
+      padding: "0.5em",
+      borderRadius: BORDER_RADIUS.md,
+      backgroundColor: theme.vars.palette.action.hover,
+      "&:last-child": {
+        marginBottom: 0
+      }
+    },
+    ".object-key": {
+      fontSize: theme.vars.fontSizeSmaller,
+      fontWeight: 600,
+      color: theme.vars.palette.primary.main,
+      textTransform: "capitalize",
+      letterSpacing: "0.02em"
+    },
+    ".object-value": {
+      width: "100%"
+    }
+  });
+
+interface ObjectRendererProps {
+  value: Record<string, unknown>;
+  renderValue: (value: unknown, key: string) => React.ReactNode;
+}
+
+const ObjectRenderer: React.FC<ObjectRendererProps> = ({
+  value,
+  renderValue
+}) => {
+  const theme = useTheme();
+  const cssStyles = useMemo(() => objectStyles(theme), [theme]);
+  const entries = Object.entries(value);
+
+  if (entries.length === 0) {
+    return null;
+  }
+
+  // For single-key objects, render the value directly without the wrapper
+  if (entries.length === 1) {
+    const [key, val] = entries[0];
+    return <>{renderValue(val, key)}</>;
+  }
+
+  return (
+    <Box css={cssStyles} className="object-renderer nodrag">
+      {entries.map(([key, val]) => (
+        <Box key={key} className="object-entry">
+          <Text className="object-key" component="span">
+            {key.replace(/_/g, " ")}
+          </Text>
+          <Box className="object-value">{renderValue(val, key)}</Box>
+        </Box>
+      ))}
+    </Box>
+  );
+};
+
+export default memo(ObjectRenderer, isEqual);

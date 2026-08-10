@@ -1,0 +1,108 @@
+/* NODE STATE STYLES (selection, hover, loading, bypassed) */
+
+/* --------------------------------------------- */
+/* Selection and highlighting                     */
+/* --------------------------------------------- */
+.react-flow__node.selected {
+  outline-color: var(
+    --node-primary-color,
+    var(--palette-text-primary)
+  ) !important;
+  /* box-shadow instead of filter: drop-shadow(...) — filter forces the node's
+     paint through the filter pipeline and re-rasterizes the blur region on
+     every repaint (every drag frame while selected). box-shadow is composited
+     without re-rasterizing the node content. */
+  box-shadow:
+    0 0 10px
+      color-mix(
+        in srgb,
+        var(--node-primary-color, var(--palette-primary-main)) 22%,
+        transparent
+      ),
+    0 14px 24px rgb(0 0 0 / 0.18);
+}
+
+.react-flow__node:not(.selected) {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+  outline: 1px solid var(--palette-divider);
+  outline-offset: 0;
+}
+
+/* Grouped nodes: use group header color for outline */
+.react-flow__node:has(.node-header.has-parent):not(.selected) {
+  outline-color: var(--c_node_header_bg_group) !important;
+  outline-color: color-mix(
+    in srgb,
+    var(--c_node_header_bg_group) 82%,
+    var(--palette-primary-main) 18%
+  ) !important;
+}
+
+/* --------------------------------------------- */
+/* Bypassed state                                  */
+/* --------------------------------------------- */
+.react-flow__node.bypassed {
+  opacity: 0.8;
+  filter: saturate(0.2);
+}
+
+.react-flow__node.bypassed .base-node {
+  border-style: dashed !important;
+  border-width: 2px !important;
+  background: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 5px,
+    rgba(180, 180, 180, 0.1) 5px,
+    rgba(180, 180, 180, 0.1) 10px
+  );
+}
+
+.react-flow__node.bypassed .node-header .node-title {
+  opacity: 0.8;
+}
+
+.react-flow__node.bypassed .bypass-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fontSizeSmaller);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding: var(--spacing-micro) var(--spacing-sm);
+  border-radius: var(--rounded-sm);
+  background-color: var(--c_warn, rgba(255, 152, 0, 0.2));
+  color: var(--palette-warning-main, rgb(255, 152, 0));
+  margin-left: var(--spacing-md);
+}
+
+/* Edges from bypassed nodes */
+.react-flow__edge.from-bypassed path {
+  stroke-dasharray: 5, 5;
+  opacity: 0.5;
+}
+
+/* --------------------------------------------- */
+/* Loading states                                  */
+/* --------------------------------------------- */
+.react-flow .selected .process-timer {
+  color: var(--palette-grey-1000);
+  background-color: transparent;
+}
+
+/* Loading styles are handled by Emotion in BaseNode.tsx
+   The animation uses dynamic colors from node metadata and requires
+   mask properties for the ring effect that are better expressed in JS */
+
+/* --------------------------------------------- */
+/* Reduced motion support                         */
+/* --------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__node {
+    transition: none !important;
+  }
+  .react-flow__node.selected {
+    filter: none;
+  }
+}

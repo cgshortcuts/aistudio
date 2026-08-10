@@ -1,0 +1,262 @@
+/** @jsxImportSource @emotion/react */
+/**
+ * Dialog
+ *
+ * A standardized dialog component that wraps MUI Dialog with consistent styling.
+ * Provides a foundation for building modal dialogs with optional action buttons.
+ *
+ * @example
+ * // Basic dialog
+ * <Dialog
+ *   open={open}
+ *   onClose={handleClose}
+ *   title="Dialog Title"
+ * >
+ *   <DialogContent>
+ *     Your content here
+ *   </DialogContent>
+ * </Dialog>
+ *
+ * @example
+ * // Dialog with action buttons
+ * <Dialog
+ *   open={open}
+ *   onClose={handleClose}
+ *   title="Confirm Action"
+ *   onConfirm={handleConfirm}
+ *   confirmText="Save"
+ *   cancelText="Cancel"
+ * >
+ *   <DialogContent>
+ *     Are you sure you want to continue?
+ *   </DialogContent>
+ * </Dialog>
+ */
+
+import React, { forwardRef, memo, ReactNode, useId } from "react";
+import {
+  Dialog as MuiDialog,
+  DialogProps as MuiDialogProps,
+  DialogTitle,
+  DialogContent,
+  DialogActions as MuiDialogActions
+} from "@mui/material";
+import { useTheme } from "@mui/material/styles";
+import dialogStyles from "../../styles/DialogStyles";
+import {
+  DialogActionButtons,
+  DialogActionButtonsProps
+} from "./DialogActionButtons";
+import { CloseButton } from "./CloseButton";
+import PanelHeadline from "../ui/PanelHeadline";
+
+export interface DialogProps extends Omit<MuiDialogProps, "title" | "content"> {
+  /**
+   * Dialog title text
+   */
+  title?: ReactNode;
+  /**
+   * Dialog content (can also be passed as children)
+   */
+  content?: ReactNode;
+  /**
+   * Whether to show action buttons
+   * @default false
+   */
+  showActions?: boolean;
+  /**
+   * Callback when confirm button is clicked (enables action buttons)
+   */
+  onConfirm?: () => void;
+  /**
+   * Callback when cancel button is clicked (uses onClose if not provided)
+   */
+  onCancel?: () => void;
+  /**
+   * Text for the confirm button
+   * @default "Confirm"
+   */
+  confirmText?: string;
+  /**
+   * Text for the cancel button
+   * @default "Cancel"
+   */
+  cancelText?: string;
+  /**
+   * Whether the confirm action is loading
+   * @default false
+   */
+  isLoading?: boolean;
+  /**
+   * Whether the confirm button is disabled
+   * @default false
+   */
+  confirmDisabled?: boolean;
+  /**
+   * Whether the cancel button is disabled
+   * @default false
+   */
+  cancelDisabled?: boolean;
+  /**
+   * Variant for destructive actions (delete, remove)
+   * @default false
+   */
+  destructive?: boolean;
+  /**
+   * Additional props for DialogActionButtons
+   */
+  actionButtonsProps?: Partial<DialogActionButtonsProps>;
+  /**
+   * Custom action buttons rendered in a DialogActions footer.
+   * Takes precedence over the built-in confirm/cancel buttons.
+   */
+  actions?: ReactNode;
+  /**
+   * Minimum width for the dialog
+   * @default "400px"
+   */
+  minWidth?: string | number;
+  /**
+   * Show a close (X) button in the title bar.
+   * Defaults to true when both `title` and `onClose` are provided.
+   */
+  showCloseButton?: boolean;
+  /**
+   * Extra content rendered in the title bar next to the close button.
+   */
+  titleActions?: ReactNode;
+}
+
+/**
+ * Standardized dialog component with consistent styling and optional action buttons.
+ * Wraps MUI Dialog and integrates with DialogActionButtons for a unified experience.
+ */
+export const Dialog = memo(
+  forwardRef<HTMLDivElement, DialogProps>(
+    (
+      {
+        open,
+        onClose,
+        title,
+        content,
+        children,
+        actions,
+        showActions,
+        onConfirm,
+        onCancel,
+        confirmText,
+        cancelText,
+        isLoading,
+        confirmDisabled,
+        cancelDisabled,
+        destructive,
+        actionButtonsProps,
+        minWidth,
+        className,
+        showCloseButton,
+        titleActions,
+        ...dialogProps
+      },
+      ref
+    ) => {
+      const theme = useTheme();
+      const titleId = useId();
+
+      const shouldShowActions = showActions || !!onConfirm;
+
+      const handleCancel = () => {
+        if (onCancel) {
+          onCancel();
+        } else if (onClose) {
+          onClose({}, "escapeKeyDown");
+        }
+      };
+
+      const dialogContent = content || children;
+      const shouldShowCloseButton = showCloseButton ?? (!!title && !!onClose);
+      const closeAction =
+        shouldShowCloseButton && onClose ? (
+          <CloseButton
+            onClick={() => onClose({}, "escapeKeyDown")}
+            tooltip="Close"
+          />
+        ) : null;
+      const headerActions =
+        titleActions || closeAction ? (
+          <>
+            {titleActions}
+            {closeAction}
+          </>
+        ) : null;
+      const titleIsString = typeof title === "string";
+      const glass = theme.vars.palette.glass ?? {
+        blur: "blur(12px)",
+        backgroundDialog: theme.vars.palette.action.disabledBackground
+      };
+      const borderRadius = theme.rounded?.xxl ?? theme.shape.borderRadius;
+
+      return (
+        <MuiDialog
+          ref={ref}
+          open={open}
+          onClose={onClose}
+          css={dialogStyles(theme)}
+          className={`dialog ${className ?? ""}`}
+          aria-labelledby={title ? titleId : undefined}
+          slotProps={{
+            backdrop: {
+              style: {
+                backdropFilter: glass.blur,
+                backgroundColor: glass.backgroundDialog
+              }
+            },
+            paper: {
+              style: {
+                borderRadius,
+                background: theme.vars.palette.background.paper,
+                backdropFilter: `${glass.blur} saturate(180%)`,
+                border: `1px solid ${theme.vars.palette.divider}`,
+                minWidth: minWidth ?? "min(400px, 100vw - 32px)"
+              }
+            }
+          }}
+          {...dialogProps}
+        >
+          {title && (
+            <DialogTitle className="dialog-title" id={titleId}>
+              {titleIsString ? (
+                <PanelHeadline
+                  title={title as string}
+                  actions={headerActions}
+                />
+              ) : (
+                title
+              )}
+            </DialogTitle>
+          )}
+          {dialogContent && (
+            <DialogContent className="dialog-content">
+              {dialogContent}
+            </DialogContent>
+          )}
+          {actions && <MuiDialogActions>{actions}</MuiDialogActions>}
+          {!actions && shouldShowActions && onConfirm && (
+            <DialogActionButtons
+              onConfirm={onConfirm}
+              onCancel={handleCancel}
+              confirmText={confirmText}
+              cancelText={cancelText}
+              isLoading={isLoading}
+              confirmDisabled={confirmDisabled}
+              cancelDisabled={cancelDisabled}
+              destructive={destructive}
+              {...actionButtonsProps}
+            />
+          )}
+        </MuiDialog>
+      );
+    }
+  )
+);
+
+Dialog.displayName = "Dialog";

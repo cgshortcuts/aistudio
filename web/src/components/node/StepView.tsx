@@ -1,0 +1,138 @@
+/** @jsxImportSource @emotion/react */
+import React, { memo, useMemo } from "react";
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import {
+  Text,
+  LoadingSpinner,
+  Surface,
+  FlexRow,
+  MOTION,
+  BORDER_RADIUS,
+  SPACING,
+  getSpacingPx,
+  reducedMotion
+} from "../ui_primitives";
+import CheckCircleRoundedIcon from "@mui/icons-material/CheckCircleRounded";
+import RadioButtonUncheckedRoundedIcon from "@mui/icons-material/RadioButtonUncheckedRounded";
+import { Step } from "../../stores/ApiTypes";
+
+const styles = (theme: Theme) =>
+  css({
+    ".step-item": {
+      padding: "0.85rem 1rem",
+      borderRadius: BORDER_RADIUS.lg,
+      backgroundColor: theme.vars.palette.action.hover,
+      border: `1px solid ${theme.vars.palette.grey[800]}44`,
+      transition: MOTION.all,
+      position: "relative",
+      overflow: "hidden",
+      "&:hover": {
+        backgroundColor: theme.vars.palette.action.selected,
+        borderColor: theme.vars.palette.grey[700]
+      },
+      "&.running": {
+        backgroundColor: `rgba(25, 30, 40, 0.5)`,
+        borderColor: `${theme.vars.palette.primary.main}44`,
+        boxShadow: `0 0 15px ${theme.vars.palette.primary.main}11`
+      },
+      "&.completed": {
+        backgroundColor: `rgba(20, 25, 20, 0.3)`,
+        borderColor: `${theme.vars.palette.success.main}22`
+      }
+    },
+    ".step-content": {
+      display: "flex",
+      alignItems: "flex-start",
+      gap: "0.85rem"
+    },
+    ".step-status-icon": {
+      marginTop: getSpacingPx(SPACING.micro),
+      color: theme.vars.palette.grey[600],
+      fontSize: "var(--fontSizeBig)",
+      flexShrink: 0
+    },
+    ".step-completed-icon": {
+      color: theme.vars.palette.success.main,
+      filter: `drop-shadow(0 0 2px ${theme.vars.palette.success.main}66)`
+    },
+    ".step-running-spinner": {
+      color: theme.vars.palette.primary.main
+    },
+    ".step-text": {
+      fontSize: "var(--fontSizeNormal)",
+      lineHeight: "1.5",
+      color: theme.vars.palette.grey[300],
+      transition: `color ${MOTION.normal}`
+    },
+    ".step-text.completed": {
+      color: theme.vars.palette.grey[500],
+      textDecoration: "line-through",
+      opacity: 0.8
+    },
+    "@keyframes shine": {
+      "0%": { backgroundPosition: "200% center" },
+      "100%": { backgroundPosition: "-200% center" }
+    },
+    ".shine-effect": {
+      background: `linear-gradient(90deg, ${theme.vars.palette.grey[300]} 0%, #fff 20%, ${theme.vars.palette.grey[300]} 40%)`,
+      backgroundSize: "200% auto",
+      backgroundClip: "text",
+      WebkitBackgroundClip: "text",
+      WebkitTextFillColor: "transparent",
+      animation: `shine ${MOTION.spin} infinite`,
+      ...reducedMotion({ animation: "none" }),
+      fontWeight: 500
+    }
+  });
+
+interface StepViewProps {
+  step: Step;
+}
+
+const StepView: React.FC<StepViewProps> = memo(({ step }) => {
+  const theme = useTheme();
+  const cssStyles = useMemo(() => styles(theme), [theme]);
+  // Simple heuristic for running state: has start time but not completed
+  const isRunning = (step.start_time ?? 0) > 0 && !step.completed;
+
+  return (
+    <div css={cssStyles}>
+      <Surface
+        className={`step-item ${isRunning ? "running" : ""} ${step.completed ? "completed" : ""}`}
+      >
+        <div className="step-content">
+          <FlexRow
+            align="center"
+            justify="center"
+            sx={{ height: "20px" }}
+          >
+            {isRunning ? (
+              <LoadingSpinner size="small" className="step-running-spinner" />
+            ) : step.completed ? (
+              <CheckCircleRoundedIcon className="step-status-icon step-completed-icon" />
+            ) : (
+              <RadioButtonUncheckedRoundedIcon className="step-status-icon" />
+            )}
+          </FlexRow>
+          <Text
+            className={`step-text ${
+              step.completed
+                ? "completed"
+                : isRunning
+                ? "shine-effect"
+                : ""
+            }`}
+          >
+            {step.instructions}
+          </Text>
+        </div>
+      </Surface>
+    </div>
+  );
+});
+
+StepView.displayName = "StepView";
+
+export default StepView;

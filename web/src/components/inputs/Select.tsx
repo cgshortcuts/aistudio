@@ -1,0 +1,345 @@
+/** @jsxImportSource @emotion/react */
+import isEqual from "../../utils/isEqual";
+import React, {
+  useCallback,
+  useMemo,
+  useRef,
+  useEffect,
+  memo,
+  useId,
+  useState
+} from "react";
+import ReactDOM from "react-dom";
+import useSelect from "../../hooks/nodes/useSelect";
+import { fuzzyScore } from "../../utils/fuzzyMatch";
+import { Tooltip } from "../ui_primitives";
+import { useTheme } from "@mui/material/styles";
+import { TOOLTIP_ENTER_DELAY } from "../../config/constants";
+import { selectStyles, portalOptionsStyles } from "./selectStyles";
+import { useAutoFocusEnabled } from "../../hooks/useAutoFocusEnabled";
+
+interface Option {
+  value: string;
+  label: string | React.ReactNode;
+  tabIndex?: number;
+}
+
+interface SelectProps {
+  options: Option[];
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  label?: string;
+  tabIndex?: number;
+  /**
+   * Value differs from default — shows visual indicator (right border)
+   */
+  changed?: boolean;
+}
+
+const ChevronIcon = ({ className }: { className?: string }) => (
+  <svg
+    className={className}
+    width="12"
+    height="12"
+    viewBox="0 0 24 24"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path
+      d="M6 9L12 15L18 9"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
+const Select: React.FC<SelectProps> = ({
+  options,
+  value,
+  onChange,
+  placeholder,
+  label,
+  tabIndex,
+  changed
+}) => {
+  const theme = useTheme();
+  const selectRef = useRef<HTMLDivElement>(null);
+  const optionsRef = useRef<HTMLUListElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const autoFocusEnabled = useAutoFocusEnabled();
+  const { open, close, activeSelect, searchQuery, setSearchQuery } =
+    useSelect();
+  const id = useId();
+
+  const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
+  const [dropdownPosition, setDropdownPosition] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    openUpward: boolean;
+  } | null>(null);
+
+  const toggleDropdown = useCallback(() => {
+    if (activeSelect === id) {
+      close();
+    } else {
+      open(id);
+    }
+  }, [close, activeSelect, id, open]);
+
+  const handleHeaderKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggleDropdown();
+      }
+    },
+    [toggleDropdown]
+  );
+
+  const handleOptionClick = useCallback(
+    (optionValue: string) => {
+      onChange(optionValue);
+      close();
+    },
+    [onChange, close]
+  );
+
+  const selectedOption = useMemo(
+    () => options.find((option) => option.value === value),
+    [options, value]
+  );
+
+  const updateDropdownPosition = useCallback(() => {
+    if (!selectRef.current || activeSelect !== id) {
+      setDropdownPosition(null);
+      return;
+    }
+
+    const selectRect = selectRef.current.getBoundingClientRect();
+    const estimatedOptionsHeight = 300; // maxHeight from styles
+    const windowHeight = window.innerHeight;
+    const spaceBelow = windowHeight - selectRect.bottom;
+    const openUpward = spaceBelow < estimatedOptionsHeight && selectRect.top > estimatedOptionsHeight;
+
+    setDropdownPosition({
+      top: openUpward ? selectRect.top : selectRect.bottom + 4,
+      left: selectRect.left,
+      width: Math.max(selectRect.width, 200),
+      openUpward
+    });
+  }, [activeSelect, id]);
+
+  useEffect(() => {
+    if (activeSelect === id) {
+      updateDropdownPosition();
+      window.addEventListener("resize", updateDropdownPosition);
+      window.addEventListener("scroll", updateDropdownPosition, true);
+      return () => {
+        window.removeEventListener("resize", updateDropdownPosition);
+        window.removeEventListener("scroll", updateDropdownPosition, true);
+      };
+    } else {
+      setDropdownPosition(null);
+    }
+  }, [activeSelect, id, updateDropdownPosition]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      const isInsideSelect = selectRef.current?.contains(target);
+      const isInsideDropdown = optionsRef.current?.contains(target);
+      
+      if (activeSelect === id && !isInsideSelect && !isInsideDropdown) {
+        close();
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [close, activeSelect, id]);
+
+  // Skipped on touch, where the virtual keyboard would cover the options.
+  useEffect(() => {
+    if (activeSelect === id && autoFocusEnabled) {
+      searchInputRef.current?.focus();
+    }
+  }, [activeSelect, id, autoFocusEnabled]);
+
+  // Fuzzy-match the query against option labels, best matches first.
+  const filteredOptions = useMemo(() => {
+    const query = searchQuery.trim();
+    if (!query) {
+      return options;
+    }
+    return options
+      .map((option) => ({
+        option,
+        score: fuzzyScore(
+          query,
+          typeof option.label === "string" ? option.label : option.value
+        )
+      }))
+      .filter(({ score }) => score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map(({ option }) => option);
+  }, [searchQuery, options]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (activeSelect !== id) {return;}
+
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          setHighlightedIndex((prev) =>
+            prev < filteredOptions.length - 1 ? prev + 1 : 0
+          );
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          setHighlightedIndex((prev) =>
+            prev > 0 ? prev - 1 : filteredOptions.length - 1
+          );
+          break;
+        case "Enter":
+          e.preventDefault();
+          if (highlightedIndex >= 0) {
+            handleOptionClick(filteredOptions[highlightedIndex].value);
+          }
+          break;
+        case "Escape":
+          e.preventDefault();
+          close();
+          break;
+      }
+    },
+    [
+      activeSelect,
+      id,
+      filteredOptions,
+      highlightedIndex,
+      handleOptionClick,
+      close
+    ]
+  );
+
+  const styles = useMemo(() => selectStyles(theme), [theme]);
+
+  // Changed state — inset shadow so box size stays unchanged
+  const changedStyle = changed
+    ? { boxShadow: `inset -2px 0 0 ${theme.vars.palette.primary.main}` }
+    : undefined;
+
+  const dropdownStyle = useMemo(() => {
+    if (!dropdownPosition) {
+      return undefined;
+    }
+    return {
+      position: "fixed" as const,
+      left: dropdownPosition.left,
+      width: dropdownPosition.width,
+      ...(dropdownPosition.openUpward
+        ? { bottom: window.innerHeight - dropdownPosition.top + 4 }
+        : { top: dropdownPosition.top })
+    };
+  }, [dropdownPosition]);
+
+  // Stable per-option click callbacks to prevent re-renders.
+  const optionClickHandlers = useMemo(() => {
+    const handlers = new Map<string, () => void>();
+    filteredOptions.forEach((option) => {
+      handlers.set(
+        option.value,
+        () => handleOptionClick(option.value)
+      );
+    });
+    return handlers;
+  }, [filteredOptions, handleOptionClick]);
+
+  return (
+    <div className="select-container" css={styles}>
+      <Tooltip placement="top" delay={TOOLTIP_ENTER_DELAY} disableInteractive title={label}>
+        <div
+          ref={selectRef}
+          role="combobox"
+          aria-label={typeof label === "string" ? label : undefined}
+          aria-expanded={activeSelect === id}
+          aria-haspopup="listbox"
+          className={`custom-select select-wrapper ${
+            activeSelect === id ? "open" : ""
+          }`}
+          tabIndex={-1}
+          onKeyDown={handleKeyDown}
+        >
+          {activeSelect !== id && (
+            <div
+              className="select-header"
+              onClick={toggleDropdown}
+              onKeyDown={handleHeaderKeyDown}
+              tabIndex={tabIndex}
+              role="button"
+              style={changedStyle}
+            >
+              <span className="select-header-text">
+                {selectedOption
+                  ? selectedOption.label
+                  : placeholder || "Select an option"}
+              </span>
+              <ChevronIcon
+                className={`chevron ${activeSelect === id ? "open" : ""}`}
+              />
+            </div>
+          )}
+          {activeSelect === id && (
+            <input
+              ref={searchInputRef}
+              type="text"
+              className="search-input"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setHighlightedIndex(-1);
+              }}
+              placeholder="Search..."
+              aria-label="Search options"
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
+        </div>
+      </Tooltip>
+      {activeSelect === id && dropdownPosition && ReactDOM.createPortal(
+        <ul
+          ref={optionsRef}
+          role="listbox"
+          className="options-list nowheel"
+          css={portalOptionsStyles(theme)}
+          style={dropdownStyle}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {filteredOptions.map((option, index) => (
+            <li
+              key={option.value}
+              role="option"
+              aria-selected={option.value === value}
+              className={`option ${
+                option.value === value ? "selected" : ""
+              } ${index === highlightedIndex ? "highlighted" : ""}`}
+              onClick={optionClickHandlers.get(option.value)}
+            >
+              {option.label}
+            </li>
+          ))}
+        </ul>,
+        document.body
+      )}
+    </div>
+  );
+};
+
+export default memo(Select, isEqual);

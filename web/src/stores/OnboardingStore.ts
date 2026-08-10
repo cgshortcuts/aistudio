@@ -1,0 +1,82 @@
+/**
+ * OnboardingStore
+ *
+ * Tracks first-run getting-started progress (open a template, run a
+ * workflow, build your own) for the dashboard checklist. Persists to
+ * localStorage so progress survives reloads. The "connect a provider"
+ * step is derived live from configured secrets and is not stored here.
+ */
+
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
+
+export type OnboardingStepId =
+  | "open-template"
+  | "run-workflow"
+  | "create-workflow";
+
+/** Every step the checklist tracks, in checklist order. */
+export const ONBOARDING_STEP_IDS: readonly OnboardingStepId[] = [
+  "open-template",
+  "run-workflow",
+  "create-workflow"
+];
+
+interface OnboardingProgress {
+  completedSteps: OnboardingStepId[];
+  dismissed: boolean;
+}
+
+/** True once the user dismissed the checklist or finished every step. */
+export const isOnboardingFinished = ({
+  completedSteps,
+  dismissed
+}: OnboardingProgress): boolean =>
+  dismissed || ONBOARDING_STEP_IDS.every((id) => completedSteps.includes(id));
+
+/**
+ * Where a fresh app launch should land. New users go to the dashboard, which
+ * carries the welcome hero, templates and tutorials; everyone else goes
+ * straight to the tabbed workspace.
+ */
+export const startRouteFor = (
+  progress: OnboardingProgress,
+  showWelcomeOnStartup: boolean
+): "/dashboard" | "/workspace" =>
+  showWelcomeOnStartup && !isOnboardingFinished(progress)
+    ? "/dashboard"
+    : "/workspace";
+
+interface OnboardingStore {
+  completedSteps: OnboardingStepId[];
+  dismissed: boolean;
+  markStep: (step: OnboardingStepId) => void;
+  dismiss: () => void;
+}
+
+export const useOnboardingStore = create<OnboardingStore>()(
+  persist(
+    (set) => ({
+      completedSteps: [],
+      dismissed: false,
+
+      markStep: (step: OnboardingStepId) => {
+        set((state) =>
+          state.completedSteps.includes(step)
+            ? state
+            : { completedSteps: [...state.completedSteps, step] }
+        );
+      },
+
+      dismiss: () => {
+        set({ dismissed: true });
+      }
+    }),
+    {
+      name: "nodetool-onboarding",
+      version: 1
+    }
+  )
+);
+
+export default useOnboardingStore;

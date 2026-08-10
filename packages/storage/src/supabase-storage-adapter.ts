@@ -1,0 +1,264 @@
+import {
+  createSupabaseStorageClient,
+  type SupabaseStorageApi
+} from "./supabase-rest.js";
+import type {
+  StorageAdapter,
+  StorageEntry,
+  StorageListResult,
+  StorageStat,
+  UploadTarget,
+  UploadUrlOptions
+} from "./storage-adapter.js";
+import { normalizeStorageKey } from "./storage-keys.js";
+import { assertUploadWithinLimit } from "./storage-limits.js";
+
+/** Supabase upload tokens last two hours and the sign call takes no TTL. */
+const SUPABASE_UPLOAD_URL_TTL_MS = 2 * 60 * 60 * 1000;
+
+export interface SupabaseStorageAdapterOptions {
+  url: string;
+  apiKey: string;
+  bucket: string;
+  /** Optional pre-built client (used by tests). */
+  client?: SupabaseStorageApi;
+}
+
+/**
+ * Supabase Storage adapter using the in-house fetch-backed REST client
+ * (see supabase-rest.ts).
+ *
+ * URI scheme: `supabase://<bucket>/<key>`. Use `getPublicUrl(uri)` to obtain a
+ * client-facing HTTPS URL (the temp-url resolver in the websocket runner does
+ * this for `temp_url` asset output mode).
+ */
+export class SupabaseStorageAdapter implements StorageAdapter {
+  readonly bucket: string;
+  readonly url: string;
+  private readonly apiKey: string;
+  private client: SupabaseStorageApi | null;
+
+  constructor(opts: SupabaseStorageAdapterOptions) {
+    if (!opts.url) throw new Error("Supabase URL is required");
+    if (!opts.apiKey) throw new Error("Supabase API key is required");
+    if (!opts.bucket) throw new Error("Supabase bucket is required");
+    this.url = opts.url;
+    this.apiKey = opts.apiKey;
+    this.bucket = opts.bucket;
+    this.client = opts.client ?? null;
+  }
+
+  private getClient(): SupabaseStorageApi {
+    if (!this.client) {
+      this.client = createSupabaseStorageClient(this.url, this.apiKey);
+    }
+    return this.client;
+  }
+
+  private parseUri(uri: string): { bucket: string; key: string } | null {
+    if (!uri.startsWith("supabase://")) return null;
+    const withoutScheme = uri.slice("supabase://".length);
+    const slashIndex = withoutScheme.indexOf("/");
+    if (slashIndex <= 0 || slashIndex === withoutScheme.length - 1) {
+      return null;
+    }
+    return {
+      bucket: withoutScheme.slice(0, slashIndex),
+      key: withoutScheme.slice(slashIndex + 1)
+    };
+  }
+
+  async store(
+    key: string,
+    data: Uint8Array,
+    contentType?: string
+  ): Promise<string> {
+    assertUploadWithinLimit(key, data.byteLength);
+    const { error } = await this.getClient()
+      .storage.from(this.bucket)
+      .upload(key, data, {
+        upsert: true,
+        ...(contentType ? { contentType } : {})
+      });
+    if (error) {
+      throw new Error(`Supabase upload failed for "${key}": ${error.message}`);
+    }
+    return `supabase://${this.bucket}/${key}`;
+  }
+
+  uriForKey(key: string): string {
+    return `supabase://${this.bucket}/${key}`;
+  }
+
+  async retrieve(uri: string): Promise<Uint8Array | null> {
+    const parsed = this.parseUri(uri);
+    if (!parsed || parsed.bucket !== this.bucket) return null;
+    const { data, error } = await this.getClient()
+      .storage.from(parsed.bucket)
+      .download(parsed.key);
+    if (error || !data) return null;
+    const buf = await data.arrayBuffer();
+    return new Uint8Array(buf);
+  }
+
+  async exists(uri: string): Promise<boolean> {
+    const parsed = this.parseUri(uri);
+    if (!parsed || parsed.bucket !== this.bucket) return false;
+    const dir = parsed.key.includes("/")
+      ? parsed.key.slice(0, parsed.key.lastIndexOf("/"))
+      : "";
+    const name = parsed.key.includes("/")
+      ? parsed.key.slice(parsed.key.lastIndexOf("/") + 1)
+      : parsed.key;
+    const { data, error } = await this.getClient()
+      .storage.from(parsed.bucket)
+      .list(dir, { search: name, limit: 1 });
+    if (error || !data) return false;
+    return data.some((entry) => entry.name === name);
+  }
+
+  async delete(uri: string): Promise<boolean> {
+    const parsed = this.parseUri(uri);
+    if (!parsed || parsed.bucket !== this.bucket) return false;
+    if (!(await this.exists(uri))) return false;
+    const { error } = await this.getClient()
+      .storage.from(parsed.bucket)
+      .remove([parsed.key]);
+    return !error;
+  }
+
+  async list(
+    prefix: string,
+    opts: { delimiter?: string } = {}
+  ): Promise<StorageListResult> {
+    const delimiter = opts.delimiter ?? null;
+    // Supabase storage `list(path)` lists immediate children of `path` (a
+    // pseudo-directory). For hierarchical mode we use that directly; for
+    // flat mode we'd have to walk recursively — implement hierarchical only
+    // for now and fall back to a single-level listing without commonPrefixes
+    // for flat mode (callers wanting recursion should walk themselves).
+    // Normalize the (possibly caller-supplied) prefix the way the file and S3
+    // adapters do. normalizeStorageKey rejects path-traversal keys and uses no
+    // polynomial regex, avoiding the ReDoS that `prefix.replace(/\/+$/, "")`
+    // suffered on long `/`-runs reachable from asset refs (CWE-1333). Invalid
+    // keys yield an empty listing rather than escaping the bucket.
+    let dir = "";
+    if (prefix && prefix !== "/") {
+      try {
+        dir = normalizeStorageKey(prefix);
+      } catch {
+        return { entries: [], commonPrefixes: [] };
+      }
+    }
+    // path.normalize can leave a single trailing slash (e.g. "a/"); strip it so
+    // childKey construction below never produces "dir//name".
+    if (dir.endsWith("/")) {
+      dir = dir.slice(0, -1);
+    }
+    const { data, error } = await this.getClient()
+      .storage.from(this.bucket)
+      .list(dir, { limit: 1000 });
+    if (error || !data) return { entries: [], commonPrefixes: [] };
+
+    const entries: StorageEntry[] = [];
+    const commonPrefixes: string[] = [];
+    for (const item of data) {
+      const childKey = dir ? `${dir}/${item.name}` : item.name;
+      // Supabase entries with `id == null` are pseudo-directories.
+      const isDir = item.id == null;
+      if (isDir) {
+        if (delimiter === "/") {
+          commonPrefixes.push(`${childKey}/`);
+        }
+        continue;
+      }
+      entries.push({
+        key: childKey,
+        uri: `supabase://${this.bucket}/${childKey}`,
+        size: (item.metadata?.size as number) ?? 0,
+        modifiedAt: item.updated_at
+          ? new Date(item.updated_at).getTime()
+          : Date.now(),
+        ...(item.metadata?.mimetype
+          ? { contentType: item.metadata.mimetype as string }
+          : {})
+      });
+    }
+    return {
+      entries: entries.sort((a, b) => a.key.localeCompare(b.key)),
+      commonPrefixes: commonPrefixes.sort()
+    };
+  }
+
+  async stat(uri: string): Promise<StorageStat | null> {
+    const parsed = this.parseUri(uri);
+    if (!parsed || parsed.bucket !== this.bucket) return null;
+    const dir = parsed.key.includes("/")
+      ? parsed.key.slice(0, parsed.key.lastIndexOf("/"))
+      : "";
+    const name = parsed.key.includes("/")
+      ? parsed.key.slice(parsed.key.lastIndexOf("/") + 1)
+      : parsed.key;
+    const { data, error } = await this.getClient()
+      .storage.from(parsed.bucket)
+      .list(dir, { search: name, limit: 1 });
+    if (error || !data) return null;
+    const item = data.find((e) => e.name === name);
+    if (!item) return null;
+    return {
+      key: parsed.key,
+      size: (item.metadata?.size as number) ?? 0,
+      modifiedAt: item.updated_at
+        ? new Date(item.updated_at).getTime()
+        : Date.now(),
+      ...(item.metadata?.mimetype
+        ? { contentType: item.metadata.mimetype as string }
+        : {})
+    };
+  }
+
+  /**
+   * One-shot Supabase upload token for `key`. The browser PUTs the bytes to
+   * the returned URL, so they never transit this process. The token is bound
+   * to this exact key server-side, so a client holding it cannot write
+   * anywhere else — that is what lets the browser upload without ever seeing
+   * the service-role key.
+   */
+  async createUploadUrl(
+    key: string,
+    opts: UploadUrlOptions = {}
+  ): Promise<UploadTarget | null> {
+    const normalized = normalizeStorageKey(key);
+    const { data, error } = await this.getClient()
+      .storage.from(this.bucket)
+      .createSignedUploadUrl(normalized);
+    if (error || !data) {
+      throw new Error(
+        `Supabase upload URL failed for key "${key}": ${error?.message ?? "no data"}`
+      );
+    }
+    const headers: Record<string, string> = {};
+    if (opts.contentType) headers["content-type"] = opts.contentType;
+    return {
+      url: data.signedUrl,
+      method: "PUT",
+      headers,
+      // Supabase upload tokens are valid for two hours and the TTL is not
+      // configurable on the sign call, so report that rather than echoing a
+      // requested value we cannot enforce.
+      expiresAt: Date.now() + SUPABASE_UPLOAD_URL_TTL_MS
+    };
+  }
+
+  /**
+   * Convert an internal `supabase://bucket/key` URI to a public HTTPS URL.
+   * Returns `null` if the URI does not belong to this adapter.
+   */
+  getPublicUrl(uri: string): string | null {
+    const parsed = this.parseUri(uri);
+    if (!parsed || parsed.bucket !== this.bucket) return null;
+    return this.getClient()
+      .storage.from(parsed.bucket)
+      .getPublicUrl(parsed.key).data.publicUrl;
+  }
+}

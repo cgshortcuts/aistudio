@@ -1,0 +1,219 @@
+import { create } from 'zustand';
+import type { Session, User, Subscription, AuthError } from '@supabase/supabase-js';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { supabase, isSupabaseConfigured } from '../services/supabase';
+import { GOOGLE_WEB_CLIENT_ID, GOOGLE_IOS_CLIENT_ID } from '../services/authConfig';
+import { queryClient } from '../queryClient';
+
+type AuthState = 'init' | 'loading' | 'logged_in' | 'logged_out' | 'error';
+
+interface AuthStore {
+  session: Session | null;
+  user: User | null;
+  state: AuthState;
+  error: string | null;
+  _authSubscription: Subscription | null;
+
+  initialize: () => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
+  signOut: () => Promise<void>;
+  /**
+   * Called when the server rejects a request with 401/403: drop the local
+   * session and cached state and route back to login, without a network
+   * sign-out (the token is already invalid).
+   */
+  handleSessionExpired: () => void;
+  clearError: () => void;
+  cleanup: () => void;
+}
+
+/**
+ * Clear all user-bound client state on logout/expiry so the next account
+ * can't see the previous user's threads, messages, or cached queries.
+ */
+async function resetClientState(): Promise<void> {
+  try {
+    // Lazy import to avoid a circular dependency between auth and chat.
+    const chatModule = await import('./ChatStore');
+    const chatStore = chatModule.useChatStore;
+    chatStore.getState().disconnect();
+    chatStore.setState({
+      threads: {},
+      currentThreadId: null,
+      messageCache: {},
+      error: null,
+    });
+  } catch (err) {
+    console.warn('[AuthStore] failed to reset chat state', err);
+  }
+  queryClient.clear();
+}
+
+function formatAuthError(error: unknown, fallback: string): string {
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as AuthError).message;
+    if (typeof message === 'string' && message.length > 0) {
+      return message;
+    }
+  }
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback;
+}
+
+export const useAuthStore = create<AuthStore>((set, get) => ({
+  session: null,
+  user: null,
+  state: 'init',
+  error: null,
+  _authSubscription: null,
+
+  initialize: async () => {
+    get().cleanup();
+
+    if (!isSupabaseConfigured) {
+      set({
+        state: 'logged_in',
+        session: null,
+        user: null,
+        error: null,
+        _authSubscription: null,
+      });
+      return;
+    }
+
+    GoogleSignin.configure({
+      webClientId: GOOGLE_WEB_CLIENT_ID,
+      iosClientId: GOOGLE_IOS_CLIENT_ID,
+    });
+
+    set({ state: 'loading', error: null });
+    try {
+      const {
+        data: { session },
+        error,
+      } = await supabase.auth.getSession();
+
+      if (error) {
+        throw error;
+      }
+
+      set({
+        session,
+        user: session?.user ?? null,
+        state: session ? 'logged_in' : 'logged_out',
+        error: null,
+      });
+
+      const {
+        data: { subscription },
+      } = supabase.auth.onAuthStateChange((_event, newSession) => {
+        set({
+          session: newSession,
+          user: newSession?.user ?? null,
+          state: newSession ? 'logged_in' : 'logged_out',
+          error: null,
+        });
+      });
+
+      set({ _authSubscription: subscription });
+    } catch (error: unknown) {
+      set({
+        state: 'error',
+        error: formatAuthError(error, 'Failed to initialize authentication'),
+        session: null,
+        user: null,
+      });
+    }
+  },
+
+  signInWithGoogle: async () => {
+    set({ state: 'loading', error: null });
+    try {
+      await GoogleSignin.hasPlayServices();
+      const response = await GoogleSignin.signIn();
+
+      if (!response.data?.idToken) {
+        throw new Error('No ID token returned from Google Sign-In');
+      }
+
+      console.log('[AUTH] Got Google ID token, exchanging with Supabase...');
+      const { data: sessionData, error } = await supabase.auth.signInWithIdToken({
+        provider: 'google',
+        token: response.data.idToken,
+        nonce: '',
+      });
+
+      if (error) {
+        throw error;
+      }
+
+      set({
+        session: sessionData.session,
+        user: sessionData.user,
+        state: sessionData.session ? 'logged_in' : 'logged_out',
+        error: null,
+      });
+    } catch (error: unknown) {
+      set({
+        state: 'error',
+        error: formatAuthError(error, 'Failed to sign in with Google'),
+      });
+    }
+  },
+
+  signOut: async () => {
+    set({ state: 'loading', error: null });
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        throw error;
+      }
+
+      // Tear down the auth listener and clear any user-bound chat/query state
+      // so the next account can't see the previous user's data.
+      get().cleanup();
+      await resetClientState();
+
+      set({
+        session: null,
+        user: null,
+        state: 'logged_out',
+        error: null,
+      });
+    } catch (error: unknown) {
+      set({
+        state: 'error',
+        error: formatAuthError(error, 'Failed to sign out'),
+      });
+    }
+  },
+
+  handleSessionExpired: () => {
+    // Already signed out — nothing to do (and avoids re-entrant loops when
+    // several in-flight requests all 401 at once).
+    if (!get().session) {
+      return;
+    }
+    console.warn('[AuthStore] session expired — clearing local session');
+    get().cleanup();
+    void resetClientState();
+    set({
+      session: null,
+      user: null,
+      state: 'logged_out',
+      error: 'Your session expired. Please sign in again.',
+    });
+  },
+
+  clearError: () => set({ error: null }),
+
+  cleanup: () => {
+    const subscription = get()._authSubscription;
+    if (subscription) {
+      subscription.unsubscribe();
+      set({ _authSubscription: null });
+    }
+  },
+}));

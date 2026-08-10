@@ -1,0 +1,778 @@
+import { QueryClient } from "@tanstack/react-query";
+import { authHeader } from "../../lib/auth";
+import { restFetch } from "../../lib/rest-fetch";
+import { Asset, AssetList, AssetSearchResult } from "../ApiTypes";
+import { useAssetStore } from "../AssetStore";
+
+jest.mock("../../lib/rest-fetch", () => ({
+  restFetch: jest.fn()
+}));
+
+jest.mock("../../lib/auth", () => ({
+  authHeader: jest.fn()
+}));
+
+// JSON reads/writes go through the tRPC client; provide a per-procedure mock.
+jest.mock("../../trpc/client", () => ({
+  trpcClient: {
+    assets: {
+      list: { query: jest.fn() },
+      get: { query: jest.fn() },
+      create: { mutate: jest.fn() },
+      createUpload: { mutate: jest.fn() },
+      finalizeUpload: { mutate: jest.fn() },
+      update: { mutate: jest.fn() },
+      delete: { mutate: jest.fn() },
+      children: { query: jest.fn() },
+      recursive: { query: jest.fn() },
+      search: { query: jest.fn() },
+      byFilename: { query: jest.fn() }
+    }
+  }
+}));
+
+jest.mock("../AssetGridStore", () => ({
+  useAssetGridStore: jest.fn(() => ({
+    setAssets: jest.fn(),
+    addAsset: jest.fn(),
+    removeAsset: jest.fn(),
+    updateAsset: jest.fn()
+  }))
+}));
+
+jest.mock("../../utils/errorHandling", () => ({
+  createErrorMessage: jest.fn(
+    (error, message) =>
+      new Error(
+        message || `Error: ${error?.response?.data?.message || error.message}`
+      )
+  ),
+  AppError: Error
+}));
+jest.mock("../BASE_URL", () => ({
+  BASE_URL: "http://localhost:7777",
+  withApiBase: <T,>(url: T): T => url
+}));
+
+import { trpcClient } from "../../trpc/client";
+
+const mockRestFetch = restFetch as jest.Mock;
+const mockAuthHeader = authHeader as jest.Mock;
+
+const createUploadMutate = trpcClient.assets.createUpload.mutate as jest.Mock;
+const listQuery = trpcClient.assets.list.query as jest.Mock;
+const getQuery = trpcClient.assets.get.query as jest.Mock;
+const updateMutate = trpcClient.assets.update.mutate as jest.Mock;
+const deleteMutate = trpcClient.assets.delete.mutate as jest.Mock;
+const recursiveQuery = trpcClient.assets.recursive.query as jest.Mock;
+const searchQuery = trpcClient.assets.search.query as jest.Mock;
+
+const mockFetch = jest.fn();
+global.fetch = mockFetch;
+
+describe("AssetStore", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false }
+      }
+    });
+
+    useAssetStore.setState({
+      queryClient: null
+    });
+
+    jest.clearAllMocks();
+
+    // Default to a backend with no client-direct upload, so these tests keep
+    // exercising the multipart REST fallback. The direct path has its own
+    // describe block below.
+    createUploadMutate.mockResolvedValue({
+      asset_id: "mock-id",
+      key: "user-1/mock-id.png",
+      upload: null
+    });
+
+    // Mock URL APIs used by download()
+    (window as any).URL = {
+      createObjectURL: jest.fn(() => "blob:mock"),
+      revokeObjectURL: jest.fn()
+    } as any;
+  });
+
+  describe("setQueryClient", () => {
+    it("should set the query client", () => {
+      const { setQueryClient } = useAssetStore.getState();
+      setQueryClient(queryClient);
+      expect(useAssetStore.getState().queryClient).toBe(queryClient);
+    });
+  });
+
+  describe("add", () => {
+    it("should add an asset to the store", () => {
+      const mockAsset: Asset = {
+        id: "test-asset-id",
+        name: "test-asset.jpg",
+        content_type: "image/jpeg",
+        size: 1024,
+        created_at: "2023-01-01T00:00:00Z",
+        parent_id: "",
+        user_id: "test-user",
+        get_url: "/assets/test-asset-id",
+        workflow_id: null,
+        thumb_url: "/thumbnail.jpg",
+        metadata: {}
+      };
+
+      const { add } = useAssetStore.getState();
+      expect(() => add(mockAsset)).not.toThrow();
+    });
+  });
+
+  describe("invalidateQueries", () => {
+    it("should invalidate queries when queryClient is set", () => {
+      const { setQueryClient, invalidateQueries } = useAssetStore.getState();
+      setQueryClient(queryClient);
+
+      const mockInvalidateQueries = jest.spyOn(queryClient, "invalidateQueries");
+      const queryKey = ["assets"];
+      invalidateQueries(queryKey);
+      expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey });
+    });
+
+    it("should not throw when queryClient is not set", () => {
+      const { invalidateQueries } = useAssetStore.getState();
+      expect(() => invalidateQueries(["assets"])).not.toThrow();
+    });
+  });
+
+  describe("get", () => {
+    it("should fetch an asset by id via tRPC", async () => {
+      const mockAsset: Asset = {
+        id: "test-asset-id",
+        name: "test-asset.jpg",
+        content_type: "image/jpeg",
+        size: 1024,
+        created_at: "2023-01-01T00:00:00Z",
+        parent_id: "",
+        user_id: "test-user",
+        get_url: "/assets/test-asset-id",
+        workflow_id: null,
+        thumb_url: "/thumbnail.jpg",
+        metadata: {}
+      };
+
+      getQuery.mockResolvedValueOnce(mockAsset);
+
+      const { get } = useAssetStore.getState();
+      const result = await get("test-asset-id");
+
+      expect(getQuery).toHaveBeenCalledWith({ id: "test-asset-id" });
+      expect(result).toEqual(mockAsset);
+    });
+
+    it("should handle API errors", async () => {
+      getQuery.mockRejectedValueOnce(new Error("Asset not found"));
+      const { get } = useAssetStore.getState();
+      await expect(get("invalid-id")).rejects.toThrow("Asset not found");
+    });
+  });
+
+  describe("createAsset", () => {
+    const pngBytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+    ]);
+
+    it("should create an asset with file upload (multipart REST)", async () => {
+      const mockFile = new File(["test content"], "test.jpg", {
+        type: "image/jpeg"
+      });
+      const mockAsset: Asset = {
+        id: "new-asset-id",
+        name: "test.jpg",
+        content_type: "image/jpeg",
+        size: 1024,
+        created_at: "2023-01-01T00:00:00Z",
+        parent_id: "",
+        user_id: "test-user",
+        get_url: "/assets/test-asset-id",
+        workflow_id: "test-workflow",
+        thumb_url: "/thumbnail.jpg",
+        metadata: {}
+      };
+
+      mockRestFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(mockAsset)
+      });
+
+      const { createAsset } = useAssetStore.getState();
+      const result = await createAsset(mockFile, "test-workflow");
+
+      expect(mockRestFetch).toHaveBeenCalledWith("/api/assets/", expect.objectContaining({ method: "POST", body: expect.any(FormData) }));
+      expect(result).toEqual(mockAsset);
+    });
+
+    describe("client-direct upload (cloud storage backends)", () => {
+      const finalizeMutate = trpcClient.assets.finalizeUpload
+        .mutate as jest.Mock;
+      const uploadTarget = {
+        asset_id: "direct-id",
+        key: "test-user/direct-id.jpg",
+        upload: {
+          url: "https://xyz.supabase.co/storage/v1/object/upload/sign/assets/test-user/direct-id.jpg?token=t",
+          method: "PUT" as const,
+          headers: { "content-type": "image/jpeg" },
+          expires_at: 1_800_000_000_000
+        }
+      };
+      const finalized: Asset = {
+        id: "direct-id",
+        name: "test.jpg",
+        content_type: "image/jpeg",
+        size: 12,
+        created_at: "2026-07-27T00:00:00Z",
+        parent_id: "",
+        user_id: "test-user",
+        get_url: "/assets/direct-id",
+        workflow_id: null,
+        thumb_url: null,
+        metadata: {}
+      };
+      let fetchMock: jest.Mock;
+      let originalFetch: typeof global.fetch;
+
+      beforeEach(() => {
+        createUploadMutate.mockResolvedValue(uploadTarget);
+        finalizeMutate.mockResolvedValue(finalized);
+        fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+        originalFetch = global.fetch;
+        (global as any).fetch = fetchMock;
+      });
+
+      afterEach(() => {
+        global.fetch = originalFetch;
+      });
+
+      it("sends the bytes to storage and never through the API", async () => {
+        const file = new File(["test content"], "test.jpg", {
+          type: "image/jpeg"
+        });
+        const result = await useAssetStore.getState().createAsset(file);
+
+        expect(fetchMock).toHaveBeenCalledWith(
+          uploadTarget.upload.url,
+          expect.objectContaining({
+            method: "PUT",
+            headers: uploadTarget.upload.headers,
+            body: file
+          })
+        );
+        expect(mockRestFetch).not.toHaveBeenCalled();
+        expect(finalizeMutate).toHaveBeenCalledWith({ asset_id: "direct-id" });
+        expect(result.id).toBe("direct-id");
+      });
+
+      it("declares the real byte size so the server can pre-check the cap", async () => {
+        const file = new File(["test content"], "test.jpg", {
+          type: "image/jpeg"
+        });
+        await useAssetStore.getState().createAsset(file);
+        expect(createUploadMutate).toHaveBeenCalledWith(
+          expect.objectContaining({ size: file.size })
+        );
+      });
+
+      it("surfaces a failed storage upload instead of finalizing", async () => {
+        fetchMock.mockResolvedValue({ ok: false, status: 403 });
+        const file = new File(["x"], "test.jpg", { type: "image/jpeg" });
+
+        await expect(
+          useAssetStore.getState().createAsset(file)
+        ).rejects.toThrow();
+        expect(finalizeMutate).not.toHaveBeenCalled();
+      });
+    });
+
+    it("uploads valid clipboard PNG payload as image", async () => {
+      const mockFile = new File([pngBytes], "clipboard-image.jpeg", {
+        type: "image/jpeg"
+      });
+      const mockAsset: Asset = {
+        id: "new-asset-id",
+        name: "clipboard-image.png",
+        content_type: "image/png",
+        size: 1024,
+        created_at: "2023-01-01T00:00:00Z",
+        parent_id: "",
+        user_id: "test-user",
+        get_url: "/assets/test-asset-id",
+        workflow_id: "test-workflow",
+        thumb_url: "/thumbnail.jpg",
+        metadata: {}
+      };
+
+      mockRestFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(mockAsset)
+      });
+
+      const { createAsset } = useAssetStore.getState();
+      const result = await createAsset(
+        mockFile,
+        "test-workflow",
+        undefined,
+        undefined,
+        "clipboard"
+      );
+
+      expect(mockRestFetch).toHaveBeenCalledWith("/api/assets/", expect.objectContaining({ method: "POST", body: expect.any(FormData) }));
+      expect(result).toEqual(mockAsset);
+    });
+
+    it("rejects empty clipboard payload and does not send request", async () => {
+      const mockFile = new File([], "clipboard-image.png", {
+        type: "image/png"
+      });
+
+      const { createAsset } = useAssetStore.getState();
+
+      await expect(
+        createAsset(mockFile, "test-workflow", undefined, undefined, "clipboard")
+      ).rejects.toThrow("Clipboard content is not a valid image");
+      expect(mockRestFetch).not.toHaveBeenCalled();
+    });
+
+    it("blocks invalid clipboard image bytes and does not send request", async () => {
+      const mockFile = new File([new Uint8Array([0x00, 0x01, 0x02])], "test.jpg", {
+        type: "image/jpeg"
+      });
+
+      const { createAsset } = useAssetStore.getState();
+
+      await expect(
+        createAsset(mockFile, "test-workflow", undefined, undefined, "clipboard")
+      ).rejects.toThrow("Clipboard content is not a valid image");
+      expect(mockRestFetch).not.toHaveBeenCalled();
+    });
+
+    it("downgrades invalid dropped image bytes to octet-stream", async () => {
+      const mockFile = new File([new Uint8Array([0x00, 0x01, 0x02])], "test.jpg", {
+        type: "image/jpeg"
+      });
+      const mockAsset: Asset = {
+        id: "new-asset-id",
+        name: "test.jpg",
+        content_type: "application/octet-stream",
+        size: 1024,
+        created_at: "2023-01-01T00:00:00Z",
+        parent_id: "",
+        user_id: "test-user",
+        get_url: "/assets/test-asset-id",
+        workflow_id: "test-workflow",
+        thumb_url: "/thumbnail.jpg",
+        metadata: {}
+      };
+
+      mockRestFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(mockAsset)
+      });
+
+      const { createAsset } = useAssetStore.getState();
+      await createAsset(mockFile, "test-workflow", undefined, undefined, "drop");
+
+      const [[, payload]] = mockRestFetch.mock.calls;
+      const formData = payload.body as FormData;
+      const json = JSON.parse(formData.get("json") as string);
+
+      expect(json.content_type).toBe("application/octet-stream");
+    });
+
+    it("should handle upload progress callback", async () => {
+      const mockFile = new File(["test content"], "test.jpg", {
+        type: "image/jpeg"
+      });
+      const mockAsset: Asset = {
+        id: "new-asset-id",
+        name: "test.jpg",
+        content_type: "image/jpeg",
+        size: 1024,
+        created_at: "2023-01-01T00:00:00Z",
+        parent_id: "",
+        user_id: "test-user",
+        get_url: "/assets/test-asset-id",
+        workflow_id: null,
+        thumb_url: "/thumbnail.jpg",
+        metadata: {}
+      };
+
+      mockRestFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(mockAsset)
+      });
+
+      const mockOnUploadProgress = jest.fn();
+      const { createAsset } = useAssetStore.getState();
+      await createAsset(mockFile, undefined, undefined, mockOnUploadProgress);
+
+      expect(mockOnUploadProgress).toHaveBeenCalledTimes(2);
+      expect(mockOnUploadProgress).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ loaded: 0, total: mockFile.size })
+      );
+      expect(mockOnUploadProgress).toHaveBeenLastCalledWith(
+        expect.objectContaining({ loaded: mockFile.size, total: mockFile.size })
+      );
+    });
+
+    it("should handle upload errors", async () => {
+      const mockFile = new File(["test content"], "test.jpg", {
+        type: "image/jpeg"
+      });
+      const mockError = new Error("Upload failed");
+
+      mockRestFetch.mockResolvedValue({
+        ok: false,
+        json: jest.fn().mockResolvedValue(mockError)
+      });
+
+      const { createAsset } = useAssetStore.getState();
+      await expect(createAsset(mockFile)).rejects.toThrow(
+        /Failed to create asset/
+      );
+    });
+  });
+
+  describe("load", () => {
+    it("should load assets with query parameters via tRPC", async () => {
+      const mockAssetList: AssetList = {
+        next: null,
+        assets: [
+          {
+            id: "asset1",
+            name: "test1.jpg",
+            content_type: "image/jpeg",
+            size: 1024,
+            created_at: "2023-01-01T00:00:00Z",
+            parent_id: "",
+            user_id: "test-user",
+            get_url: "/assets/test-asset-id",
+            workflow_id: null,
+            thumb_url: "/thumbnail1.jpg",
+            metadata: {}
+          }
+        ]
+      };
+
+      listQuery.mockResolvedValueOnce(mockAssetList);
+
+      const { load } = useAssetStore.getState();
+      const result = await load({
+        workflow_id: "test-workflow"
+      });
+
+      expect(listQuery).toHaveBeenCalledWith({ workflow_id: "test-workflow" });
+      expect(result).toEqual(mockAssetList);
+    });
+
+    it("should route recursive queries to the recursive tRPC procedure", async () => {
+      const mockAssets = [
+        {
+          id: "asset1",
+          name: "nested.jpg",
+          content_type: "image/jpeg",
+          size: 1024,
+          created_at: "2023-01-01T00:00:00Z",
+          parent_id: "folder1",
+          user_id: "test-user",
+          get_url: "/assets/asset1",
+          workflow_id: null,
+          thumb_url: null,
+          metadata: {}
+        }
+      ];
+      recursiveQuery.mockResolvedValueOnce({ assets: mockAssets });
+
+      const { load } = useAssetStore.getState();
+      const result = await load({ parent_id: "folder1", recursive: true });
+
+      expect(recursiveQuery).toHaveBeenCalledWith({ id: "folder1" });
+      expect(listQuery).not.toHaveBeenCalled();
+      expect(result).toEqual({ next: null, assets: mockAssets });
+    });
+
+    it("should reject recursive queries without a parent_id", async () => {
+      const { load } = useAssetStore.getState();
+      await expect(load({ recursive: true })).rejects.toThrow(
+        "Recursive asset queries require a parent_id"
+      );
+      expect(recursiveQuery).not.toHaveBeenCalled();
+      expect(listQuery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("search", () => {
+    it("should search assets via tRPC", async () => {
+      const mockSearchResult: AssetSearchResult = {
+        total_count: 1,
+        is_global_search: false,
+        assets: [
+          {
+            id: "asset1",
+            name: "test1.jpg",
+            content_type: "image/jpeg",
+            size: 1024,
+            created_at: "2023-01-01T00:00:00Z",
+            parent_id: "",
+            user_id: "test-user",
+            get_url: "/assets/test-asset-id",
+            workflow_id: null,
+            thumb_url: "/thumbnail1.jpg",
+            metadata: {},
+            folder_name: "test-folder",
+            folder_path: "/test/path",
+            folder_id: "folder1"
+          }
+        ]
+      };
+
+      searchQuery.mockResolvedValueOnce(mockSearchResult);
+
+      const { search } = useAssetStore.getState();
+      const result = await search({
+        query: "test query",
+        content_type: "image/jpeg"
+      });
+
+      expect(searchQuery).toHaveBeenCalledWith({
+        query: "test query",
+        content_type: "image/jpeg"
+      });
+      expect(result).toEqual(mockSearchResult);
+    });
+  });
+
+  describe("update", () => {
+    it("should update an asset via tRPC", async () => {
+      const mockAsset: Asset = {
+        id: "asset1",
+        name: "updated.jpg",
+        content_type: "image/jpeg",
+        size: 2048,
+        created_at: "2023-01-01T00:00:00Z",
+        parent_id: "",
+        user_id: "test-user",
+        get_url: "/assets/test-asset-id",
+        workflow_id: null,
+        thumb_url: "/updated-thumbnail.jpg",
+        metadata: { updated: true }
+      };
+
+      const prevAsset = {
+        id: "asset1",
+        name: "old.jpg",
+        parent_id: "",
+        content_type: "image/jpeg"
+      };
+      getQuery.mockResolvedValueOnce(prevAsset);
+      updateMutate.mockResolvedValueOnce(mockAsset);
+
+      const { update } = useAssetStore.getState();
+      const result = await update({
+        id: "asset1",
+        name: "updated.jpg"
+      });
+
+      expect(updateMutate).toHaveBeenCalledWith({
+        id: "asset1",
+        name: "updated.jpg",
+        parent_id: "",
+        content_type: "image/jpeg"
+      });
+      expect(result).toEqual(mockAsset);
+    });
+  });
+
+  describe("delete", () => {
+    it("should delete an asset via tRPC", async () => {
+      deleteMutate.mockResolvedValueOnce({ deleted_asset_ids: ["asset1"] });
+
+      const { delete: deleteAsset } = useAssetStore.getState();
+      const result = await deleteAsset("asset1");
+
+      expect(deleteMutate).toHaveBeenCalledWith({ id: "asset1" });
+      expect(result).toEqual(["asset1"]);
+    });
+  });
+
+  describe("download", () => {
+    it("should download assets (REST binary)", async () => {
+      mockAuthHeader.mockResolvedValue({});
+      const mockHeaders = new Map([
+        ["content-type", "application/zip"],
+        ["content-disposition", "attachment; filename=assets.zip"]
+      ]);
+      mockFetch.mockResolvedValue({
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(8),
+        headers: {
+          get: (name: string) => mockHeaders.get(name) ?? null
+        }
+      });
+
+      const { download } = useAssetStore.getState();
+      const result = await download(["asset1", "asset2"]);
+
+      expect(mockFetch).toHaveBeenCalled();
+      expect(result).toBe(true);
+    });
+  });
+
+  describe("createFolder", () => {
+    it("should create a folder (multipart REST)", async () => {
+      const mockFolder: Asset = {
+        id: "folder1",
+        name: "New Folder",
+        content_type: "application/x-directory",
+        size: 0,
+        created_at: "2023-01-01T00:00:00Z",
+        parent_id: "parent1",
+        workflow_id: null,
+        user_id: "test-user",
+        get_url: "/assets/folder1",
+        thumb_url: null,
+        metadata: {}
+      };
+
+      mockRestFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(mockFolder)
+      });
+
+      const { createFolder } = useAssetStore.getState();
+      const result = await createFolder("parent1", "New Folder");
+
+      expect(mockRestFetch).toHaveBeenCalledWith("/api/assets/", expect.objectContaining({ method: "POST", body: expect.any(FormData) }));
+      expect(result).toEqual(mockFolder);
+    });
+
+    it("should create a root folder when parent_id is null", async () => {
+      const mockFolder: Asset = {
+        id: "root-folder",
+        name: "Root Folder",
+        content_type: "application/x-directory",
+        size: 0,
+        created_at: "2023-01-01T00:00:00Z",
+        parent_id: "",
+        user_id: "test-user",
+        get_url: "/assets/test-asset-id",
+        workflow_id: null,
+        thumb_url: null,
+        metadata: {}
+      };
+
+      mockRestFetch.mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue(mockFolder)
+      });
+
+      const { createFolder } = useAssetStore.getState();
+      const result = await createFolder(null, "Root Folder");
+
+      expect(mockRestFetch).toHaveBeenCalledWith("/api/assets/", expect.objectContaining({ method: "POST", body: expect.any(FormData) }));
+      expect(result).toEqual(mockFolder);
+    });
+  });
+
+  describe("loadFolderTree", () => {
+    it("should load folder tree with default sorting", async () => {
+      listQuery.mockResolvedValueOnce({ assets: [], next: null });
+
+      const { loadFolderTree } = useAssetStore.getState();
+      const result = await loadFolderTree();
+
+      expect(listQuery).toHaveBeenCalledWith({ content_type: "folder" });
+      expect(result).toBeTruthy();
+    });
+
+    it("should load folder tree with custom sorting", async () => {
+      listQuery.mockResolvedValueOnce({ assets: [], next: null });
+
+      const { loadFolderTree } = useAssetStore.getState();
+      const result = await loadFolderTree("updated_at");
+
+      expect(listQuery).toHaveBeenCalledWith({ content_type: "folder" });
+      expect(result).toBeTruthy();
+    });
+  });
+
+  describe("getAllAssetsInFolder", () => {
+    it("should fetch flat list via recursive tRPC procedure and flatten it", async () => {
+      const mockResponse = {
+        assets: [
+          {
+            id: "folder1",
+            name: "Folder 1",
+            content_type: "folder"
+          },
+          {
+            id: "file1",
+            name: "file1.txt",
+            content_type: "text/plain"
+          },
+          {
+            id: "file2",
+            name: "file2.txt",
+            content_type: "text/plain"
+          }
+        ]
+      };
+
+      recursiveQuery.mockResolvedValueOnce(mockResponse);
+
+      const { getAllAssetsInFolder } = useAssetStore.getState();
+      const result = await getAllAssetsInFolder("root-folder");
+
+      expect(recursiveQuery).toHaveBeenCalledWith({ id: "root-folder" });
+      // Flat list → three items, no nesting.
+      expect(result).toHaveLength(3);
+      const ids = result.map((a) => a.id).sort();
+      expect(ids).toEqual(["file1", "file2", "folder1"]);
+    });
+
+    it("should handle API errors", async () => {
+      recursiveQuery.mockRejectedValueOnce(new Error("Failed to fetch"));
+
+      const { getAllAssetsInFolder } = useAssetStore.getState();
+      await expect(getAllAssetsInFolder("root-folder")).rejects.toThrow(
+        /Failed to fetch/
+      );
+    });
+  });
+
+  describe("error handling", () => {
+    it("should handle network errors gracefully", async () => {
+      getQuery.mockRejectedValueOnce(new Error("Network error"));
+
+      const { get } = useAssetStore.getState();
+      await expect(get("test-id")).rejects.toThrow("Network error");
+    });
+
+    it("should handle API response errors", async () => {
+      const mockFile = new File(["test"], "test.jpg");
+      mockRestFetch.mockResolvedValue({
+        ok: false,
+        json: jest.fn().mockResolvedValue({ detail: "Asset not found" })
+      });
+
+      const { createAsset } = useAssetStore.getState();
+      await expect(createAsset(mockFile)).rejects.toThrow(
+        /Failed to create asset/
+      );
+    });
+  });
+});

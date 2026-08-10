@@ -1,0 +1,90 @@
+{
+  "name": "@nodetool-ai/integration-nodes",
+  "version": "0.7.0-rc.34",
+  "description": "NodeTool external-API integration nodes — HTTP, GraphQL, S3, Supabase, Notion, Twilio, Apify, mail, secrets, messaging, search",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "node ../../scripts/build-typescript-workspace.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nodetool-ai/kie-nodes": "*",
+    "@nodetool-ai/node-sdk": "*",
+    "@nodetool-ai/nodes-utils": "*",
+    "@nodetool-ai/protocol": "*",
+    "@nodetool-ai/runtime": "*",
+    "@nodetool-ai/storage": "*",
+    "nodemailer": "^9.0.3",
+    "js-yaml": "^4.3.1"
+  },
+  "devDependencies": {
+    "@nodetool-ai/core-nodes": "*",
+    "@nodetool-ai/data-nodes": "*",
+    "@nodetool-ai/llm-nodes": "*",
+    "@types/node": "^22.0.0",
+    "@types/nodemailer": "^7.0.11",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.2",
+    "@types/js-yaml": "^4.0.9"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./nodes/*": {
+      "types": "./dist/nodes/*.d.ts",
+      "import": "./dist/nodes/*.js",
+      "default": "./dist/nodes/*.js"
+    },
+    "./lib/*": {
+      "types": "./dist/lib/*.d.ts",
+      "import": "./dist/lib/*.js",
+      "default": "./dist/lib/*.js"
+    }
+  },
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodetool-ai/nodetool.git",
+    "directory": "packages/integration-nodes"
+  },
+  "homepage": "https://nodetool.ai",
+  "bugs": {
+    "url": "https://github.com/nodetool-ai/nodetool/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "nodetool",
+    "ai",
+    "workflow",
+    "workflow-automation",
+    "typescript",
+    "ai-nodes",
+    "no-code",
+    "visual-programming",
+    "workflow-nodes",
+    "http",
+    "graphql",
+    "s3",
+    "notion",
+    "twilio",
+    "apify",
+    "integrations",
+    "api"
+  ]
+}

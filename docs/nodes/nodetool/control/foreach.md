@@ -1,0 +1,37 @@
+---
+layout: page
+title: "For Each"
+node_type: "nodetool.control.ForEach"
+namespace: "nodetool.control"
+---
+
+**Type:** `nodetool.control.ForEach`
+
+**Namespace:** `nodetool.control`
+
+## Description
+
+Iterate over a list and emit each item sequentially.
+    iterator, loop, list, sequence, repeat, enumerate, stream, collection
+
+    Use cases:
+    - Process each item of a collection in order
+    - Drive downstream nodes with individual elements
+
+## Properties
+
+| Property | Type | Description | Default |
+|----------|------|-------------|---------|
+| input_list | `list[any]` | The list of items to iterate over. | `[]` |
+| limit | `int` |  | `-1` |
+
+## Outputs
+
+| Output | Type | Description |
+|--------|------|-------------|
+| output | `any` |  |
+| index | `int` |  |
+
+## Related Nodes
+
+Browse other nodes in the [nodetool.control](./) namespace.

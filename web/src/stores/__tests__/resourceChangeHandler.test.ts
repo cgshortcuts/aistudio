@@ -1,0 +1,420 @@
+/**
+ * Tests for resource change handler
+ */
+import {
+  handleResourceChange,
+  setWorkflowResourceReloader
+} from "../resourceChangeHandler";
+import { queryClient } from "../../queryClient";
+import { ResourceChangeUpdate } from "../ApiTypes";
+import { loadMetadata } from "../../serverState/useMetadata";
+
+// Mock the queryClient
+jest.mock("../../queryClient", () => ({
+  queryClient: {
+    invalidateQueries: jest.fn()
+  }
+}));
+
+// `predicate` invalidations need access to the query cache. Provide a stub
+// invalidator the test can inspect; for keyed calls we keep the existing
+// `queryKey`-shape assertions.
+
+jest.mock("../../serverState/useMetadata", () => ({
+  loadMetadata: jest.fn()
+}));
+
+describe("handleResourceChange", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    setWorkflowResourceReloader(null);
+  });
+
+  it("invalidates workflow queries on workflow update", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "updated",
+      resource_type: "workflow",
+      resource: {
+        id: "workflow-123",
+        etag: "abc123"
+      }
+    };
+
+    handleResourceChange(update);
+
+    // Should invalidate general workflows query
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["workflows"]
+    });
+
+    // Should also invalidate templates query
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["templates"]
+    });
+
+    // Should invalidate specific workflow query
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["workflow", "workflow-123"]
+    });
+
+    // Should invalidate workflow versions query
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["workflow", "workflow-123", "versions"]
+    });
+  });
+
+  it("reloads an open workflow after a remote update", () => {
+    const reload = jest.fn();
+    setWorkflowResourceReloader(reload);
+
+    handleResourceChange({
+      type: "resource_change",
+      event: "updated",
+      resource_type: "workflow",
+      resource: { id: "workflow-123", etag: "abc123" }
+    });
+
+    expect(reload).toHaveBeenCalledWith("workflow-123", "abc123");
+  });
+
+  it("invalidates job queries on job created", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "created",
+      resource_type: "job",
+      resource: {
+        id: "job-456",
+        etag: "def456"
+      }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["jobs"]
+    });
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["job", "job-456"]
+    });
+  });
+
+  it("invalidates asset queries on asset deleted", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "deleted",
+      resource_type: "asset",
+      resource: {
+        id: "asset-789"
+      }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["assets"]
+    });
+
+    // The plural ["assets"] key does not prefix-match the singular form,
+    // so detail queries need an explicit invalidation.
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["asset", "asset-789"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["textAsset", "asset-789"]
+    });
+  });
+
+  it("invalidates settings queries on setting update", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "updated",
+      resource_type: "setting",
+      resource: { id: "user-1:THEME", etag: "s1" }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["settings"]
+    });
+  });
+
+  it("invalidates messages query when a message resource includes thread_id", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "created",
+      resource_type: "message",
+      resource: { id: "msg-1", thread_id: "thread-101" }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["messages"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["messages", "thread-101"]
+    });
+  });
+
+  it("invalidates the workflow versions list when scoped to a workflow", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "created",
+      resource_type: "workflowversion",
+      resource: { id: "ver-1", workflow_id: "workflow-123" }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["workflow", "workflow-123", "versions"]
+    });
+  });
+
+  it("invalidates collections on collection mutation", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "created",
+      resource_type: "collection",
+      resource: { id: "my-coll" }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["collections"]
+    });
+  });
+
+  it("invalidates thread and messages queries on thread update", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "updated",
+      resource_type: "thread",
+      resource: {
+        id: "thread-101",
+        etag: "ghi101"
+      }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["threads"]
+    });
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["thread", "thread-101"]
+    });
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["messages", "thread-101"]
+    });
+  });
+
+  it("handles resource types without query key mappings", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "created",
+      resource_type: "unknown_resource",
+      resource: {
+        id: "unknown-999"
+      }
+    };
+
+    // Should not throw
+    handleResourceChange(update);
+
+    // Should not invalidate any queries
+    expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it("handles resource without id gracefully", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "updated",
+      resource_type: "workflow",
+      resource: {
+        id: "", // Empty id
+        etag: "abc"
+      }
+    };
+
+    // Should not throw
+    handleResourceChange(update);
+
+    // Should still invalidate general queries
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["workflows"]
+    });
+  });
+
+  it("reloads metadata on metadata update", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "updated",
+      resource_type: "metadata",
+      resource: {
+        id: "nodes",
+        etag: "meta-123"
+      }
+    };
+
+    handleResourceChange(update);
+
+    expect(loadMetadata).toHaveBeenCalled();
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["metadata"]
+    });
+  });
+
+  it("invalidates provider and model queries on provider update", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "created",
+      resource_type: "provider",
+      resource: {
+        id: "mlx",
+        etag: "provider-123"
+      }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["providers"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["language-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["embedding-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["image-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["tts-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["asr-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["video-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["allModels"]
+    });
+  });
+
+  it("invalidates model queries on model update", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "updated",
+      resource_type: "model",
+      resource: {
+        id: "mlx",
+        etag: "model-123"
+      }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({
+      queryKey: ["providers"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["language-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["embedding-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["image-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["tts-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["asr-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["video-models"]
+    });
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["allModels"]
+    });
+  });
+
+  it("invalidates settings on setting update", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "updated",
+      resource_type: "setting",
+      resource: { id: "OPENAI_API_KEY" }
+    };
+
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["settings"]
+    });
+  });
+
+  it("invalidates workflow version queries on workflowversion change", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "created",
+      resource_type: "workflowversion",
+      resource: { id: "version-xyz" }
+    };
+
+    handleResourceChange(update);
+
+    // The version's id is not the workflow id, so the handler invalidates
+    // every `["workflow", *, "versions"]` query via predicate.
+    expect(queryClient.invalidateQueries).toHaveBeenCalledWith(
+      expect.objectContaining({
+        predicate: expect.any(Function)
+      })
+    );
+    const predicateCall = (
+      queryClient.invalidateQueries as jest.Mock
+    ).mock.calls.find((call) => typeof call[0]?.predicate === "function");
+    expect(predicateCall).toBeTruthy();
+    const predicate = predicateCall![0].predicate as (q: {
+      queryKey: readonly unknown[];
+    }) => boolean;
+    expect(predicate({ queryKey: ["workflow", "abc", "versions"] })).toBe(true);
+    expect(predicate({ queryKey: ["workflow", "abc"] })).toBe(false);
+    expect(predicate({ queryKey: ["workflows"] })).toBe(false);
+  });
+
+  it("includes additional resource properties in the update", () => {
+    const update: ResourceChangeUpdate = {
+      type: "resource_change",
+      event: "updated",
+      resource_type: "workflow",
+      resource: {
+        id: "workflow-123",
+        etag: "abc123",
+        name: "My Workflow",
+        status: "active"
+      }
+    };
+
+    // Should not throw with additional properties
+    handleResourceChange(update);
+
+    expect(queryClient.invalidateQueries).toHaveBeenCalled();
+  });
+});

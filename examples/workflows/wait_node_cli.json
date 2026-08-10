@@ -1,0 +1,55 @@
+{
+  "graph": {
+    "nodes": [
+      {
+        "id": "value",
+        "type": "nodetool.input.StringInput",
+        "name": "input",
+        "data": {
+          "name": "input"
+        }
+      },
+      {
+        "id": "timeout",
+        "type": "nodetool.input.FloatInput",
+        "name": "timeout_seconds",
+        "data": {
+          "name": "timeout_seconds"
+        }
+      },
+      {
+        "id": "wait",
+        "type": "nodetool.triggers.Wait"
+      },
+      {
+        "id": "sink",
+        "type": "nodetool.control.Reroute",
+        "name": "wait_result"
+      }
+    ],
+    "edges": [
+      {
+        "source": "value",
+        "sourceHandle": "output",
+        "target": "wait",
+        "targetHandle": "input"
+      },
+      {
+        "source": "timeout",
+        "sourceHandle": "output",
+        "target": "wait",
+        "targetHandle": "timeout_seconds"
+      },
+      {
+        "source": "wait",
+        "sourceHandle": "data",
+        "target": "sink",
+        "targetHandle": "input_value"
+      }
+    ]
+  },
+  "params": {
+    "input": "{\"message\": \"hello\"}",
+    "timeout_seconds": 0.05
+  }
+}

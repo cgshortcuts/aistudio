@@ -1,0 +1,472 @@
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  useCallback
+} from "react";
+import OnScreenKeyboard from "./OnScreenKeyboard";
+import { ToggleGroup, ToggleOption } from "../../ui_primitives";
+import { Tooltip } from "../../ui_primitives";
+import {
+  Shortcut,
+  expandShortcutsForOS,
+  getShortcutTooltip
+} from "../../../config/shortcuts";
+import { NODE_EDITOR_SHORTCUTS } from "../../../config/shortcuts";
+import { isMac } from "../../../utils/platform";
+import "../../../styles/keyboard.css";
+import { keyboardLayouts } from "./keyboard_layouts";
+import { useKeyPressedStore } from "../../../stores/KeyPressedStore";
+import { physicalKeyToLayoutButtonId } from "./physicalKeyboardLayoutKey";
+
+interface KeyboardShortcutsViewProps {
+  shortcuts?: Shortcut[];
+  /**
+   * When false, skips window capture-phase key listeners so embedding views (e.g. sketch editor)
+   * keep receiving keyboard input.
+   * @default true
+   */
+  listenToPhysicalKeyboard?: boolean;
+  /**
+   * Image editor overlay: shortcuts use category `image-editor` only (not Node Editor / Panels).
+   */
+  imageEditorShortcuts?: boolean;
+}
+
+/**
+ * Renders an on-screen keyboard highlighting all keys involved in the provided shortcuts.
+ * Hovering a highlighted key shows a tooltip with the shortcut names.
+ */
+type CategoryFilter =
+  | "editor"
+  | "panel"
+  | "assets"
+  | "workflow"
+  | "image-editor";
+
+const KeyboardShortcutsView: React.FC<KeyboardShortcutsViewProps> = ({
+  shortcuts = NODE_EDITOR_SHORTCUTS,
+  listenToPhysicalKeyboard = true,
+  imageEditorShortcuts = false
+}) => {
+  const [os, setOs] = useState<"mac" | "win">(isMac() ? "mac" : "win");
+  const [layoutName, setLayoutName] = useState<"english" | "german">(() => {
+    if (typeof navigator !== "undefined") {
+      return navigator.language.startsWith("de") ? "german" : "english";
+    }
+    return "english";
+  });
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>(() =>
+    imageEditorShortcuts ? "image-editor" : "editor"
+  );
+
+  useEffect(() => {
+    if (!imageEditorShortcuts) {
+      return;
+    }
+    setCategoryFilter((current) => {
+      if (
+        current === "workflow" ||
+        current === "assets" ||
+        current === "editor" ||
+        current === "panel"
+      ) {
+        return "image-editor";
+      }
+      return current;
+    });
+  }, [imageEditorShortcuts, shortcuts]);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isKeyPressedRef = useRef(false);
+  const [hoverSlugs, setHoverSlugs] = useState<string[] | null>(null);
+  const [tooltipAnchorEl, setTooltipAnchorEl] = useState<HTMLElement | null>(
+    null
+  );
+  const [keyboardHoverSlugs, setKeyboardHoverSlugs] = useState<string[] | null>(
+    null
+  );
+  const [keyboardTooltipAnchorEl, setKeyboardTooltipAnchorEl] =
+    useState<HTMLElement | null>(null);
+
+  const filtered = useMemo(
+    () => shortcuts.filter((s) => s.category === categoryFilter),
+    [shortcuts, categoryFilter]
+  );
+
+  const activeShortcuts = useMemo(
+    () => expandShortcutsForOS(filtered, os === "mac"),
+    [filtered, os]
+  );
+
+  // Build mapping key -> titles for tooltip assignment
+  const keyTitleMap = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    activeShortcuts.forEach((sc) => {
+      const combo = sc.keyCombo.map((k) => {
+        const low = k.toLowerCase();
+        return low === " " ? "space" : low;
+      });
+      combo.forEach((key) => {
+        if (!map[key]) {map[key] = [];}
+        map[key].push(sc.title);
+      });
+    });
+    return map;
+  }, [activeShortcuts]);
+
+  // Build a map of all shortcut keys (unfiltered, for inactive highlighting)
+  const allShortcuts = useMemo(
+    () => expandShortcutsForOS(shortcuts, os === "mac"),
+    [shortcuts, os]
+  );
+  const allKeyMap = useMemo(() => {
+    const map: Record<string, boolean> = {};
+    allShortcuts.forEach((sc) => {
+      sc.keyCombo.forEach((k) => {
+        const key = k.toLowerCase() === " " ? "space" : k.toLowerCase();
+        map[key] = true;
+      });
+    });
+    return map;
+  }, [allShortcuts]);
+
+  // Determine inactive shortcut keys
+  const activeKeys = useMemo(
+    () => new Set(Object.keys(keyTitleMap)),
+    [keyTitleMap]
+  );
+  const inactiveKeys = useMemo(
+    () => Object.keys(allKeyMap).filter((key) => !activeKeys.has(key)),
+    [allKeyMap, activeKeys]
+  );
+
+  const highlightButtons = useMemo(
+    () => Object.keys(keyTitleMap).join(" "),
+    [keyTitleMap]
+  );
+  const inactiveButtons = useMemo(
+    () => inactiveKeys.join(" "),
+    [inactiveKeys]
+  );
+
+  const handleOsToggle = useCallback((_event: React.SyntheticEvent, value: "mac" | "win") => {
+    if (value) {setOs(value);}
+  }, []);
+
+  const handleLayoutToggle = useCallback((_event: React.SyntheticEvent, value: "english" | "german") => {
+    if (value) {setLayoutName(value);}
+  }, []);
+
+  const layout = keyboardLayouts;
+
+  // 1. Get all keys in the layout
+  const allLayoutKeys = useMemo(() => {
+    return Array.from(
+      new Set(
+        layout.english
+          .concat(layout.german)
+          .join(" ")
+          .split(" ")
+          .map((k) => k.toLowerCase())
+      )
+    );
+  }, [layout]);
+
+  // 2. Get never-shortcut keys
+  const neverShortcutKeys = useMemo(
+    () => allLayoutKeys.filter((key) => !allKeyMap[key]),
+    [allLayoutKeys, allKeyMap]
+  );
+  const neverShortcutButtons = useMemo(
+    () => neverShortcutKeys.join(" "),
+    [neverShortcutKeys]
+  );
+
+  // 3. Compose buttonTheme
+  const buttonTheme = useMemo(
+    () => [
+      {
+        class: "has-shortcut",
+        buttons: highlightButtons
+      },
+      ...(inactiveButtons
+        ? [
+            {
+              class: "has-shortcut-inactive",
+              buttons: inactiveButtons
+            }
+          ]
+        : []),
+      ...(neverShortcutButtons
+        ? [
+            {
+              class: "never-shortcut",
+              buttons: neverShortcutButtons
+            }
+          ]
+        : [])
+    ],
+    [highlightButtons, inactiveButtons, neverShortcutButtons]
+  );
+
+  const keySlugMap = useMemo(() => {
+    const m: Record<string, string[]> = {};
+    activeShortcuts.forEach((s) => {
+      s.keyCombo.forEach((k) => {
+        const lowKey = k.toLowerCase() === " " ? "space" : k.toLowerCase();
+        if (!m[lowKey]) {m[lowKey] = [];}
+        m[lowKey].push(s.slug);
+      });
+    });
+    const hasTabShortcuts = shortcuts.some((s) =>
+      /^switchToTab\d+$/.test(s.slug)
+    );
+    if (hasTabShortcuts) {
+      if (os === "mac") {
+        if (!m["meta"]) {
+          m["meta"] = [];
+        }
+        m["meta"] = m["meta"].filter((slug) => !/^switchToTab\d+$/.test(slug));
+        m["meta"].push("switchToTabGroup");
+      } else {
+        if (!m["control"]) {
+          m["control"] = [];
+        }
+        m["control"] = m["control"].filter(
+          (slug) => !/^switchToTab\d+$/.test(slug)
+        );
+        m["control"].push("switchToTabGroup");
+      }
+    }
+    return m;
+  }, [activeShortcuts, os, shortcuts]);
+
+  const handleButtonMouseEnter = useCallback(
+    (button: string, e: React.MouseEvent<HTMLElement>) => {
+      if (isKeyPressedRef.current) {return;}
+      const key = button.toLowerCase();
+      if (keySlugMap[key]) {
+        setHoverSlugs(keySlugMap[key]);
+        setTooltipAnchorEl(e.currentTarget);
+      }
+    },
+    [keySlugMap]
+  );
+
+  const handleButtonMouseLeave = useCallback(() => {
+    setHoverSlugs(null);
+    setTooltipAnchorEl(null);
+  }, []);
+
+  const display = useMemo(
+    () => ({
+      backspace: "⌫",
+      capslock: "⇪",
+      shift: "⇧",
+      control: os === "mac" ? "⌃" : "CTRL",
+      meta: os === "mac" ? "⌘" : "Win",
+      alt: os === "mac" ? "⌥" : "Alt",
+      enter: "⏎",
+      space: "SPACE",
+      escape: "ESC"
+    } as Record<string, string>),
+    [os]
+  );
+
+  const setPaused = useKeyPressedStore((state) => state.setPaused);
+  useEffect(() => {
+    if (!listenToPhysicalKeyboard) {
+      return;
+    }
+    setPaused(true);
+    return () => {
+      setPaused(false);
+    };
+  }, [listenToPhysicalKeyboard, setPaused]);
+
+  const onKeyPress = useCallback(
+    (button: string) => {
+      isKeyPressedRef.current = true;
+      const targetButton = containerRef.current?.querySelector(
+        `.hg-button[data-skbtn="${button.toLowerCase()}"]`
+      );
+      if (targetButton) {
+        targetButton.classList.add("hg-pressed");
+        if (keySlugMap[button.toLowerCase()]) {
+          setKeyboardHoverSlugs(keySlugMap[button.toLowerCase()]);
+          setKeyboardTooltipAnchorEl(targetButton as HTMLElement);
+        }
+      }
+    },
+    [keySlugMap]
+  );
+
+  const onKeyReleased = useCallback((button: string) => {
+    isKeyPressedRef.current = false;
+    const targetButton = containerRef.current?.querySelector(
+      `.hg-button[data-skbtn="${button.toLowerCase()}"]`
+    );
+    if (targetButton) {
+      targetButton.classList.remove("hg-pressed");
+    }
+    setKeyboardHoverSlugs(null);
+    setKeyboardTooltipAnchorEl(null);
+  }, []);
+
+  useEffect(() => {
+    if (!listenToPhysicalKeyboard) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" && event.key !== "Tab") {
+        event.preventDefault();
+      }
+      const button = physicalKeyToLayoutButtonId(event.key);
+      onKeyPress(button);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" && event.key !== "Tab") {
+        event.preventDefault();
+      }
+      const button = physicalKeyToLayoutButtonId(event.key);
+      onKeyReleased(button);
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("keyup", handleKeyUp, true);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("keyup", handleKeyUp, true);
+    };
+  }, [listenToPhysicalKeyboard, onKeyPress, onKeyReleased]);
+
+  const currentHoverSlugs = keyboardHoverSlugs || hoverSlugs;
+  const currentTooltipAnchorEl = keyboardTooltipAnchorEl || tooltipAnchorEl;
+
+  return (
+    <div>
+      <ToggleGroup
+        value={os}
+        exclusive
+        onChange={handleOsToggle}
+        size="small"
+        sx={{ mb: 2 }}
+      >
+        <ToggleOption value="mac">macOS</ToggleOption>
+        <ToggleOption value="win">Windows/Linux</ToggleOption>
+      </ToggleGroup>
+
+      <ToggleGroup
+        value={layoutName}
+        exclusive
+        onChange={handleLayoutToggle}
+        size="small"
+        sx={{ mb: 2, ml: 2 }}
+      >
+        <ToggleOption value="english">EN</ToggleOption>
+        <ToggleOption value="german">DE</ToggleOption>
+      </ToggleGroup>
+
+      <ToggleGroup
+        value={categoryFilter}
+        exclusive
+        onChange={(_, v: CategoryFilter | null) => v && setCategoryFilter(v)}
+        size="small"
+        sx={{ mb: 2, ml: imageEditorShortcuts ? 2 : 8 }}
+      >
+        {imageEditorShortcuts ? (
+          <ToggleOption value="image-editor">Image Editor</ToggleOption>
+        ) : (
+          <>
+            <ToggleOption value="editor">Editor</ToggleOption>
+            <ToggleOption value="workflow">Workflow</ToggleOption>
+            <ToggleOption value="panel">Panels</ToggleOption>
+            <ToggleOption value="assets">Assets</ToggleOption>
+          </>
+        )}
+      </ToggleGroup>
+
+      <div ref={containerRef} className="keyboard-view">
+        <OnScreenKeyboard
+          layout={layout}
+          layoutName={layoutName}
+          display={display}
+          buttonTheme={buttonTheme}
+          onKeyPress={onKeyPress}
+          onKeyReleased={onKeyReleased}
+          onButtonMouseEnter={handleButtonMouseEnter}
+          onButtonMouseLeave={handleButtonMouseLeave}
+        />
+      </div>
+      {currentHoverSlugs && ( // Only render Tooltip when there are hoverSlugs
+        <Tooltip
+          open={!!currentHoverSlugs}
+          placement="bottom"
+          disableHoverListener
+          disableFocusListener
+          disableTouchListener
+          title={
+            <div
+              style={{
+                backgroundColor: "transparent",
+                borderRadius: ".5em",
+                padding: ".5em",
+                display: "flex",
+                flexDirection: "row",
+                flexWrap: "wrap",
+                gap: "2em"
+              }}
+            >
+              {currentHoverSlugs?.map((slug, idx) => (
+                <React.Fragment key={idx}>
+                  {slug === "switchToTabGroup" ? (
+                    <div className="tooltip-span">
+                      <div className="tooltip-title">Switch to Tab</div>
+                      <div className="tooltip-key">
+                        <kbd>{os === "mac" ? "⌘" : "CTRL"}</kbd>+<kbd>1-9</kbd>
+                      </div>
+                      <div className="tooltip-description">
+                        Activate workflow tab 1-9
+                      </div>
+                    </div>
+                  ) : (
+                    getShortcutTooltip(slug, os, "full", true, shortcuts)
+                  )}
+                </React.Fragment>
+              ))}
+            </div>
+          }
+          arrow
+          slotProps={{
+            popper: {
+              style: {
+                backgroundColor: "transparent"
+              },
+              anchorEl: currentTooltipAnchorEl,
+              modifiers: [
+                {
+                  name: "offset",
+                  options: {
+                    offset: [0, -12]
+                  }
+                }
+              ]
+            },
+            tooltip: {
+              style: {
+                maxWidth: "none"
+              }
+            }
+          }}
+        >
+          <div />
+        </Tooltip>
+      )}
+    </div>
+  );
+};
+
+export default KeyboardShortcutsView;

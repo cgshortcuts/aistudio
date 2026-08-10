@@ -1,0 +1,125 @@
+__pycache__
+*.pyc
+*.pyo
+*.dmypy.json
+*.jar
+.mypy_cache
+*.egg-info
+*.egg
+*.pth
+*.torchscript
+*.ckpt
+*.gguf
+*.pt
+*.pth
+*.safetensors
+.claude/*
+!.claude/skills/
+# Shared Claude starter kit — checked in so every session gets the same setup.
+!.claude/README.md
+!.claude/settings.json
+!.claude/hooks/
+!.claude/commands/
+# Personal overrides stay local.
+.claude/settings.local.json
+.pi/*
+build/
+coverage/
+dist/
+# Storybook build output
+storybook-static/
+web/storybook-static/
+# Stryker mutation testing
+**/reports/mutation/
+**/.stryker-tmp/
+**/stryker-setup-*.js
+electron/dist/
+electron/dist-web/
+electron/dist-electron/
+electron/backend-bundle/
+electron/mcpb/
+electron/.node-runtime/
+electron/resources/micromamba
+conda-lock.yml
+# Temporary build files
+*.tsbuildinfo
+.tmp/
+__notebooks/
+package/
+postgres_data/
+.ipynb_checkpoints
+.huggingface
+.expo
+
+.bin
+.vite
+.venv
+node_modules
+docs.chromadb
+
+# Cache
+.cache
+.eslintcache
+.turbo/
+# tsx temp files (Windows bug: resolves tmpdir as "undefined")
+**/undefined/
+
+# Testing
+/coverage
+*.lcov
+playwright-report/
+test-results/
+.last-run.json
+
+# Generated E2E workflow suite (built by web/tests/e2e-runner/prepareSuite.ts)
+web/public/e2e-suite/
+
+# Environment variables
+*.override.env
+
+# macOS
+# https://github.com/github/gitignore/blob/master/Global/macOS.gitignore
+.DS_Store
+
+.env
+cert.pem
+key.pem
+.aider*
+
+# Local dev database created by running the server
+nodetool.db
+nodetool.db-shm
+nodetool.db-wal
+
+# Dev
+.codegen-cache/
+.schema-cache/
+packages/fal-nodes/src/generated/*
+# FAL pricing bundles are generated alongside fal-manifest.json and committed
+# so users get prices on first paint even without a FAL_API_KEY configured.
+# (Use `/*` rather than `/` above so these `!` re-include rules can take effect.)
+!packages/fal-nodes/src/generated/fal-node-type-pricing.json
+!packages/fal-nodes/src/generated/fal-unit-pricing.json
+packages/replicate-nodes/src/generated/
+.codegpt
+__plans__
+.memory
+*.tsbuildinfo
+
+# Superpowers visual brainstorm sessions
+.superpowers/
+
+# Chrome for Testing downloaded by @puppeteer/browsers for extension integration tests
+/chrome/
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+.design-sync/previews/.tmp
+
+# nodetool debug/validate bundle output
+nodetool-debug/
+
+# Dev-server / build logs
+*.log

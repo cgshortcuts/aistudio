@@ -1,0 +1,465 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+
+import React, { useCallback, useEffect, useRef, useState, memo } from "react";
+import BackspaceIcon from "@mui/icons-material/Backspace";
+import Public from "@mui/icons-material/Public";
+import Folder from "@mui/icons-material/Folder";
+import { useKeyPressedStore } from "../../stores/KeyPressedStore";
+import { useDebouncedCallback } from "../../hooks/useDebouncedCallback";
+import { useAssetGridStore } from "../../stores/AssetGridStore";
+import { useAssetSearch } from "../../serverState/useAssetSearch";
+import { Tooltip, MOTION, BORDER_RADIUS, reducedMotion } from "../ui_primitives";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+
+
+const styles = (theme: Theme) =>
+  css({
+    "&": {
+      width: "100%",
+      display: "flex",
+      position: "relative",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: "0.1em",
+      margin: "0",
+      padding: 0,
+      overflow: "hidden"
+    },
+    ".search-box": {
+      border: 0,
+      position: "relative"
+    },
+    ".search-input": {
+      width: "100%",
+      flexShrink: "0"
+    },
+    "input[type='text']": {
+      border: 0,
+      outline: "none",
+      padding: "0 2.2em 0 2.6em",
+      margin: "0",
+      height: "32px",
+      fontSize: "var(--fontSizeSmall)",
+      WebkitAppearance: "none",
+      MozAppearance: "none",
+      appearance: "none",
+      color: "var(--palette-text-primary)",
+      backgroundColor: "var(--palette-grey-800)",
+      borderRadius: BORDER_RADIUS.md,
+      transition: MOTION.all
+    },
+    "input[type='text']:focus": {
+      backgroundColor: "var(--palette-grey-700)",
+      borderColor: "var(--palette-primary-main)",
+      outline: "none"
+    },
+    // Keyboard focus needs a visible ring; inset offset avoids clipping by the
+    // container's overflow: hidden.
+    "input[type='text']:focus-visible": {
+      outline: "2px solid var(--palette-primary-main)",
+      outlineOffset: "-2px"
+    },
+    ".clear-search-btn": {
+      position: "absolute",
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "2em",
+      height: "100%",
+      top: 0,
+      right: "0.7em",
+      border: 0,
+      backgroundColor: "transparent",
+      color: theme.vars.palette.grey[400],
+      transition: `color ${MOTION.normal}, ${MOTION.opacity}`,
+      padding: 0,
+      "& svg": {
+        fontSize: "var(--fontSizeBig)"
+      },
+      "&:hover": {
+        backgroundColor: "transparent"
+      },
+      "&:not(.disabled):hover svg": {
+        color: "var(--palette-primary-main)",
+        backgroundColor: "transparent"
+      },
+      "&.disabled": {
+        opacity: 0,
+        pointerEvents: "none"
+      }
+    },
+    ".search-loading-indicator": {
+      position: "absolute",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "2em",
+      height: "100%",
+      top: 0,
+      right: "0.7em",
+      padding: 0
+    },
+    ".search-spinner": {
+      width: "16px",
+      height: "16px",
+      border: "2px solid var(--palette-grey-500)",
+      borderTop: "2px solid var(--palette-grey-100)",
+      borderRadius: BORDER_RADIUS.circle,
+      animation: `spin ${MOTION.spin} infinite`,
+      ...reducedMotion({ animation: "none" })
+    },
+    "@keyframes spin": {
+      "0%": { transform: "rotate(0deg)" },
+      "100%": { transform: "rotate(360deg)" }
+    },
+    ".search-mode-toggle": {
+      position: "absolute",
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "2em",
+      height: "100%",
+      top: 0,
+      left: "0.5em",
+      border: 0,
+      backgroundColor: "transparent",
+      color: theme.vars.palette.grey[400],
+      transition: `color ${MOTION.normal}`,
+      padding: 0,
+      "& svg": {
+        fontSize: "var(--fontSizeBig)"
+      },
+      "&:hover": {
+        backgroundColor: "transparent",
+        color: "var(--palette-primary-main)"
+      },
+      "&.global-mode": {
+        color: "var(--palette-primary-main)"
+      }
+    }
+  });
+
+interface AssetSearchInputProps {
+  onLocalSearchChange: (_value: string) => void;
+  focusSearchInput?: boolean;
+  focusOnTyping?: boolean;
+  debounceTime?: number;
+  // Acts as a max width. The input will always try to take 100% width of its
+  // container up to this value. Accepts number (px) or any CSS width string.
+  width?: number | string;
+}
+
+const AssetSearchInput: React.FC<AssetSearchInputProps> = ({
+  onLocalSearchChange,
+  focusSearchInput = false,
+  focusOnTyping = false,
+  debounceTime = 500,
+  width
+}) => {
+  const theme = useTheme();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [localSearchTerm, setLocalSearchTerm] = useState("");
+  const isControlOrMetaPressed = useKeyPressedStore(
+    (state) => state.isKeyPressed("control") || state.isKeyPressed("meta")
+  );
+
+  // Global search state and hooks
+  const isGlobalSearchMode = useAssetGridStore(
+    (state) => state.isGlobalSearchMode
+  );
+  const setIsGlobalSearchMode = useAssetGridStore(
+    (state) => state.setIsGlobalSearchMode
+  );
+  const setGlobalSearchResults = useAssetGridStore(
+    (state) => state.setGlobalSearchResults
+  );
+  const setIsGlobalSearchActive = useAssetGridStore(
+    (state) => state.setIsGlobalSearchActive
+  );
+  const setGlobalSearchQuery = useAssetGridStore(
+    (state) => state.setGlobalSearchQuery
+  );
+
+  const { searchAssets, isSearching } = useAssetSearch();
+
+  // Keep track of current search abort controller
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Debounced search implementation for both local and global search
+  const debouncedSetSearchTerm = useDebouncedCallback(async (value: string) => {
+    if (isGlobalSearchMode) {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
+      if (value.length < 2) {
+        setIsGlobalSearchActive(false);
+        setGlobalSearchResults([]);
+        setGlobalSearchQuery(value);
+        return;
+      }
+
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
+
+      try {
+        const result = await searchAssets(
+          value,
+          undefined,
+          100,
+          undefined,
+          abortController.signal
+        );
+
+        // Only update state if this search wasn't aborted
+        if (!abortController.signal.aborted && result) {
+          setGlobalSearchResults(result.assets);
+          setIsGlobalSearchActive(true);
+          setGlobalSearchQuery(value);
+        }
+      } catch (error) {
+        // Don't log errors for aborted requests
+        if (!abortController.signal.aborted) {
+          console.error("Global search error:", error);
+          setIsGlobalSearchActive(false);
+          setGlobalSearchResults([]);
+        }
+      }
+    } else {
+      // Handle local search
+      onLocalSearchChange(value);
+    }
+  }, debounceTime);
+
+  // Reset search state and cancel any pending searches
+  const resetSearch = useCallback(() => {
+    // Cancel any in-flight API requests
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+
+    setLocalSearchTerm("");
+
+    if (isGlobalSearchMode) {
+      setIsGlobalSearchActive(false);
+      setGlobalSearchResults([]);
+      setGlobalSearchQuery("");
+    } else {
+      onLocalSearchChange("");
+    }
+
+    debouncedSetSearchTerm.cancel();
+  }, [
+    debouncedSetSearchTerm,
+    onLocalSearchChange,
+    isGlobalSearchMode,
+    setIsGlobalSearchActive,
+    setGlobalSearchResults,
+    setGlobalSearchQuery
+  ]);
+
+  // Toggle between local and global search modes without clearing the input
+  const toggleSearchMode = useCallback(async () => {
+    const newMode = !isGlobalSearchMode;
+    setIsGlobalSearchMode(newMode);
+
+    if (newMode) {
+      // Switching to global: run global search with current term
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      if (localSearchTerm.length < 2) {
+        setIsGlobalSearchActive(false);
+        setGlobalSearchResults([]);
+        setGlobalSearchQuery(localSearchTerm);
+        return;
+      }
+      const ac = new AbortController();
+      abortControllerRef.current = ac;
+      try {
+        const result = await searchAssets(
+          localSearchTerm,
+          undefined,
+          100,
+          undefined,
+          ac.signal
+        );
+        if (!ac.signal.aborted && result) {
+          setGlobalSearchResults(result.assets);
+          setIsGlobalSearchActive(true);
+          setGlobalSearchQuery(localSearchTerm);
+        }
+      } catch (_error) {
+        if (!ac.signal.aborted) {
+          setIsGlobalSearchActive(false);
+          setGlobalSearchResults([]);
+        }
+      }
+    } else {
+      // Switching to local: apply filter with current term
+      onLocalSearchChange(localSearchTerm);
+    }
+  }, [
+    isGlobalSearchMode,
+    setIsGlobalSearchMode,
+    localSearchTerm,
+    searchAssets,
+    setIsGlobalSearchActive,
+    setGlobalSearchResults,
+    setGlobalSearchQuery,
+    onLocalSearchChange
+  ]);
+
+  // Handle input changes with debouncing
+  const handleInputChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const newValue = event.target.value;
+      // Update local state immediately for UI responsiveness
+      setLocalSearchTerm(newValue);
+      debouncedSetSearchTerm(newValue);
+    },
+    [debouncedSetSearchTerm]
+  );
+
+  const clearSearch = useCallback(() => {
+    resetSearch();
+    inputRef.current?.focus();
+  }, [resetSearch]);
+
+  useEffect(() => {
+    if (focusSearchInput) {
+      inputRef.current?.focus();
+    }
+  }, [focusSearchInput]);
+
+  // Cleanup: cancel any pending requests when component unmounts
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const shouldHandleEvent =
+        document.activeElement === inputRef.current ||
+        (focusOnTyping &&
+          !document.activeElement?.classList.contains("search-input"));
+
+      if (!shouldHandleEvent) {return;}
+
+      if (
+        (event.key === "Delete" || event.key === "Backspace") &&
+        isControlOrMetaPressed
+      ) {
+        event.preventDefault();
+        clearSearch();
+        return;
+      }
+
+      if (focusOnTyping) {
+        if (isControlOrMetaPressed) {return;}
+        if (event.key.length === 1 && /[a-zA-Z0-9]/.test(event.key)) {
+          if (document.activeElement !== inputRef.current) {
+            event.preventDefault();
+            inputRef.current?.focus();
+            setLocalSearchTerm(event.key);
+            debouncedSetSearchTerm(event.key);
+          }
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [
+    focusOnTyping,
+    isControlOrMetaPressed,
+    debouncedSetSearchTerm,
+    clearSearch
+  ]);
+
+  const effectivePlaceholder = isGlobalSearchMode
+    ? "Search all assets..."
+    : "Search current folder...";
+
+  return (
+    <div
+      className={`asset-search-input-container with-global-search ${
+        isGlobalSearchMode ? "global-mode" : "local-mode"
+      }`}
+      css={styles(theme)}
+      style={{
+        width: "100%",
+        maxWidth:
+          typeof width === "number"
+            ? `${width}px`
+            : (width as string | undefined)
+      }}
+    >
+      <Tooltip
+        title={
+          isGlobalSearchMode
+            ? "Switch to local search"
+            : "Switch to global search"
+        }
+      >
+        <button
+          type="button"
+          className={`search-mode-toggle ${
+            isGlobalSearchMode ? "global-mode" : ""
+          }`}
+          onClick={toggleSearchMode}
+          data-testid="asset-search-mode-toggle"
+          tabIndex={-1}
+        >
+          {isGlobalSearchMode ? <Public /> : <Folder />}
+        </button>
+      </Tooltip>
+
+      <input
+        id="asset-search-input"
+        aria-label={isGlobalSearchMode ? "Search all assets" : "Search current folder"}
+        className="search-input"
+        ref={inputRef}
+        type="text"
+        placeholder={effectivePlaceholder}
+        value={localSearchTerm}
+        onChange={handleInputChange}
+        autoCorrect="off"
+        autoCapitalize="none"
+        spellCheck="false"
+        autoComplete="off"
+        data-testid="asset-search-input-field"
+        data-search-mode={isGlobalSearchMode ? "global" : "local"}
+      />
+
+      {isSearching && isGlobalSearchMode && localSearchTerm.length >= 2 ? (
+        <div className="search-loading-indicator">
+          <div className="search-spinner"></div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className={`clear-search-btn ${
+            localSearchTerm.trim() === "" ? "disabled" : ""
+          }`}
+          tabIndex={-1}
+          onClick={clearSearch}
+          data-testid="asset-search-clear-btn"
+        >
+          <BackspaceIcon />
+        </button>
+      )}
+    </div>
+  );
+};
+
+export default memo(AssetSearchInput);

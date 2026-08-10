@@ -1,0 +1,334 @@
+import { TypeMetadata } from "../stores/ApiTypes";
+
+/**
+ * Human readable string representation of a type.
+ */
+export const typeToString = (type: TypeMetadata): string => {
+  switch (type.type) {
+    case "any":
+      return "any";
+    case "enum":
+      return type.values ? type.values.join(" | ") : "enum";
+    case "list":
+      return type.type_args && type.type_args.length === 1
+        ? `${typeToString(type.type_args[0])}[]`
+        : "list";
+    case "dict":
+      return type.type_args && type.type_args.length === 2
+        ? `{ ${typeToString(type.type_args[0])}: ${typeToString(
+            type.type_args[1]
+          )} }`
+        : "dict";
+    case "union":
+      return type.type_args && type.type_args.length > 0
+        ? type.type_args.map((t) => typeToString(t)).join(" | ")
+        : "union";
+    default:
+      return type.type;
+  }
+};
+
+/**
+ * Create a slug from a string. Used for namespaces.
+ */
+export const Slugify = (input: string): string => {
+  if (!input) {return "";}
+  return input.replaceAll(".", "_").replaceAll("-", "_").toLowerCase();
+};
+
+/**
+ * Checks if two enum types are connectable by matching their type_name.
+ * Enum-to-enum connections are only allowed when both enums have the same type_name.
+ *
+ * @param a The first enum type.
+ * @param b The second enum type.
+ */
+const isEnumConnectable = (a: TypeMetadata, b: TypeMetadata): boolean => {
+  // Both must have a type_name and they must match
+  if (a.type_name && b.type_name) {
+    return a.type_name === b.type_name;
+  }
+  // If either side lacks type_name, enum↔enum is not connectable
+  return false;
+};
+
+/**
+ * Checks if a JavaScript value matches the given TypeMetadata.
+ */
+export const valueMatchesType = (
+  value: unknown,
+  meta: TypeMetadata | undefined
+): boolean => {
+  if (!meta || !meta.type) {
+    return false;
+  }
+
+  // Handle optional
+  if (value === undefined) {
+    return !!meta.optional;
+  }
+
+  // Helper to identify plain objects (non-null, non-array)
+  const isPlainObject = (v: unknown): v is Record<string, unknown> => {
+    return typeof v === "object" && v !== null && !Array.isArray(v);
+  };
+
+  const matchesKeyType = (key: string, keyType: TypeMetadata): boolean => {
+    switch (keyType.type) {
+      case "any":
+      case "str":
+        return true;
+      case "number": {
+        const n = Number(key);
+        return Number.isFinite(n);
+      }
+      case "boolean":
+        return key === "true" || key === "false";
+      case "enum":
+        return keyType.values ? keyType.values.includes(key) : true;
+      case "union":
+        return keyType.type_args?.some((t) => matchesKeyType(key, t)) ?? false;
+      default:
+        // Keys are strings in JS; for other key types, accept as best-effort
+        return true;
+    }
+  };
+
+  const matches = (v: unknown, t: TypeMetadata): boolean => {
+    switch (t.type) {
+      case "any":
+        return true;
+      case "null":
+        return v === null;
+      case "str":
+        return typeof v === "string";
+      case "number":
+      case "int":
+      case "float":
+        return typeof v === "number" && Number.isFinite(v);
+      case "boolean":
+      case "bool":
+        return typeof v === "boolean";
+      case "enum":
+        if (!t.values || t.values.length === 0) {
+          return typeof v === "string";
+        }
+        return typeof v === "string" && t.values.includes(v);
+      case "list": {
+        if (!Array.isArray(v)) {return false;}
+        const elementType = t.type_args && t.type_args[0];
+        if (!elementType) {return true;} // untyped list
+        return v.every((item) => matches(item, elementType));
+      }
+      case "tuple": {
+        if (!Array.isArray(v)) {return false;}
+        if (!t.type_args || t.type_args.length === 0) {return true;}
+        if (v.length !== t.type_args.length) {return false;}
+        for (let i = 0; i < t.type_args.length; i++) {
+          if (!matches(v[i], t.type_args[i])) {return false;}
+        }
+        return true;
+      }
+      case "dict": {
+        // Support both plain objects and Map-like values
+        const keyType = t.type_args && t.type_args[0];
+        const valueType = t.type_args && t.type_args[1];
+
+        if (v instanceof Map) {
+          for (const [k, val] of v.entries()) {
+            const keyStr = String(k);
+            if (keyType && !matchesKeyType(keyStr, keyType)) {return false;}
+            if (valueType && !matches(val, valueType)) {return false;}
+          }
+          return true;
+        }
+
+        if (!isPlainObject(v)) {return false;}
+        for (const [k, val] of Object.entries(v)) {
+          if (keyType && !matchesKeyType(k, keyType)) {return false;}
+          if (valueType && !matches(val, valueType)) {return false;}
+        }
+        return true;
+      }
+      case "union": {
+        if (!t.type_args || t.type_args.length === 0) {return false;}
+        return t.type_args.some((opt) => matches(v, opt));
+      }
+      case "object":
+        return isPlainObject(v);
+      default:
+        // Treat all other named types as object-like references
+        return isPlainObject(v);
+    }
+  };
+
+  return matches(value, meta);
+};
+
+const nonObjectTypes = [
+  "str",
+  "number",
+  "boolean",
+  "null",
+  "enum",
+  "list",
+  "dict",
+  "union",
+  "tuple"
+];
+
+export const isConnectable = (
+  source: TypeMetadata,
+  target: TypeMetadata,
+  allowAny: boolean = true
+): boolean => {
+  if (!source || !target || !source.type || !target.type) {
+    return false;
+  }
+
+  if (allowAny && (source.type === "any" || target.type === "any")) {
+    return true;
+  }
+
+  // CV ↔ chunk interop (Eurorack semantics): control-voltage streams ride
+  // the same chunk wire shape, so cv patches into chunk sockets and vice
+  // versa — an LFO can drive any streaming audio input, and audio can be
+  // used as a modulation source.
+  if (
+    (source.type === "cv" && target.type === "chunk") ||
+    (source.type === "chunk" && target.type === "cv")
+  ) {
+    return true;
+  }
+
+  // COLLECT HANDLE LOGIC: Allow connecting T -> list[T]
+  // This enables "collect" handles where multiple outputs of type T can connect
+  // to a single input of type list[T].
+  // Note: We exclude list sources here because list -> list connections
+  // are handled separately in the switch statement below with proper element
+  // type compatibility checking.
+  const isTargetListWithElement =
+    target.type === "list" &&
+    target.type_args &&
+    target.type_args.length === 1 &&
+    target.type_args[0];
+  const isSourceNotAList = source.type !== "list";
+
+  if (isTargetListWithElement && isSourceNotAList) {
+    const targetElementType = target.type_args[0];
+    if (isConnectable(source, targetElementType, allowAny)) {
+      return true;
+    }
+  }
+
+  if (source.type === "union") {
+    // this is not 100% safe but we want to be able to connect
+    // if the union is a subset of the target
+    return source.type_args.length > 0
+      ? source.type_args.some((t) => isConnectable(t, target))
+      : false;
+  }
+
+  if (target.type === "union") {
+    return target.type_args.length > 0
+      ? target.type_args.some((t) => isConnectable(source, t))
+      : false;
+  }
+
+  if (target.type === "object") {
+    if (source.type === "union" && source.type_args.length > 0) {
+      // For unions, some types in the union must be compatible with object
+      return source.type_args.some((t) => !nonObjectTypes.includes(t.type));
+    }
+    return !nonObjectTypes.includes(source.type);
+  }
+
+  // Enum connection policy:
+  // - str -> enum: allowed (string can be parsed as enum value)
+  // - enum -> str: allowed (enum value is a string)
+  // - enum -> enum: allowed only when type_name matches
+  if (target.type === "enum") {
+    if (source.type === "str") {
+      return true;
+    }
+    if (source.type === "enum") {
+      return isEnumConnectable(source, target);
+    }
+    return false;
+  }
+
+  switch (source.type) {
+    case "union":
+      break;
+    case "enum":
+      if (target.type === "str") {
+        return true;
+      }
+      // enum -> enum already handled above
+      return false;
+    case "list":
+      if (target.type === "list") {
+        if (source.type_args.length === 0 || target.type_args.length === 0) {
+          return true;
+        }
+        if (
+          source.type_args.length === 1 &&
+          target.type_args.length === 1 &&
+          source.type_args[0] !== undefined &&
+          target.type_args[0] !== undefined
+        ) {
+          return isConnectable(source.type_args[0], target.type_args[0]);
+        } else {
+          return true;
+        }
+      } else {
+        return false;
+      }
+    case "dict":
+      if (target.type === "dict") {
+        if (source.type_args.length < 2 || target.type_args.length < 2) {
+          return true;
+        }
+        if (source.type_args.length === 2 && target.type_args.length === 2) {
+          return (
+            isConnectable(source.type_args[0], target.type_args[0]) &&
+            isConnectable(source.type_args[1], target.type_args[1])
+          );
+        }
+      } else {
+        return false;
+      }
+      break;
+    default:
+      return source.type === target.type;
+  }
+  return false;
+};
+
+/**
+ * Checks if a target type is a "collect" handle - a list type that can accept
+ * multiple connections of its element type T.
+ *
+ * A collect handle is defined as:
+ * - A list type with exactly one type argument (list[T])
+ * - Does NOT have type argument "any" (list[any] is not a collect handle)
+ *
+ * @param type The type to check.
+ * @returns True if the type is a collect handle.
+ */
+export const isCollectType = (type: TypeMetadata): boolean => {
+  if (!type || type.type !== "list") {
+    return false;
+  }
+  // Must have exactly one type argument
+  if (!type.type_args || type.type_args.length !== 1) {
+    return false;
+  }
+  // The element type must not be "any"
+  const elementType = type.type_args[0];
+  if (!elementType || elementType.type === "any") {
+    return false;
+  }
+  return true;
+};
+

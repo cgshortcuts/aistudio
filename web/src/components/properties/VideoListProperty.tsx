@@ -1,0 +1,455 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { memo, useCallback, useState, useMemo, useRef, ChangeEvent } from "react";
+import { PropertyProps } from "../node/PropertyInput";
+import PropertyLabel from "../node/PropertyLabel";
+import { Asset } from "../../stores/ApiTypes";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { Tooltip, CloseButton, MOTION, SPACING, BORDER_RADIUS, Z_INDEX, getSpacingPx } from "../ui_primitives";
+import isEqual from "../../utils/isEqual";
+import { useAssetUpload } from "../../serverState/useAssetUpload";
+import { isElectron } from "../../utils/browser";
+import {
+  deserializeDragData,
+  hasExternalFiles,
+  resolveAssetsMultiple
+} from "../../lib/dragdrop";
+import { useAssetGridStore } from "../../stores/AssetGridStore";
+
+interface VideoItem {
+  uri: string;
+  type: string;
+}
+
+const styles = (theme: Theme) =>
+  css({
+    ".video-list-property": {
+      width: "100%",
+      marginBottom: getSpacingPx(SPACING.md)
+    },
+    ".property-label": {
+      marginBottom: theme.spacing(SPACING.sm)
+    },
+    ".video-grid": {
+      display: "grid",
+      gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))",
+      gap: getSpacingPx(SPACING.md),
+      marginTop: getSpacingPx(SPACING.md)
+    },
+    ".video-item": {
+      position: "relative",
+      width: "100%",
+      paddingTop: "56.25%", // 16:9 aspect ratio
+      backgroundColor: theme.vars.palette.c_scrim_soft,
+      borderRadius: BORDER_RADIUS.md,
+      overflow: "hidden",
+      border: `1px solid ${theme.vars.palette.grey[700]}`,
+      transition: MOTION.all,
+      "&:hover": {
+        borderColor: theme.vars.palette.grey[500],
+        ".remove-button": {
+          opacity: 1
+        }
+      }
+    },
+    ".video-content": {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden"
+    },
+    ".video-content video": {
+      width: "100%",
+      height: "100%",
+      objectFit: "cover"
+    },
+    ".remove-button": {
+      position: "absolute",
+      top: "2px",
+      right: "2px",
+      opacity: 0,
+      transition: `opacity ${MOTION.normal}`,
+      backgroundColor: theme.vars.palette.c_scrim,
+      color: theme.vars.palette.grey[100],
+      padding: getSpacingPx(SPACING.micro),
+      width: "20px",
+      height: "20px",
+      zIndex: Z_INDEX.raised,
+      "&:hover": {
+        backgroundColor: theme.vars.palette.error.main,
+        color: theme.vars.palette.common.white
+      }
+    },
+    ".remove-button .MuiSvgIcon-root": {
+      fontSize: "var(--fontSizeNormal)"
+    },
+    ".dropzone": {
+      position: "relative",
+      minHeight: "80px",
+      width: "100%",
+      border: "0",
+      maxWidth: "none",
+      textAlign: "center",
+      transition: MOTION.all,
+      outline: `1px dashed ${theme.vars.palette.grey[600]}`,
+      margin: `${theme.spacing(SPACING.sm)} 0`,
+      backgroundColor: theme.vars.palette.c_scrim_soft,
+      borderRadius: BORDER_RADIUS.md,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      cursor: "pointer",
+      "&:hover": {
+        outline: `1px dashed ${theme.vars.palette.grey[400]}`,
+        backgroundColor: theme.vars.palette.c_scrim_soft
+      },
+      "&.drag-over": {
+        backgroundColor: theme.vars.palette.grey[600],
+        outline: `2px dashed ${theme.vars.palette.grey[100]}`,
+        outlineOffset: "-2px"
+      }
+    },
+    ".dropzone p": {
+      textAlign: "center",
+      fontFamily: theme.fontFamily2,
+      textTransform: "uppercase",
+      letterSpacing: "1px",
+      fontSize: "var(--fontSizeSmaller)",
+      color: theme.vars.palette.grey[500],
+      margin: "1em",
+      lineHeight: "1.1em"
+    }
+  });
+
+// Helper to flatten potentially nested arrays of items (handles constants + lists)
+const flattenVideoItems = (items: unknown): VideoItem[] => {
+  if (!items) {
+    return [];
+  }
+  if (!Array.isArray(items)) {
+    if (typeof items === "object" && items !== null && "uri" in items) {
+      return [items as VideoItem];
+    }
+    return [];
+  }
+
+  const result: VideoItem[] = [];
+  for (const item of items) {
+    if (Array.isArray(item)) {
+      result.push(...flattenVideoItems(item));
+    } else if (typeof item === "object" && item !== null && "uri" in item) {
+      result.push(item as VideoItem);
+    }
+  }
+  return result;
+};
+
+const VideoListProperty = (props: PropertyProps) => {
+  const theme = useTheme();
+  const id = `video-list-${props.property.name}-${props.propertyIndex}`;
+  const { uploadAsset } = useAssetUpload();
+
+  // Use selectors for asset grid store to avoid full store subscriptions
+  const filteredAssets = useAssetGridStore((state) => state.filteredAssets);
+  const globalSearchResults = useAssetGridStore((state) => state.globalSearchResults);
+  const selectedAssets = useAssetGridStore((state) => state.selectedAssets);
+
+  const videos: VideoItem[] = useMemo(
+    () => flattenVideoItems(props.value),
+    [props.value]
+  );
+
+  const [isDragOver, setIsDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleAddVideos = useCallback(
+    (newVideos: VideoItem[]) => {
+      const updatedVideos = [...videos, ...newVideos];
+      props.onChange(updatedVideos);
+    },
+    [videos, props]
+  );
+
+  const handleRemoveVideo = useCallback(
+    (index: number) => {
+      const updatedVideos = videos.filter((_, i) => i !== index);
+      props.onChange(updatedVideos);
+    },
+    [videos, props]
+  );
+
+  // Memoize remove handlers for each video to prevent re-renders
+  const removeHandlers = useMemo(() => {
+    const handlers: Record<number, () => void> = {};
+    for (let i = 0; i < videos.length; i++) {
+      handlers[i] = () => handleRemoveVideo(i);
+    }
+    return handlers;
+  }, [videos, handleRemoveVideo]);
+
+  // Handles both internal nodetool asset drops and external files.
+  const onDrop = useCallback(
+    async (event: React.DragEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsDragOver(false);
+
+      const dragData = deserializeDragData(event.dataTransfer);
+      if (dragData) {
+        const droppedVideos: VideoItem[] = [];
+
+        if (dragData.type === "assets-multiple") {
+          const selectedIds = dragData.payload as string[];
+          const uniqueAssets = resolveAssetsMultiple(
+            selectedIds,
+            dragData.metadata?.assets,
+            [...filteredAssets, ...globalSearchResults, ...(selectedAssets || [])]
+          );
+
+          uniqueAssets.forEach(asset => {
+            if (asset.get_url && asset.content_type?.startsWith("video/")) {
+              droppedVideos.push({ uri: asset.get_url, type: "video" });
+            }
+          });
+        }
+
+        if (droppedVideos.length === 0 && dragData.type === "asset") {
+          const asset = dragData.payload as Asset;
+          if (asset.get_url && asset.content_type?.startsWith("video/")) {
+            droppedVideos.push({ uri: asset.get_url, type: "video" });
+          }
+        }
+
+        if (droppedVideos.length > 0) {
+          handleAddVideos(droppedVideos);
+          return;
+        }
+      }
+
+      if (!hasExternalFiles(event.dataTransfer)) {
+        return;
+      }
+
+      const files = Array.from(event.dataTransfer.files).filter((file) =>
+        file.type.startsWith("video/")
+      );
+
+      if (files.length === 0) {
+        return;
+      }
+
+      const uploadPromises = files.map(
+        (file) =>
+          new Promise<VideoItem>((resolve, reject) => {
+            uploadAsset({
+              file,
+              onCompleted: (asset: Asset) => {
+                const uri = asset.get_url;
+                if (!uri) {
+                  reject(new Error("Asset URL is missing"));
+                  return;
+                }
+                resolve({
+                  uri,
+                  type: "video"
+                });
+              },
+              onFailed: (error: string) => {
+                reject(new Error(error));
+              }
+            });
+          })
+      );
+
+      try {
+        const newVideos = await Promise.all(uploadPromises);
+        handleAddVideos(newVideos);
+      } catch (error) {
+        console.error("Failed to upload videos:", error);
+      }
+    },
+    [uploadAsset, handleAddVideos, filteredAssets, globalSearchResults, selectedAssets]
+  );
+
+  const onDragOver = useCallback((event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setIsDragOver(false);
+  }, []);
+
+  const handleNativeFilePicker = useCallback(async () => {
+    if (!window.api?.dialog?.openFile) {
+      return;
+    }
+
+    try {
+      const result = await window.api.dialog.openFile({
+        title: "Select videos",
+        filters: [
+          { name: "Video", extensions: ["mp4", "avi", "mov", "wmv", "flv", "webm", "mkv"] }
+        ],
+        multiSelections: true
+      });
+
+      if (!result.canceled && result.filePaths.length > 0) {
+        const uploadPromises = result.filePaths.map(async (filePath: string) => {
+          const result = await window.api.clipboard?.readFileBuffer(filePath);
+          if (!result) {
+            throw new Error("Failed to read file");
+          }
+
+          const pathSegments = filePath.split(/[\\/]/);
+          const fileName = pathSegments[pathSegments.length - 1] || "video.mp4";
+
+          const fileBytes = new Uint8Array(result.buffer.byteLength);
+          fileBytes.set(result.buffer);
+          const file = new File([fileBytes], fileName, { type: result.mimeType });
+
+          return new Promise<VideoItem>((resolve, reject) => {
+            uploadAsset({
+              file,
+              onCompleted: (asset: Asset) => {
+                const uri = asset.get_url;
+                if (!uri) {
+                  reject(new Error("Asset URL is missing"));
+                  return;
+                }
+                resolve({ uri, type: "video" });
+              },
+              onFailed: (error: string) => {
+                reject(new Error(error));
+              }
+            });
+          });
+        });
+
+        const newVideos = await Promise.all(uploadPromises);
+        handleAddVideos(newVideos);
+      }
+    } catch (error) {
+      console.error("Error opening file picker:", error);
+    }
+  }, [uploadAsset, handleAddVideos]);
+
+  const handleBrowserFilePicker = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileInputChange = useCallback(async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []).filter((file) =>
+      file.type.startsWith("video/")
+    );
+    if (files.length === 0) {
+      return;
+    }
+
+    const uploadPromises = files.map(
+      (file) =>
+        new Promise<VideoItem>((resolve, reject) => {
+          uploadAsset({
+            file,
+            onCompleted: (asset: Asset) => {
+              const uri = asset.get_url;
+              if (!uri) {
+                reject(new Error("Asset URL is missing"));
+                return;
+              }
+              resolve({ uri, type: "video" });
+            },
+            onFailed: (error: string) => {
+              reject(new Error(error));
+            }
+          });
+        })
+    );
+
+    try {
+      const newVideos = await Promise.all(uploadPromises);
+      handleAddVideos(newVideos);
+    } catch (error) {
+      console.error("Failed to upload videos:", error);
+    }
+
+    // Reset input so same file can be selected again
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, [uploadAsset, handleAddVideos]);
+
+  const handleDropzoneClick = useCallback(() => {
+    if (isElectron && window.api?.dialog?.openFile) {
+      handleNativeFilePicker();
+    } else {
+      handleBrowserFilePicker();
+    }
+  }, [handleNativeFilePicker, handleBrowserFilePicker]);
+
+  return (
+    <div className="video-list-property" css={styles(theme)}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        hidden
+        multiple
+        accept="video/*,.mp4,.avi,.mov,.wmv,.flv,.webm,.mkv"
+        onChange={handleFileInputChange}
+      />
+
+      <PropertyLabel
+        name={props.property.name}
+        description={props.property.description}
+        id={id}
+      />
+
+      {videos.length > 0 && (
+        <div className="video-grid">
+          {videos.map((video, index) => (
+            <div key={video.uri} className="video-item">
+              <div className="video-content">
+                <video
+                  src={video.uri}
+                  controls
+                  muted
+                  preload="metadata"
+                  aria-label={`Video ${index + 1}`}
+                />
+              </div>
+              <CloseButton
+                className="remove-button"
+                onClick={removeHandlers[index]}
+                buttonSize="small"
+                tooltip="Remove video"
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      <Tooltip title="Click to select videos or drag and drop">
+        <div
+          role="button"
+          tabIndex={0}
+          className={`dropzone ${isDragOver ? "drag-over" : ""}`}
+          onClick={handleDropzoneClick}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleDropzoneClick(); } }}
+          onDragOver={onDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={onDrop}
+        >
+          <p>Click or drop videos here</p>
+        </div>
+      </Tooltip>
+    </div>
+  );
+};
+
+export default memo(VideoListProperty, isEqual);

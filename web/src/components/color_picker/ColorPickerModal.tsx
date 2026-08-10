@@ -1,0 +1,533 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import React, { useState, useCallback, useMemo, useEffect, useRef, memo } from "react";
+import { useShallow } from "zustand/react/shallow";
+import ReactDOM from "react-dom";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { Text, Caption, Tooltip, FlexRow, FlexColumn, EditorButton, TabGroup, BORDER_RADIUS, SPACING, Z_INDEX, getSpacingPx, activateOnKey } from "../ui_primitives";
+import type { TabItem } from "../ui_primitives";
+import { CloseButton } from "../ui_primitives";
+import CheckIcon from "@mui/icons-material/Check";
+import { useCombo } from "../../stores/KeyPressedStore";
+import {
+  hexToRgb,
+  rgbToHex,
+  rgbToHsb,
+  hsbToRgb,
+  rgbToHsl,
+  getContrastingTextColor
+} from "../../utils/colorConversion";
+import { useColorPickerStore, GradientValue } from "../../stores/ColorPickerStore";
+import { useNotificationStore } from "../../stores/NotificationStore";
+import SaturationPicker from "./SaturationPicker";
+import HueSlider from "./HueSlider";
+import AlphaSlider from "./AlphaSlider";
+import ColorInputs, { ColorMode } from "./ColorInputs";
+import ColorModeSelector from "./ColorModeSelector";
+import HarmonyPicker from "./HarmonyPicker";
+import GradientBuilder from "./GradientBuilder";
+import SwatchPanel from "./SwatchPanel";
+import ContrastChecker from "./ContrastChecker";
+import EyedropperButton from "./EyedropperButton";
+
+// Falls between theme.zIndex.commandMenu (9999) and theme.zIndex.popover
+// (10001), so no tier matches and it keeps its own value.
+const COLOR_PICKER_OVERLAY_Z_INDEX = 10000;
+
+const styles = (theme: Theme) =>
+  css({
+    ".modal-overlay": {
+      position: "fixed",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      backgroundColor: "rgba(0, 0, 0, 0.5)",
+      backdropFilter: "blur(4px)",
+      zIndex: COLOR_PICKER_OVERLAY_Z_INDEX
+    },
+    ".modal-content": {
+      backgroundColor: theme.vars.palette.background.paper,
+      borderRadius: BORDER_RADIUS.xl,
+      border: `1px solid ${theme.vars.palette.grey[800]}`,
+      boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
+      width: "90%",
+      maxWidth: "720px",
+      maxHeight: "90vh",
+      overflow: "hidden"
+    },
+    ".modal-header": {
+      justifyContent: "space-between",
+      padding: `${getSpacingPx(SPACING.lg)} ${getSpacingPx(SPACING.xl)}`,
+      borderBottom: `1px solid ${theme.vars.palette.grey[800]}`,
+      backgroundColor: theme.vars.palette.grey[900]
+    },
+    ".modal-title": {
+      fontSize: "var(--fontSizeNormal)",
+      fontWeight: 600,
+      color: theme.vars.palette.text.primary
+    },
+    ".header-actions": {
+      gap: getSpacingPx(SPACING.md)
+    },
+    ".modal-body": {
+      flex: 1,
+      overflow: "hidden"
+    },
+    ".picker-section": {
+      flex: "0 0 320px",
+      padding: getSpacingPx(SPACING.xl),
+      gap: getSpacingPx(SPACING.xl),
+      borderRight: `1px solid ${theme.vars.palette.grey[800]}`,
+      overflow: "auto"
+    },
+    ".tabs-section": {
+      flex: 1,
+      overflow: "hidden"
+    },
+    ".tab-content": {
+      flex: 1,
+      padding: getSpacingPx(SPACING.xl),
+      overflow: "auto"
+    },
+    ".color-preview": {
+      gap: getSpacingPx(SPACING.md),
+      marginTop: getSpacingPx(SPACING.md)
+    },
+    ".preview-swatch": {
+      flex: 1,
+      height: "48px",
+      borderRadius: BORDER_RADIUS.lg,
+      border: `1px solid ${theme.vars.palette.grey[700]}`,
+      cursor: "pointer",
+      position: "relative",
+      overflow: "hidden"
+    },
+    ".preview-swatch-bg": {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      // Checkerboard pattern for transparency
+      backgroundImage: `
+        linear-gradient(45deg, #ccc 25%, transparent 25%),
+        linear-gradient(-45deg, #ccc 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #ccc 75%),
+        linear-gradient(-45deg, transparent 75%, #ccc 75%)
+      `,
+      backgroundSize: "8px 8px",
+      backgroundPosition: "0 0, 0 4px, 4px -4px, -4px 0px"
+    },
+    ".preview-swatch-color": {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0
+    },
+    ".preview-label": {
+      fontSize: "var(--fontSizeSmaller)",
+      fontWeight: 600,
+      position: "relative",
+      zIndex: Z_INDEX.raised
+    },
+    ".copy-feedback": {
+      position: "absolute",
+      top: "50%",
+      left: "50%",
+      transform: "translate(-50%, -50%)",
+      backgroundColor: "rgba(0,0,0,0.7)",
+      borderRadius: BORDER_RADIUS.sm,
+      padding: `${getSpacingPx(SPACING.xs)} ${getSpacingPx(SPACING.md)}`,
+      color: "white",
+      fontSize: "var(--fontSizeSmaller)",
+      gap: getSpacingPx(SPACING.xs)
+    },
+    ".modal-footer": {
+      justifyContent: "space-between",
+      padding: `${getSpacingPx(SPACING.lg)} ${getSpacingPx(SPACING.xl)}`,
+      borderTop: `1px solid ${theme.vars.palette.grey[800]}`,
+      backgroundColor: theme.vars.palette.grey[900]
+    },
+    ".footer-actions": {
+      gap: getSpacingPx(SPACING.md)
+    },
+    // The 320px picker column left a phone-width dialog nothing for the tabs
+    // beside it. Stack the two sections and scroll the body instead.
+    [theme.breakpoints.down("sm")]: {
+      ".modal-content": {
+        width: "100%",
+        maxHeight: "100%",
+        borderRadius: 0,
+        border: "none"
+      },
+      ".modal-body": {
+        flexDirection: "column",
+        overflow: "auto"
+      },
+      ".picker-section": {
+        flex: "0 0 auto",
+        width: "100%",
+        borderRight: "none",
+        borderBottom: `1px solid ${theme.vars.palette.grey[800]}`,
+        padding: getSpacingPx(SPACING.lg),
+        overflow: "visible"
+      },
+      ".tabs-section": {
+        flex: "0 0 auto",
+        overflow: "visible"
+      },
+      ".tab-content": {
+        padding: getSpacingPx(SPACING.lg),
+        overflow: "visible"
+      }
+    }
+  });
+
+type TabType = "swatches" | "harmonies" | "gradient" | "contrast";
+
+interface ColorPickerModalProps {
+  color: string; // hex color
+  alpha?: number; // 0-1
+  onChange: (color: string, alpha: number) => void;
+  onClose: () => void;
+  showGradient?: boolean;
+  showContrast?: boolean;
+  contrastBackgroundColor?: string;
+}
+
+const ColorPickerModal: React.FC<ColorPickerModalProps> = ({
+  color: initialColor,
+  alpha: initialAlpha = 1,
+  onChange,
+  onClose,
+  showGradient = true,
+  showContrast = true,
+  contrastBackgroundColor = "#ffffff"
+}) => {
+  const theme = useTheme();
+  const { addRecentColor, preferredColorMode, setPreferredColorMode } =
+    useColorPickerStore(
+      useShallow((state) => ({
+        addRecentColor: state.addRecentColor,
+        preferredColorMode: state.preferredColorMode,
+        setPreferredColorMode: state.setPreferredColorMode
+      }))
+    );
+
+  const [color, setColor] = useState(initialColor || "#ff0000");
+  const [alpha, setAlpha] = useState(initialAlpha);
+  const [colorMode, setColorMode] = useState<ColorMode>(preferredColorMode);
+  const [activeTab, setActiveTab] = useState<TabType>("swatches");
+  const [copiedFormat, setCopiedFormat] = useState<string | null>(null);
+  const copiedTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const addNotification = useNotificationStore(
+    (state) => state.addNotification
+  );
+  const [gradient, setGradient] = useState<GradientValue>({
+    type: "linear",
+    angle: 90,
+    stops: [
+      { color: initialColor || "#ff0000", position: 0 },
+      { color: "#0000ff", position: 100 }
+    ]
+  });
+
+  const hsb = useMemo(() => {
+    const rgb = hexToRgb(color);
+    return rgbToHsb(rgb);
+  }, [color]);
+
+  useCombo(["escape"], onClose);
+
+  useEffect(() => {
+    onChange(color, alpha);
+  }, [color, alpha, onChange]);
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimeoutRef.current) {
+        clearTimeout(copiedTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleSaturationChange = useCallback(
+    (s: number, b: number) => {
+      const rgb = hsbToRgb({ h: hsb.h, s, b });
+      setColor(rgbToHex(rgb));
+    },
+    [hsb.h]
+  );
+
+  const handleHueChange = useCallback(
+    (h: number) => {
+      const rgb = hsbToRgb({ h, s: hsb.s, b: hsb.b });
+      setColor(rgbToHex(rgb));
+    },
+    [hsb.s, hsb.b]
+  );
+
+  const handleAlphaChange = useCallback((a: number) => {
+    setAlpha(a);
+  }, []);
+
+  const handleInputChange = useCallback((hex: string, a: number) => {
+    setColor(hex);
+    setAlpha(a);
+  }, []);
+
+  const handleModeChange = useCallback(
+    (mode: ColorMode) => {
+      setColorMode(mode);
+      setPreferredColorMode(mode);
+    },
+    [setPreferredColorMode]
+  );
+
+  const handleColorSelect = useCallback((newColor: string) => {
+    setColor(newColor);
+  }, []);
+
+  const handleEyedropperPick = useCallback((pickedColor: string) => {
+    setColor(pickedColor);
+  }, []);
+
+  const copyColor = useCallback(
+    async (format: string) => {
+      let textToCopy = "";
+      const rgb = hexToRgb(color);
+
+      switch (format) {
+        case "hex":
+          textToCopy = alpha < 1 ? rgbToHex({ ...rgb, a: alpha }, true) : color;
+          break;
+        case "rgb":
+          textToCopy =
+            alpha < 1
+              ? `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`
+              : `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+          break;
+        case "hsl": {
+          const hsl = rgbToHsl(rgb);
+          textToCopy =
+            alpha < 1
+              ? `hsla(${hsl.h}, ${hsl.s}%, ${hsl.l}%, ${alpha})`
+              : `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
+          break;
+        }
+        default:
+          textToCopy = color;
+      }
+
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        setCopiedFormat(format);
+      } catch (error) {
+        console.error("Failed to copy to clipboard:", error);
+        addNotification({
+          type: "error",
+          alert: true,
+          content:
+            "Failed to copy the color to the clipboard. Please check your browser permissions and try again."
+        });
+        return;
+      }
+
+      if (copiedTimeoutRef.current) {
+        clearTimeout(copiedTimeoutRef.current);
+      }
+
+      copiedTimeoutRef.current = setTimeout(() => {
+        setCopiedFormat(null);
+        copiedTimeoutRef.current = null;
+      }, 1500);
+    },
+    [color, alpha, addNotification]
+  );
+
+  const handleApply = useCallback(() => {
+    addRecentColor(color);
+    onClose();
+  }, [addRecentColor, color, onClose]);
+
+  const textColor = useMemo(() => {
+    const rgb = hexToRgb(color);
+    const contrast = getContrastingTextColor(rgb);
+    return rgbToHex(contrast);
+  }, [color]);
+
+  const handleOverlayClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.target === e.currentTarget) {
+        handleApply();
+      }
+    },
+    [handleApply]
+  );
+
+  const handleCopyHex = useCallback(() => {
+    copyColor("hex");
+  }, [copyColor]);
+
+  const tabs: TabItem[] = useMemo(
+    () => [
+      { value: "swatches", label: "Swatches" },
+      { value: "harmonies", label: "Harmonies" },
+      ...(showGradient ? [{ value: "gradient", label: "Gradient" }] : []),
+      ...(showContrast ? [{ value: "contrast", label: "Contrast" }] : [])
+    ],
+    [showContrast, showGradient]
+  );
+
+  const content = (
+    <div css={styles(theme)}>
+      <FlexRow
+        className="modal-overlay"
+        onClick={handleOverlayClick}
+        align="center"
+        justify="center"
+        fullWidth
+        fullHeight
+      >
+        <FlexColumn className="modal-content" onClick={(e) => e.stopPropagation()}>
+          <FlexRow className="modal-header" align="center" justify="space-between" fullWidth>
+            <Text className="modal-title">Color Picker</Text>
+            <FlexRow className="header-actions" align="center">
+              <EyedropperButton onColorPicked={handleEyedropperPick} />
+              <CloseButton
+                onClick={handleApply}
+                tooltip="Close (Esc)"
+                buttonSize="small"
+              />
+            </FlexRow>
+          </FlexRow>
+
+          <FlexRow className="modal-body" fullWidth>
+            <FlexColumn className="picker-section">
+              <SaturationPicker
+                hue={hsb.h}
+                saturation={hsb.s}
+                brightness={hsb.b}
+                onChange={handleSaturationChange}
+              />
+
+              <HueSlider hue={hsb.h} onChange={handleHueChange} />
+
+              <AlphaSlider color={color} alpha={alpha} onChange={handleAlphaChange} />
+
+              <ColorModeSelector
+                mode={colorMode}
+                onChange={handleModeChange}
+                showAllModes={true}
+              />
+
+              <ColorInputs
+                color={color}
+                alpha={alpha}
+                mode={colorMode}
+                onChange={handleInputChange}
+              />
+
+              <FlexRow className="color-preview" align="center">
+                <Tooltip title="Click to copy HEX">
+                  <FlexRow
+                    className="preview-swatch"
+                    align="center"
+                    justify="center"
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Copy hex value"
+                    onClick={handleCopyHex}
+                    onKeyDown={activateOnKey(handleCopyHex)}
+                  >
+                    <div className="preview-swatch-bg" />
+                    <div
+                      className="preview-swatch-color"
+                      style={{
+                        backgroundColor: color,
+                        opacity: alpha
+                      }}
+                    />
+                    <span className="preview-label" style={{ color: textColor }}>
+                      {color.toUpperCase()}
+                    </span>
+                    {copiedFormat === "hex" && (
+                      <FlexRow className="copy-feedback" align="center">
+                        <CheckIcon sx={{ fontSize: 12 }} /> Copied
+                      </FlexRow>
+                    )}
+                  </FlexRow>
+                </Tooltip>
+              </FlexRow>
+            </FlexColumn>
+
+            <FlexColumn className="tabs-section">
+              <TabGroup
+                tabs={tabs}
+                value={activeTab}
+                onChange={(value) => setActiveTab(value as TabType)}
+                fullWidth
+              />
+
+              <FlexColumn className="tab-content">
+                {activeTab === "swatches" && (
+                  <SwatchPanel
+                    currentColor={color}
+                    onColorSelect={handleColorSelect}
+                  />
+                )}
+                {activeTab === "harmonies" && (
+                  <HarmonyPicker
+                    color={color}
+                    onColorSelect={handleColorSelect}
+                  />
+                )}
+                {activeTab === "gradient" && showGradient && (
+                  <GradientBuilder
+                    gradient={gradient}
+                    onChange={setGradient}
+                    currentColor={color}
+                  />
+                )}
+                {activeTab === "contrast" && showContrast && (
+                  <ContrastChecker
+                    foregroundColor={color}
+                    backgroundColor={contrastBackgroundColor}
+                  />
+                )}
+              </FlexColumn>
+            </FlexColumn>
+          </FlexRow>
+
+          <FlexRow className="modal-footer" align="center" justify="space-between" fullWidth>
+            <Caption color="secondary">
+              Press Esc to close
+            </Caption>
+            <FlexRow className="footer-actions" align="center">
+              <EditorButton variant="outlined" density="compact" onClick={onClose}>
+                Cancel
+              </EditorButton>
+              <EditorButton
+                variant="contained"
+                density="compact"
+                onClick={handleApply}
+                sx={{ minWidth: "80px" }}
+              >
+                Apply
+              </EditorButton>
+            </FlexRow>
+          </FlexRow>
+        </FlexColumn>
+      </FlexRow>
+    </div>
+  );
+
+  return ReactDOM.createPortal(content, document.body);
+};
+
+ColorPickerModal.displayName = 'ColorPickerModal';
+
+export default memo(ColorPickerModal);

@@ -1,0 +1,337 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import useMediaQuery from "@mui/material/useMediaQuery";
+import type { Theme } from "@mui/material/styles";
+import { useCallback, useMemo, memo } from "react";
+import {
+  Node,
+  Edge,
+  Message,
+  MessageContent,
+  PlanningUpdate,
+  TaskUpdate,
+  LogUpdate,
+  LanguageModel,
+  TodoItem
+} from "../../../stores/ApiTypes";
+import AddIcon from "@mui/icons-material/Add";
+import {
+  SPACING,
+  ToolbarIconButton,
+  getSpacingPx,
+  Z_INDEX
+} from "../../ui_primitives";
+import ChatThreadView from "../thread/ChatThreadView";
+import ChatInputSection, { type ChatComposerVariant } from "./ChatInputSection";
+import { TodoSidebar } from "../sidebar/TodoSidebar";
+import { ThreadMemorySidebar } from "../sidebar/ThreadMemorySidebar";
+import useGlobalChatStore from "../../../stores/GlobalChatStore";
+import {
+  buildUiContext,
+  type BuildUiContextOptions
+} from "../../../lib/chat/uiContext";
+import type {
+  ChatOutgoingMessage,
+  MediaGenerationRequest
+} from "../types/media.types";
+
+const styles = (theme: Theme) =>
+  css({
+    "&": {
+      position: "relative",
+      height: "100%",
+      maxHeight: "100%",
+      width: "100%",
+      display: "flex",
+      flexDirection: "row",
+      overflow: "hidden",
+      minHeight: 0,
+      padding: theme.spacing(0, 0, 6, 6)
+    },
+    ".chat-main": {
+      position: "relative",
+      flex: 1,
+      minWidth: 0,
+      display: "flex",
+      flexDirection: "column",
+      overflow: "hidden",
+      paddingRight: 8
+    },
+    // Floats over the thread rather than reserving a row of its own.
+    ".new-chat-overlay": {
+      position: "absolute",
+      top: getSpacingPx(SPACING.md),
+      right: getSpacingPx(SPACING.lg),
+      zIndex: Z_INDEX.dropdown
+    },
+    "&::before": {
+      content: '""',
+      position: "absolute",
+      inset: 0,
+      pointerEvents: "none",
+      background: `radial-gradient(circle at top center, rgb(${theme.vars.palette.common.whiteChannel} / 0.035), transparent 38%)`
+    },
+    ".chat-thread-container": {
+      flex: 1,
+      minHeight: 0,
+      display: "flex",
+      flexDirection: "column",
+      paddingBottom: theme.spacing(2),
+      width: "100%",
+      maxWidth: "1180px",
+      alignSelf: "center"
+    },
+    ".chat-controls": {
+      padding: `0 ${getSpacingPx(SPACING.xl)} 0 0`,
+      marginTop: "auto",
+      zIndex: Z_INDEX.dropdown,
+      display: "flex",
+      alignItems: "center",
+      gap: getSpacingPx(SPACING.md)
+    },
+    ".chat-composer-wrapper": {
+      flex: 1,
+      minWidth: 0,
+      width: "100%",
+      maxWidth: "1180px",
+      alignSelf: "center"
+    }
+  });
+
+type ChatViewProps = {
+  status:
+  | "disconnected"
+  | "connecting"
+  | "connected"
+  | "loading"
+  | "error"
+  | "streaming"
+  | "reconnecting"
+  | "disconnecting"
+  | "failed";
+  progress: number;
+  total: number;
+  messages: Array<Message>;
+  model?: LanguageModel;
+  showToolbar?: boolean;
+  graph?: {
+    nodes: Node[];
+    edges: Edge[];
+  };
+  sendMessage: (message: Message) => Promise<void>;
+  progressMessage: string | null;
+  onModelChange?: (model: LanguageModel) => void;
+  onStop?: () => void;
+  onNewChat?: () => void;
+  memoryEnabled?: boolean;
+  onMemoryToggle?: (enabled: boolean) => void;
+  workflowAssistant?: boolean;
+  /** Context-specific system-prompt addendum appended to the base chat prompt. */
+  systemPrompt?: string;
+  /**
+   * Overrides for the `ui_context` sent with each message. Surfaces that aren't
+   * workspace tabs (the App Builder) name their focused document here; surfaces
+   * with a selection worth telling the agent about pass it too. When omitted the
+   * context is derived from the open workspace tabs.
+   */
+  uiContext?: BuildUiContextOptions;
+  currentPlanningUpdate?: PlanningUpdate | null;
+  currentTaskUpdate?: TaskUpdate | null;
+  currentLogUpdate?: LogUpdate | null;
+  runningToolCallId?: string | null;
+  runningToolMessage?: string | null;
+  /**
+   * Optional React node to display when there are no messages yet.
+   */
+  noMessagesPlaceholder?: React.ReactNode;
+  onInsertCode?: (text: string, language?: string) => void;
+  allowedProviders?: string[];
+  /** Hide non-tool-capable models in the composer's language model picker. */
+  requireToolSupport?: boolean;
+  workflowId?: string | null;
+  /**
+   * Controls which composer is rendered below the thread.
+   * - "media" (default): full-featured MediaChatComposer with mode, model,
+   *   and media-generation parameter chips.
+   * - "simple": plain ChatComposer with just the textarea and action
+   *   buttons — used by the Agent panel where provider/model live in a
+   *   dedicated toolbar.
+   */
+  composerVariant?: ChatComposerVariant;
+  /**
+   * Extra node rendered in the composer footer (left of the action
+   * buttons). Only used when composerVariant is "simple".
+   */
+  composerToolbar?: React.ReactNode;
+  /** Override the composer's textarea placeholder. */
+  composerPlaceholder?: string;
+  /** Pure chat panel: hide the media mode picker and force chat mode. */
+  hideModePicker?: boolean;
+  /**
+   * Show a "New chat" button above the thread. For surfaces with no chrome of
+   * their own (the workspace chat tab); panels that already carry a header
+   * with its own new-chat button leave it off. Defaults to off.
+   */
+  showNewChatButton?: boolean;
+  /**
+   * Bind thread-scoped store reads (todos) to this thread instead of the
+   * store's current one. Pass it when the surface renders a specific thread
+   * (e.g. a workspace chat tab) that may not be `currentThreadId`.
+   */
+  threadId?: string | null;
+};
+
+// Stable empty-array sentinel so the Zustand selector below returns the same
+// reference across renders when the current thread has no todos — returning a
+// fresh `[]` triggered React's "Maximum update depth exceeded" loop.
+const NO_TODOS: TodoItem[] = [];
+
+const ChatView = ({
+  status,
+  progress,
+  total,
+  messages,
+  model,
+  sendMessage,
+  progressMessage,
+  showToolbar = true,
+  onModelChange,
+  onStop,
+  onNewChat,
+  memoryEnabled,
+  onMemoryToggle,
+  systemPrompt,
+  uiContext,
+  currentPlanningUpdate,
+  currentTaskUpdate,
+  currentLogUpdate,
+  noMessagesPlaceholder,
+  graph,
+  onInsertCode,
+  runningToolCallId,
+  runningToolMessage,
+  allowedProviders,
+  requireToolSupport,
+  workflowId,
+  composerVariant,
+  composerToolbar,
+  composerPlaceholder,
+  hideModePicker,
+  showNewChatButton = false,
+  threadId
+}: ChatViewProps) => {
+  const theme = useTheme();
+  const cssStyles = useMemo(() => styles(theme), [theme]);
+  const handleSendMessage = useCallback(
+    async (
+      content: MessageContent[],
+      _prompt: string,
+      mediaGeneration?: MediaGenerationRequest
+    ) => {
+      try {
+        const outgoing: ChatOutgoingMessage = {
+          type: "message",
+          name: "",
+          role: "user",
+          provider:
+            mediaGeneration && mediaGeneration.mode !== "chat"
+              ? ((mediaGeneration.provider ??
+                  model?.provider) as ChatOutgoingMessage["provider"])
+              : model?.provider,
+          model:
+            mediaGeneration && mediaGeneration.mode !== "chat"
+              ? mediaGeneration.model ?? model?.id
+              : model?.id,
+          content: content,
+          system_prompt: systemPrompt,
+          ui_context: buildUiContext(uiContext),
+          graph: graph,
+          workflow_id: workflowId ?? undefined,
+          workflow_target: graph ? "workflow" : undefined,
+          media_generation:
+            mediaGeneration && mediaGeneration.mode !== "chat"
+              ? mediaGeneration
+              : null
+        };
+        await sendMessage(outgoing);
+      } catch (error) {
+        console.error("Error sending message:", error);
+      }
+    },
+    [sendMessage, model, systemPrompt, uiContext, graph, workflowId]
+  );
+
+  const todos = useGlobalChatStore((state) => {
+    const id = threadId ?? state.currentThreadId;
+    return (id && state.todosByThread[id]) || NO_TODOS;
+  });
+  const effectiveThreadId = useGlobalChatStore(
+    (state) => threadId ?? state.currentThreadId
+  );
+  // The two rails are 280px and 300px of fixed width. Below `md` they leave
+  // the conversation itself almost no room, so they drop out entirely on
+  // phones and narrow panels.
+  const railsFit = useMediaQuery(theme.breakpoints.up("md"));
+  const showTodoSidebar = railsFit && todos.length > 0;
+
+  return (
+    <div className="chat-view" css={cssStyles}>
+      <div className="chat-main">
+        {showNewChatButton && onNewChat && (
+          <div className="new-chat-overlay">
+            <ToolbarIconButton
+              onClick={onNewChat}
+              tooltip="New chat"
+              icon={<AddIcon fontSize="small" />}
+            />
+          </div>
+        )}
+        <div className="chat-thread-container">
+          {messages.length > 0 ? (
+            <ChatThreadView
+              messages={messages}
+              status={status}
+              progress={progress}
+              total={total}
+              progressMessage={progressMessage}
+              runningToolCallId={runningToolCallId}
+              runningToolMessage={runningToolMessage}
+              currentPlanningUpdate={currentPlanningUpdate}
+              currentTaskUpdate={currentTaskUpdate}
+              currentLogUpdate={currentLogUpdate}
+              onInsertCode={onInsertCode}
+            />
+          ) : (
+            noMessagesPlaceholder ?? <div style={{ flex: 1 }} />
+          )}
+        </div>
+
+        <ChatInputSection
+          status={status}
+          showToolbar={showToolbar}
+          onSendMessage={handleSendMessage}
+          onStop={onStop}
+          onNewChat={onNewChat}
+          selectedModel={model}
+          onModelChange={onModelChange}
+          memoryEnabled={memoryEnabled}
+          onMemoryToggle={onMemoryToggle}
+          allowedProviders={allowedProviders}
+          requireToolSupport={requireToolSupport}
+          variant={composerVariant}
+          composerToolbar={composerToolbar}
+          placeholder={composerPlaceholder}
+          hideModePicker={hideModePicker}
+          threadId={effectiveThreadId}
+        />
+      </div>
+      {showTodoSidebar && <TodoSidebar todos={todos} />}
+      {railsFit && effectiveThreadId && (
+        <ThreadMemorySidebar threadId={effectiveThreadId} />
+      )}
+    </div>
+  );
+};
+
+export default memo(ChatView);

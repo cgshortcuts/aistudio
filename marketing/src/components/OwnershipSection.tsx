@@ -1,0 +1,107 @@
+"use client";
+import React from "react";
+import { motion } from "framer-motion";
+import Tilt3D from "./Tilt3D";
+import { Shield, Cpu, Globe, Lock } from "lucide-react";
+
+const features = [
+  {
+    title: "Your keys, every provider",
+    body: "Bring your own keys to FAL, KIE, OpenAI, Anthropic, Gemini, Replicate, and more. Keys stay on your disk in Studio, encrypted in Cloud. We never mark up model calls.",
+    icon: Lock,
+  },
+  {
+    title: "Provider prices, no credits",
+    body: "No in-house credits and no minimum top-up. You pay providers exactly what they charge: a Seedance run that costs $0.18 on KIE costs $0.18 in NodeTool.",
+    icon: Shield,
+  },
+  {
+    title: "Open source, always",
+    body: "Studio on the desktop and Cloud in the browser are built from the same AGPL-3.0 source. Nothing is held back for a paid tier, and you can host it yourself at any time.",
+    icon: Globe,
+  },
+  {
+    title: "Run models on your own machine",
+    body: "MLX, Ollama, llama.cpp, vLLM, and LM Studio are supported by default. Once a model is downloaded, it keeps running with no internet connection.",
+    icon: Cpu,
+  },
+];
+
+interface OwnershipSectionProps {
+  reducedMotion?: boolean;
+}
+
+export default function OwnershipSection({
+  reducedMotion: _reducedMotion = false,
+}: OwnershipSectionProps) {
+  return (
+    <section className="relative py-24 overflow-clip-safe">
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[400px] bg-slate-500/5 blur-[120px] rounded-full pointer-events-none" />
+
+      <div className="relative z-10 mx-auto max-w-7xl px-6 lg:px-8">
+        <div className="scroll-fade mb-16 text-center max-w-2xl mx-auto">
+          <motion.h2
+            initial={false}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.25 }}
+            className="text-4xl md:text-5xl font-bold tracking-tight text-white mb-6"
+          >
+            Your keys. Your files. <br />
+            <span className="text-slate-300">Your roadmap.</span>
+          </motion.h2>
+          <motion.p
+            initial={false}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.25, delay: 0.05 }}
+            className="text-lg text-slate-400 leading-relaxed"
+          >
+            Every closed AI tool ends the same way: a price rise, fewer models,
+            or an acquisition that quietly rewrites the roadmap. NodeTool runs
+            whichever models you choose, charges you what the providers charge,
+            and is released under a license that outlives whoever built it.
+          </motion.p>
+        </div>
+
+        <motion.div
+          className="scroll-fade grid grid-cols-1 gap-px sm:grid-cols-2 lg:grid-cols-4 rounded-2xl overflow-hidden bg-white/5 ring-1 ring-white/5"
+          initial="hidden"
+          whileInView="show"
+          viewport={{ once: true, margin: "-40px" }}
+          variants={{
+            show: { transition: { staggerChildren: 0.08 } },
+          }}
+        >
+          {features.map((item) => (
+            <motion.div
+              key={item.title}
+              variants={{
+                hidden: { opacity: 1, y: 0 },
+                show: { opacity: 1, y: 0, transition: { duration: 0.25 } },
+              }}
+              className="h-full"
+            >
+              <Tilt3D className="h-full">
+                <div className="group relative h-full flex flex-col p-8 bg-slate-950 transition-colors duration-300 hover:bg-slate-900/60">
+                  <div className="mb-6 inline-flex h-11 w-11 items-center justify-center rounded-lg border border-white/10 bg-white/[0.03] text-slate-300 transition-colors duration-300 group-hover:text-white group-hover:border-white/20">
+                    <item.icon className="h-5 w-5" strokeWidth={1.5} />
+                  </div>
+
+                  <h3 className="mb-3 text-base font-semibold tracking-tight text-white">
+                    {item.title}
+                  </h3>
+                  <p className="text-sm leading-relaxed text-slate-400">
+                    {item.body}
+                  </p>
+
+                  <div className="absolute inset-x-8 bottom-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                </div>
+              </Tilt3D>
+            </motion.div>
+          ))}
+        </motion.div>
+      </div>
+    </section>
+  );
+}

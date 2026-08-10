@@ -1,0 +1,66 @@
+{
+  "graph": {
+    "nodes": [
+      {
+        "id": "payload",
+        "type": "nodetool.input.StringInput",
+        "name": "payload",
+        "data": {
+          "name": "payload"
+        }
+      },
+      {
+        "id": "condition",
+        "type": "nodetool.input.BooleanInput",
+        "name": "condition",
+        "data": {
+          "name": "condition"
+        }
+      },
+      {
+        "id": "if",
+        "type": "nodetool.control.If"
+      },
+      {
+        "id": "true_sink",
+        "type": "nodetool.control.Reroute",
+        "name": "when_true"
+      },
+      {
+        "id": "false_sink",
+        "type": "nodetool.control.Reroute",
+        "name": "when_false"
+      }
+    ],
+    "edges": [
+      {
+        "source": "payload",
+        "sourceHandle": "output",
+        "target": "if",
+        "targetHandle": "value"
+      },
+      {
+        "source": "condition",
+        "sourceHandle": "output",
+        "target": "if",
+        "targetHandle": "condition"
+      },
+      {
+        "source": "if",
+        "sourceHandle": "if_true",
+        "target": "true_sink",
+        "targetHandle": "input_value"
+      },
+      {
+        "source": "if",
+        "sourceHandle": "if_false",
+        "target": "false_sink",
+        "targetHandle": "input_value"
+      }
+    ]
+  },
+  "params": {
+    "payload": "{\"kind\": \"example\", \"value\": 42}",
+    "condition": true
+  }
+}

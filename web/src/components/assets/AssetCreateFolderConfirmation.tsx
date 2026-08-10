@@ -1,0 +1,314 @@
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { Text, FlexRow, AlertBanner, Surface, TextInput, BORDER_RADIUS, FONT_WEIGHT, SPACING, getSpacingPx } from "../ui_primitives";
+import { EditorButton } from "../editor_ui";
+import { getMousePosition } from "../../utils/MousePosition";
+import { useAssetStore } from "../../stores/AssetStore";
+import { useAssetGridStore } from "../../stores/AssetGridStore";
+import useAssets from "../../serverState/useAssets";
+import { useNotificationStore } from "../../stores/NotificationStore";
+import { Asset } from "../../stores/ApiTypes";
+import { useTheme } from "@mui/material/styles";
+
+const AssetCreateFolderConfirmation: React.FC = () => {
+  const setDialogOpen = useAssetGridStore(
+    (state) => state.setCreateFolderDialogOpen
+  );
+  const dialogOpen = useAssetGridStore((state) => state.createFolderDialogOpen);
+  const selectedAssetIds = useAssetGridStore((state) => state.selectedAssetIds);
+  const currentFolder = useAssetGridStore((state) => state.currentFolder);
+  const setSelectedAssetIds = useAssetGridStore(
+    (state) => state.setSelectedAssetIds
+  );
+  const setSelectedAssets = useAssetGridStore(
+    (state) => state.setSelectedAssets
+  );
+
+  const [dialogPosition, setDialogPosition] = useState({ x: 0, y: 0 });
+  const [folderName, setFolderName] = useState("New Folder");
+  const [showAlert, setShowAlert] = useState<string | null>(null);
+  const handleClose = useCallback(() => {
+    setDialogOpen(false);
+  }, [setDialogOpen]);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const theme = useTheme();
+  const createFolder = useAssetStore((state) => state.createFolder);
+  const updateAsset = useAssetStore((state) => state.update);
+  const { refetchAssetsAndFolders, folderFilesFiltered } = useAssets();
+  const addNotification = useNotificationStore(
+    (state) => state.addNotification
+  );
+
+  const assetMap = useMemo(() => {
+    const map = new Map<string, Asset>();
+    folderFilesFiltered.forEach((asset) => map.set(asset.id, asset));
+    return map;
+  }, [folderFilesFiltered]);
+
+  const selectedAssets = useMemo(() => {
+    if (selectedAssetIds.length === 0) {
+      return [];
+    }
+    return selectedAssetIds
+      .map((id) => assetMap.get(id))
+      .filter((asset): asset is Asset => asset !== undefined);
+  }, [selectedAssetIds, assetMap]);
+
+  const isFolder = selectedAssets.some(
+    (asset) => asset.content_type === "folder"
+  );
+  const hasSelectedAssets = selectedAssets.length > 0 && !isFolder;
+
+  useEffect(() => {
+    if (dialogOpen) {
+      setFolderName("New Folder");
+      const mousePosition = getMousePosition();
+      setDialogPosition({ x: mousePosition.x, y: mousePosition.y });
+      setShowAlert(null);
+      const timer = setTimeout(() => {
+        if (inputRef.current) {
+          inputRef.current.focus();
+        }
+      }, 10);
+      return () => clearTimeout(timer);
+    }
+  }, [dialogOpen]);
+
+  const handleCreateFolder = useCallback(async () => {
+    const invalidCharsRegex = /[/*?"<>|#%{}^[\]`'=&$§!°äüö;+~|$!]+/g;
+
+    function startsWithEmoji(fileName: string): boolean {
+      const emojiRegex =
+        /^[\u{1F600}-\u{1F64F}\u{1F300}-\u{1F5FF}\u{1F680}-\u{1F6FF}\u{1F900}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u;
+      return emojiRegex.test(fileName);
+    }
+
+    if (
+      startsWithEmoji(folderName) ||
+      folderName.startsWith(".") ||
+      folderName.startsWith(",") ||
+      folderName.startsWith(" ") ||
+      folderName.match(/^[-#*&]/)
+    ) {
+      setShowAlert("Name cannot start with a special character.");
+      return;
+    }
+
+    const invalidCharsFound = folderName.match(invalidCharsRegex);
+
+    if (!folderName) {
+      setShowAlert("Name cannot be empty.");
+      return;
+    } else if (folderName.length > 100) {
+      setShowAlert("Max folder name length is 100 characters.");
+      return;
+    }
+
+    if (invalidCharsFound) {
+      const uniqueInvalidChars = invalidCharsFound.filter(
+        (char, index, array) => array.indexOf(char) === index
+      );
+      setShowAlert(`Invalid characters: ${uniqueInvalidChars.join(", ")}`);
+      return;
+    }
+
+    const cleanedName = folderName.trim();
+
+    try {
+      const newFolder = await createFolder(
+        currentFolder?.id || "",
+        cleanedName
+      );
+
+      if (hasSelectedAssets && newFolder) {
+        const updatePromises = selectedAssetIds.map((assetId) =>
+          updateAsset({ id: assetId, parent_id: newFolder.id })
+        );
+        await Promise.all(updatePromises);
+
+        addNotification({
+          type: "success",
+          content: `Created folder "${cleanedName}" and moved ${
+            selectedAssetIds.length
+          } item${selectedAssetIds.length === 1 ? "" : "s"}`
+        });
+
+        setSelectedAssetIds([]);
+        setSelectedAssets([]);
+      } else {
+        addNotification({
+          type: "success",
+          content: `Created folder "${cleanedName}"`
+        });
+      }
+
+      setDialogOpen(false);
+      refetchAssetsAndFolders();
+    } catch (error) {
+      console.error("Failed to create folder", error);
+      setShowAlert("Failed to create folder. Please try again.");
+    }
+  }, [
+    folderName,
+    currentFolder?.id,
+    hasSelectedAssets,
+    selectedAssetIds,
+    createFolder,
+    updateAsset,
+    addNotification,
+    setDialogOpen,
+    refetchAssetsAndFolders,
+    setSelectedAssetIds,
+    setSelectedAssets
+  ]);
+
+  const screenWidth = window.innerWidth;
+  const dialogWidth = 400;
+  const leftPosition = dialogPosition.x - dialogWidth;
+
+  const safeLeft = Math.min(
+    Math.max(leftPosition, 50),
+    screenWidth - dialogWidth - 50
+  );
+
+  const handleBackdropClick = useCallback(
+    (event: React.MouseEvent) => {
+      if (event.target === event.currentTarget) {
+        setDialogOpen(false);
+      }
+    },
+    [setDialogOpen]
+  );
+
+  if (!dialogOpen) {
+    return null;
+  }
+
+  return (
+    <div
+      className="asset-create-folder-backdrop"
+      style={{
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: "transparent",
+        zIndex: theme.zIndex.modal
+      }}
+      onClick={handleBackdropClick}
+    >
+      <Surface
+        className="asset-create-folder-dialog"
+        elevation={3}
+        sx={{
+          position: "absolute",
+          left: `${safeLeft}px`,
+          top: `${dialogPosition.y - 200}px`,
+          width: 400,
+          maxWidth: "calc(100vw - 32px)",
+          backgroundColor: `rgba(${theme.vars.palette.background.defaultChannel} / 0.9)`,
+          backdropFilter: "blur(10px)",
+          borderRadius: BORDER_RADIUS.sm,
+          overflow: "hidden"
+        }}
+      >
+        <Text
+          className="asset-create-folder-dialog-title"
+          size="small"
+          family="primary"
+          sx={{
+            color: theme.vars.palette.grey[100],
+            margin: ".5em 0 0",
+            padding: "1em"
+          }}
+        >
+          {hasSelectedAssets
+            ? "Move selected to new folder"
+            : "Create new folder"}
+        </Text>
+
+        <div style={{ padding: "0 .5em" }}>
+          {showAlert && (
+            <AlertBanner
+              className="asset-create-folder-error-alert"
+              severity="error"
+              onClose={handleClose}
+            >
+              {showAlert}
+            </AlertBanner>
+          )}
+          <TextInput
+            className="asset-create-folder-input"
+            inputRef={inputRef}
+            value={folderName}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                handleCreateFolder();
+              }
+            }}
+            onChange={(e) => setFolderName(e.target.value)}
+            fullWidth
+            autoCorrect="off"
+            spellCheck="false"
+            sx={{
+              padding: getSpacingPx(SPACING.xs),
+              "& input": {
+                fontFamily: theme.fontFamily1,
+                padding: `${getSpacingPx(SPACING.xs)} ${getSpacingPx(SPACING.sm)}`
+              }
+            }}
+          />
+        </div>
+
+        <FlexRow
+          justify="flex-end"
+          gap={SPACING.xs}
+          sx={{
+            padding: ".5em 1em"
+          }}
+        >
+          <EditorButton
+            className="asset-create-folder-cancel-button"
+            onClick={handleClose}
+            sx={{ color: theme.vars.palette.grey[100] }}
+          >
+            Cancel
+          </EditorButton>
+          <EditorButton
+            className="asset-create-folder-confirm-button"
+            onClick={handleCreateFolder}
+            sx={{
+              color: "var(--palette-primary-main)",
+              fontWeight: FONT_WEIGHT.semibold
+            }}
+          >
+            {hasSelectedAssets ? "Move to New Folder" : "Create Folder"}
+          </EditorButton>
+        </FlexRow>
+
+        {hasSelectedAssets && (
+          <div className="asset-create-folder-notice-container">
+            <Text
+              className="asset-create-folder-notice"
+              size="small"
+              family="primary"
+              sx={{
+                backgroundColor: theme.vars.palette.c_attention,
+                color: theme.vars.palette.grey[1000],
+                padding: ".5em 1em"
+              }}
+            >
+              <span className="asset-create-folder-selected-count">
+                {selectedAssets.length} assets selected:
+              </span>{" "}
+              <br />
+              They will be moved to the new folder.
+            </Text>
+          </div>
+        )}
+      </Surface>
+    </div>
+  );
+};
+
+export default AssetCreateFolderConfirmation;

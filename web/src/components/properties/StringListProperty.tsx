@@ -1,0 +1,125 @@
+import { memo, useCallback, useMemo } from "react";
+import { useTheme } from "@mui/material/styles";
+import { Autocomplete, Chip, Box, MOTION, BORDER_RADIUS, SPACING, getSpacingPx } from "../ui_primitives";
+import PropertyLabel from "../node/PropertyLabel";
+import { PropertyProps } from "../node/PropertyInput";
+import isEqual from "../../utils/isEqual";
+import { NodeTextField } from "../ui_primitives";
+
+const StringListProperty = (props: PropertyProps) => {
+  const theme = useTheme();
+  const id = `string-list-${props.property.name}-${props.propertyIndex}`;
+  const strings = props.value || [];
+
+  const onChange = useCallback(
+    (newValues: string[]) => {
+      props.onChange(newValues);
+    },
+    [props]
+  );
+
+  const boxSx = useMemo(() => ({ mb: 1, width: "100%" }), []);
+
+  const autocompleteSx = useMemo(() => ({
+    "& .MuiInputBase-root": {
+      padding: `${getSpacingPx(SPACING.micro)} ${getSpacingPx(SPACING.sm)}`,
+      minHeight: "32px",
+      backgroundColor: "action.disabledBackground",
+      borderRadius: BORDER_RADIUS.md,
+      border: "1px solid var(--palette-grey-700)",
+      color: "var(--palette-grey-100)",
+      fontSize: "var(--fontSizeSmall)",
+      transition: MOTION.all,
+      "&:hover": {
+        borderColor: "var(--palette-grey-600)",
+        backgroundColor: `rgba(${theme.vars.palette.background.defaultChannel} / 0.3)`
+      },
+      "&.Mui-focused": {
+        borderColor: "var(--palette-grey-500)",
+        backgroundColor: `rgba(${theme.vars.palette.background.defaultChannel} / 0.4)`,
+        "& .MuiOutlinedInput-notchedOutline": {
+          borderWidth: 0
+        }
+      }
+    },
+    "& .MuiOutlinedInput-notchedOutline": {
+      border: "none"
+    },
+    "& .MuiAutocomplete-tag": {
+      margin: getSpacingPx(SPACING.micro)
+    }
+  }), [theme.vars.palette.background.defaultChannel]);
+
+  const chipSx = useMemo(() => ({
+    height: "22px",
+    backgroundColor: "var(--palette-grey-700)",
+    color: "var(--palette-grey-100)",
+    border: "1px solid var(--palette-grey-600)",
+    "& .MuiChip-label": {
+      fontSize: "var(--fontSizeSmall)",
+      padding: `0 ${getSpacingPx(SPACING.md)}`
+    },
+    "& .MuiChip-deleteIcon": {
+      color: "var(--palette-grey-400)",
+      fontSize: "var(--fontSizeNormal)",
+      "&:hover": {
+        color: "var(--palette-grey-200)"
+      }
+    }
+  }), []);
+
+  const textFieldSx = useMemo(() => ({
+    "& .MuiInputBase-input": {
+      padding: `${getSpacingPx(SPACING.micro)} ${getSpacingPx(SPACING.xs)} !important`,
+      fontSize: "var(--fontSizeSmall)",
+      color: "var(--palette-grey-100)",
+      "&::placeholder": {
+        color: "var(--palette-grey-500)",
+        opacity: 1
+      }
+    }
+  }), []);
+
+  return (
+    <Box sx={boxSx}>
+      <PropertyLabel
+        name={props.property.name}
+        description={props.property.description}
+        id={id}
+      />
+      <Autocomplete
+        id={id}
+        multiple
+        freeSolo
+        size="small"
+        options={[]}
+        value={strings}
+        sx={autocompleteSx}
+        onChange={(_, newValue) => onChange(newValue as string[])}
+        renderTags={(value: readonly string[], getTagProps) =>
+          value.map((option: string, index: number) => (
+            <Chip
+              variant="filled"
+              size="small"
+              label={option}
+              {...getTagProps({ index })}
+              key={option}
+              sx={chipSx}
+            />
+          ))
+        }
+        renderInput={(params) => (
+          <NodeTextField
+            {...params}
+            fullWidth
+            placeholder={strings.length === 0 ? "Enter values..." : ""}
+            sx={textFieldSx}
+          />
+        )}
+        className="nodrag"
+      />
+    </Box>
+  );
+};
+
+export default memo(StringListProperty, isEqual);

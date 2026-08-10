@@ -1,0 +1,65 @@
+import { useCallback } from "react";
+import { Asset, Video, Audio, Image, Document, Model3DRef } from "../stores/ApiTypes";
+import { useAssetStore } from "../stores/AssetStore";
+import { useQuery } from "@tanstack/react-query";
+import { fileUriToHttpUrl } from "../utils/localFile";
+
+type UseAssetProps = {
+  audio?: Audio;
+  image?: Image;
+  video?: Video;
+  document?: Document;
+  model3d?: Model3DRef;
+};
+
+const assetResourceFromType = (props: UseAssetProps) => {
+  if (props.audio) {
+    return props.audio;
+  } else if (props.image) {
+    return props.image;
+  } else if (props.video) {
+    return props.video;
+  } else if (props.document) {
+    return props.document;
+  } else if (props.model3d) {
+    return props.model3d;
+  } else {
+    return null;
+  }
+};
+
+export function useAsset(props: UseAssetProps): {
+  asset?: Asset;
+  uri?: string;
+} {
+  const getAsset = useAssetStore((state) => state.get);
+  const assetResource = assetResourceFromType(props);
+
+  const load = useCallback(async () => {
+    if (assetResource?.asset_id) {
+      return await getAsset(assetResource.asset_id);
+    } else {
+      return undefined;
+    }
+  }, [assetResource?.asset_id, getAsset]);
+
+  const { data: asset } = useQuery({
+    queryKey: ["asset", assetResource?.asset_id],
+    queryFn: load,
+    enabled: !!assetResource?.asset_id
+  });
+
+  const resourceUri = assetResource?.uri;
+  // `file://` URIs (local-mode drops in Electron) can't be loaded directly by
+  // the renderer under webSecurity — point them at the backend's
+  // `/api/files/local` streaming endpoint, same as the output-rendering path's
+  // `useSignedUrl`.
+  const fileHttpUrl = fileUriToHttpUrl(resourceUri);
+  const uri =
+    fileHttpUrl ??
+    (!resourceUri || resourceUri.startsWith("asset://")
+      ? asset?.get_url || resourceUri || undefined
+      : resourceUri);
+
+  return { asset, uri };
+}

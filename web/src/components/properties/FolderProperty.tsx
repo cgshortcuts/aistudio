@@ -1,0 +1,183 @@
+/** @jsxImportSource @emotion/react */
+import { useTheme } from "@mui/material/styles";
+
+import {
+  EditorButton,
+  TextInput,
+  Popover,
+  DialogTitle,
+  DialogContent
+} from "../ui_primitives";
+import CreateNewFolderIcon from "@mui/icons-material/CreateNewFolder";
+import { AssetList } from "../../stores/ApiTypes";
+import { useAssetStore } from "../../stores/AssetStore";
+import { useNotificationStore } from "../../stores/NotificationStore";
+import PropertyLabel from "../node/PropertyLabel";
+import { useQuery } from "@tanstack/react-query";
+import { PropertyProps } from "../node/PropertyInput";
+import { memo, useState, useRef, useEffect, useMemo, useCallback } from "react";
+import dialogStyles from "../../styles/DialogStyles";
+import isEqual from "../../utils/isEqual";
+import Select from "../inputs/Select";
+import { FlexRow, DialogActionButtons } from "../ui_primitives";
+
+const FolderProperty = (props: PropertyProps) => {
+  const id = `folder-${props.property.name}-${props.propertyIndex}`;
+  const load = useAssetStore((state) => state.load);
+  const createFolder = useAssetStore((state) => state.createFolder);
+  const addNotification = useNotificationStore(
+    (state) => state.addNotification
+  );
+  const fetchFolders = async () => {
+    return await load({ content_type: "folder" });
+  };
+  const { data, error, isLoading, refetch } = useQuery<AssetList, Error>({
+    queryKey: ["assets", { content_type: "folder" }],
+    queryFn: fetchFolders
+  });
+
+  // Validate that the selected value exists in the options
+  const availableFolderIds = useMemo(
+    () => data?.assets.map((folder) => folder.id) || [],
+    [data?.assets]
+  );
+
+  const selectValue = useMemo(() => {
+    const assetId = props.value?.asset_id || "";
+    // Only use the asset_id if it exists in the available options
+    return availableFolderIds.includes(assetId) ? assetId : "";
+  }, [props.value?.asset_id, availableFolderIds]);
+
+  const [anchorEl, setAnchorEl] = useState<HTMLButtonElement | null>(null);
+  const [folderName, setFolderName] = useState<string>("New Folder");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (anchorEl) {
+      const timer = setTimeout(() => {
+        inputRef.current?.focus();
+      }, 10);
+      return () => clearTimeout(timer);
+    }
+  }, [anchorEl]);
+
+  const handleCreateFolder = useCallback(() => {
+    setAnchorEl(null);
+    createFolder(selectValue || "", folderName).then(() => {
+      addNotification({
+        type: "success",
+        content: `CREATE FOLDER: ${folderName}`
+      });
+      refetch();
+    });
+  }, [createFolder, selectValue, folderName, addNotification, refetch]);
+
+  const handleOpenMenu = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      setAnchorEl(event.currentTarget);
+    },
+    []
+  );
+
+  const handleCloseMenu = useCallback(() => {
+    setAnchorEl(null);
+  }, []);
+
+  const handleFolderNameChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setFolderName(e.target.value);
+    },
+    []
+  );
+
+  const handleFolderKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter") {
+        handleCreateFolder();
+      }
+    },
+    [handleCreateFolder]
+  );
+
+  const handleFolderSelect = useCallback(
+    (value: string) => {
+      props.onChange({
+        type: "folder",
+        asset_id: value
+      });
+    },
+    [props]
+  );
+
+  const folderOptions = useMemo(
+    () =>
+      data?.assets.map((folder) => ({
+        value: folder.id,
+        label: folder.name
+      })) || [],
+    [data?.assets]
+  );
+
+  const theme = useTheme();
+  return (
+    <>
+      <PropertyLabel
+        name={props.property.name}
+        description={props.property.description}
+        id={id}
+      />
+      {isLoading && <p>Loading…</p>}
+      {error && <p>Error: {error.message}</p>}
+      <FlexRow align="center" gap={0.5}>
+        <Select
+          options={folderOptions}
+          value={selectValue}
+          onChange={handleFolderSelect}
+          placeholder="Select a folder"
+        />
+        <EditorButton
+          onClick={handleOpenMenu}
+          sx={{
+            border: "none",
+            padding: "0",
+            margin: "0"
+          }}
+        >
+          <CreateNewFolderIcon sx={{ fontSize: "var(--fontSizeBig)" }} />
+        </EditorButton>
+      </FlexRow>
+      <Popover
+        css={dialogStyles(theme)}
+        className="dialog"
+        open={Boolean(anchorEl)}
+        anchorEl={anchorEl}
+        onClose={handleCloseMenu}
+        aria-labelledby="alert-dialog-title"
+        aria-describedby="alert-dialog-description"
+      >
+        <DialogTitle className="dialog-title" id="alert-dialog-title">
+          {"Create Folder"}
+        </DialogTitle>
+        <DialogContent className="dialog-content">
+          <TextInput
+            className="input-field"
+            inputRef={inputRef}
+            placeholder="Folder Name"
+            autoFocus
+            spellCheck={false}
+            autoComplete="off"
+            onKeyDown={handleFolderKeyDown}
+            onChange={handleFolderNameChange}
+          />
+        </DialogContent>
+        <DialogActionButtons
+          onCancel={handleCloseMenu}
+          onConfirm={handleCreateFolder}
+          confirmText="Create Folder"
+        />
+      </Popover>
+    </>
+  );
+};
+
+export default memo(FolderProperty, isEqual);

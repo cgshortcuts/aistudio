@@ -1,0 +1,96 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": [
+    "src/**/*"
+  ],
+  "references": [
+    {
+      "path": "../agents"
+    },
+    {
+      "path": "../app-runtime"
+    },
+    {
+      "path": "../auth"
+    },
+    {
+      "path": "../base-nodes"
+    },
+    {
+      "path": "../config"
+    },
+    {
+      "path": "../dsl"
+    },
+    {
+      "path": "../elevenlabs-nodes"
+    },
+    {
+      "path": "../execution"
+    },
+    {
+      "path": "../minimax-nodes"
+    },
+    {
+      "path": "../transformers-js-nodes"
+    },
+    {
+      "path": "../transformers-js-provider"
+    },
+    {
+      "path": "../fal-nodes"
+    },
+    {
+      "path": "../together-nodes"
+    },
+    {
+      "path": "../huggingface"
+    },
+    {
+      "path": "../image-editor"
+    },
+    {
+      "path": "../kernel"
+    },
+    {
+      "path": "../kie-nodes"
+    },
+    {
+      "path": "../topaz-nodes"
+    },
+    {
+      "path": "../models"
+    },
+    {
+      "path": "../model-pricing"
+    },
+    {
+      "path": "../node-sdk"
+    },
+    {
+      "path": "../protocol"
+    },
+    {
+      "path": "../replicate-nodes"
+    },
+    {
+      "path": "../runtime"
+    },
+    {
+      "path": "../security"
+    },
+    {
+      "path": "../storage"
+    },
+    {
+      "path": "../timeline"
+    },
+    {
+      "path": "../vectorstore"
+    }
+  ]
+}

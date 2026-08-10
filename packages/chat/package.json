@@ -1,0 +1,62 @@
+{
+  "name": "@nodetool-ai/chat",
+  "version": "0.7.0-rc.34",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "node ../../scripts/build-typescript-workspace.mjs",
+    "test": "vitest run",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nodetool-ai/protocol": "*",
+    "@nodetool-ai/runtime": "*",
+    "@nodetool-ai/agents": "*"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.2",
+    "typescript": "^5.7.2"
+  },
+  "exports": {
+    ".": {
+      "nodetool-dev": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nodetool-ai/nodetool.git",
+    "directory": "packages/chat"
+  },
+  "homepage": "https://nodetool.ai",
+  "bugs": {
+    "url": "https://github.com/nodetool-ai/nodetool/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "description": "Chat message processing for NodeTool — tool-call orchestration, streaming responses, and token counting",
+  "keywords": [
+    "nodetool",
+    "ai",
+    "workflow",
+    "workflow-automation",
+    "typescript",
+    "chat",
+    "llm-chat",
+    "streaming",
+    "token-counting",
+    "tool-calls"
+  ]
+}

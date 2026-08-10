@@ -1,0 +1,656 @@
+import { describe, it, expect, vi } from "vitest";
+import {
+  MemoryTriggerInputStore,
+  TriggerWakeupService,
+  type TriggerInput,
+  type TriggerInputStore
+} from "../src/trigger-wakeup.js";
+import { MemoryDurableInboxStore } from "../src/durable-inbox.js";
+
+function makeInput(overrides: Partial<TriggerInput> = {}): TriggerInput {
+  return {
+    runId: "r1",
+    nodeId: "n1",
+    inputId: "i1",
+    payload: { a: 1 },
+    processed: false,
+    createdAt: new Date(),
+    ...overrides
+  };
+}
+
+describe("MemoryTriggerInputStore", () => {
+  it("satisfies TriggerInputStore", () => {
+    const store: TriggerInputStore = new MemoryTriggerInputStore();
+    expect(typeof store.insertIfAbsent).toBe("function");
+    expect(typeof store.findUnprocessed).toBe("function");
+    expect(typeof store.markProcessed).toBe("function");
+    expect(typeof store.cleanupProcessed).toBe("function");
+  });
+
+  it("insertIfAbsent returns false for a duplicate inputId", () => {
+    const store = new MemoryTriggerInputStore();
+    expect(store.insertIfAbsent(makeInput())).toBe(true);
+    expect(store.insertIfAbsent(makeInput({ payload: { a: 2 } }))).toBe(false);
+    expect(store.findUnprocessed("r1", "n1")).toHaveLength(1);
+    expect(store.findUnprocessed("r1", "n1")[0].payload).toEqual({ a: 1 });
+  });
+
+  it("findUnprocessed filters by (run, node) and honors the limit", () => {
+    const store = new MemoryTriggerInputStore();
+    store.insertIfAbsent(makeInput({ inputId: "a" }));
+    store.insertIfAbsent(makeInput({ inputId: "b" }));
+    store.insertIfAbsent(makeInput({ inputId: "c", nodeId: "n2" }));
+    store.insertIfAbsent(makeInput({ inputId: "d", runId: "r2" }));
+
+    expect(store.findUnprocessed("r1", "n1").map((i) => i.inputId)).toEqual([
+      "a",
+      "b"
+    ]);
+    expect(store.findUnprocessed("r1", "n1", 1)).toHaveLength(1);
+    expect(store.findUnprocessed("r1", "n2").map((i) => i.inputId)).toEqual([
+      "c"
+    ]);
+  });
+
+  it("markProcessed excludes the input and ignores unknown ids", () => {
+    const store = new MemoryTriggerInputStore();
+    store.insertIfAbsent(makeInput({ inputId: "a" }));
+    store.insertIfAbsent(makeInput({ inputId: "b" }));
+    store.markProcessed("a");
+    expect(() => store.markProcessed("nope")).not.toThrow();
+    expect(store.findUnprocessed("r1", "n1").map((i) => i.inputId)).toEqual([
+      "b"
+    ]);
+  });
+
+  it("cleanupProcessed removes only old processed inputs and reports the count", async () => {
+    const store = new MemoryTriggerInputStore();
+    store.insertIfAbsent(makeInput({ inputId: "old" }));
+    store.insertIfAbsent(makeInput({ inputId: "pending" }));
+    store.markProcessed("old");
+    await new Promise((r) => setTimeout(r, 2));
+
+    expect(store.cleanupProcessed("r1", "n1", 0)).toBe(1);
+    expect(store.cleanupProcessed("r1", "n1", 0)).toBe(0);
+    expect(store.hasInputsFor("r1", "n1")).toBe(true);
+    expect(store.findUnprocessed("r1", "n1").map((i) => i.inputId)).toEqual([
+      "pending"
+    ]);
+  });
+
+  it("deleteRun drops a run's inputs and clears hasInputsFor", () => {
+    const store = new MemoryTriggerInputStore();
+    store.insertIfAbsent(makeInput({ inputId: "a" }));
+    store.insertIfAbsent(makeInput({ inputId: "b", runId: "r2" }));
+    store.deleteRun("r1");
+    expect(store.hasInputsFor("r1", "n1")).toBe(false);
+    expect(store.hasInputsFor("r2", "n1")).toBe(true);
+    // The idempotency marker went with it — the same id can be stored again.
+    expect(store.insertIfAbsent(makeInput({ inputId: "a" }))).toBe(true);
+  });
+});
+
+describe("TriggerWakeupService — injected input store", () => {
+  it("writes every delivered input through the injected store, not a private memory one", async () => {
+    const store = new MemoryTriggerInputStore();
+    const svc = new TriggerWakeupService(undefined, store);
+
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: { a: 1 }
+    });
+
+    expect(store.findUnprocessed("r1", "n1").map((i) => i.inputId)).toEqual([
+      "i1"
+    ]);
+    // The service reads back through the same store.
+    expect(await svc.getPendingInputs("r1", "n1")).toHaveLength(1);
+  });
+
+  it("dedupes, marks, cleans and disposes against the injected store", async () => {
+    const store = new MemoryTriggerInputStore();
+    const svc = new TriggerWakeupService(undefined, store);
+
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: {}
+    });
+    // Idempotency is decided by the store, so a row inserted behind the
+    // service's back still dedupes.
+    store.insertIfAbsent(makeInput({ inputId: "i2" }));
+    expect(
+      await svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "i2",
+        payload: {}
+      })
+    ).toBe(false);
+
+    await svc.markProcessed("i1");
+    expect(store.findUnprocessed("r1", "n1").map((i) => i.inputId)).toEqual([
+      "i2"
+    ]);
+
+    await svc.disposeRun("r1");
+    expect(store.hasInputsFor("r1", "n1")).toBe(false);
+  });
+
+  it("works with an asynchronous store", async () => {
+    const backing = new MemoryTriggerInputStore();
+    const store: TriggerInputStore = {
+      has: async (id) => backing.has(id),
+      insertIfAbsent: async (i) => backing.insertIfAbsent(i),
+      findUnprocessed: async (r, n, l) => backing.findUnprocessed(r, n, l),
+      markProcessed: async (id) => backing.markProcessed(id),
+      cleanupProcessed: async (r, n, h) => backing.cleanupProcessed(r, n, h),
+      hasInputsFor: async (r, n) => backing.hasInputsFor(r, n),
+      deleteRun: async (r) => backing.deleteRun(r)
+    };
+    const svc = new TriggerWakeupService(undefined, store);
+
+    expect(
+      await svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "i1",
+        payload: { a: 1 }
+      })
+    ).toBe(true);
+    expect(
+      await svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "i1",
+        payload: { a: 2 }
+      })
+    ).toBe(false);
+    expect((await svc.getPendingInputs("r1", "n1")).map((i) => i.inputId)).toEqual(
+      ["i1"]
+    );
+    await svc.markProcessed("i1");
+    expect(await svc.getPendingInputs("r1", "n1")).toHaveLength(0);
+  });
+});
+
+describe("TriggerWakeupService", () => {
+  it("deliverTriggerInput() stores input and returns true", async () => {
+    const svc = new TriggerWakeupService();
+
+    const result = await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "input-1",
+      payload: { event: "click" }
+    });
+
+    expect(result).toBe(true);
+
+    const pending = await svc.getPendingInputs("r1", "n1");
+    expect(pending).toHaveLength(1);
+    expect(pending[0].inputId).toBe("input-1");
+    expect(pending[0].payload).toEqual({ event: "click" });
+    expect(pending[0].processed).toBe(false);
+  });
+
+  it("re-delivers after a transient durable append failure (marker not recorded early)", async () => {
+    // Regression: the idempotency marker was recorded before the durable inbox
+    // append, so a transient save() failure left the marker behind and the
+    // caller's retry was short-circuited without ever writing the message.
+    const base = new MemoryDurableInboxStore();
+    let failNextSave = true;
+    const flakyStore = {
+      findByMessageId: (id: string) => base.findByMessageId(id),
+      save: async (m: any) => {
+        if (failNextSave) {
+          failNextSave = false;
+          throw new Error("transient store failure");
+        }
+        return base.save(m);
+      },
+      findPending: (...a: any[]) => (base.findPending as any)(...a),
+      getMaxSeq: (...a: any[]) => (base.getMaxSeq as any)(...a),
+      markConsumed: (id: string) => base.markConsumed(id),
+      deleteConsumed: (...a: any[]) => (base.deleteConsumed as any)(...a)
+    } as any;
+
+    const svc = new TriggerWakeupService(flakyStore);
+    // First delivery fails inside the durable append.
+    await expect(
+      svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "e1",
+        payload: { a: 1 }
+      })
+    ).rejects.toThrow(/transient/);
+    // No marker was recorded, so nothing is pending yet.
+    expect(await svc.getPendingInputs("r1", "n1")).toHaveLength(0);
+
+    // Retry succeeds — the input is now delivered rather than being swallowed
+    // by a stale idempotency marker.
+    const retry = await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "e1",
+      payload: { a: 1 }
+    });
+    expect(retry).toBe(true);
+    expect(await svc.getPendingInputs("r1", "n1")).toHaveLength(1);
+  });
+
+  it("dedupes two CONCURRENT deliveries of the same inputId", async () => {
+    // Regression: recording the in-memory marker only after the durable append
+    // opened an await window in which two concurrent same-inputId deliveries
+    // could both pass the idempotency check and both store an entry.
+    const svc = new TriggerWakeupService();
+    const [a, b] = await Promise.all([
+      svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "dup",
+        payload: { n: 1 }
+      }),
+      svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "dup",
+        payload: { n: 2 }
+      })
+    ]);
+    // Exactly one delivery is "new", and only one input is stored.
+    expect([a, b].filter(Boolean)).toHaveLength(1);
+    expect(await svc.getPendingInputs("r1", "n1")).toHaveLength(1);
+  });
+
+  it("deliverTriggerInput() is idempotent — duplicate inputId returns false", async () => {
+    const svc = new TriggerWakeupService();
+
+    const first = await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "input-1",
+      payload: { a: 1 }
+    });
+    expect(first).toBe(true);
+
+    const second = await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "input-1",
+      payload: { a: 2 }
+    });
+    expect(second).toBe(false);
+
+    // Only one input stored
+    const pending = await svc.getPendingInputs("r1", "n1");
+    expect(pending).toHaveLength(1);
+  });
+
+  it("evicts the cached inbox after cleanupProcessed removes a run's inputs", async () => {
+    // Regression: _inboxes grew by one entry per run forever.
+    const svc = new TriggerWakeupService();
+    await svc.deliverTriggerInput({
+      runId: "run-1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: {}
+    });
+    await svc.markProcessed("i1");
+    // With a 0h cutoff, the processed input is purged and the inbox evicted.
+    await svc.cleanupProcessed("run-1", "n1", 0);
+    // A fresh delivery for the same run works (idempotency marker was purged),
+    // demonstrating no stale state blocks it.
+    const again = await svc.deliverTriggerInput({
+      runId: "run-1",
+      nodeId: "n1",
+      inputId: "i2",
+      payload: {}
+    });
+    expect(again).toBe(true);
+
+    // disposeRun clears everything for a run.
+    await svc.disposeRun("run-1");
+    expect(await svc.getPendingInputs("run-1", "n1")).toHaveLength(0);
+  });
+
+  it("getPendingInputs() returns unprocessed inputs", async () => {
+    const svc = new TriggerWakeupService();
+
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: { x: 1 }
+    });
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i2",
+      payload: { x: 2 }
+    });
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n2",
+      inputId: "i3",
+      payload: { x: 3 }
+    });
+
+    // Only inputs for n1
+    const pending = await svc.getPendingInputs("r1", "n1");
+    expect(pending).toHaveLength(2);
+
+    // Different node
+    const pendingN2 = await svc.getPendingInputs("r1", "n2");
+    expect(pendingN2).toHaveLength(1);
+  });
+
+  it("markProcessed() marks input as processed, excluded from pending", async () => {
+    const svc = new TriggerWakeupService();
+
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: { v: 1 }
+    });
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i2",
+      payload: { v: 2 }
+    });
+
+    await svc.markProcessed("i1");
+
+    const pending = await svc.getPendingInputs("r1", "n1");
+    expect(pending).toHaveLength(1);
+    expect(pending[0].inputId).toBe("i2");
+  });
+
+  it("cleanupProcessed() removes old processed inputs", async () => {
+    const svc = new TriggerWakeupService();
+
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: {}
+    });
+
+    await svc.markProcessed("i1");
+
+    // Wait 1ms so processedAt is strictly in the past
+    await new Promise((r) => setTimeout(r, 2));
+
+    // olderThanHours=0 means cutoff = Date.now(), processedAt < now
+    const removed = await svc.cleanupProcessed("r1", "n1", 0);
+    expect(removed).toBe(1);
+
+    // Nothing left to clean
+    const removed2 = await svc.cleanupProcessed("r1", "n1", 0);
+    expect(removed2).toBe(0);
+  });
+
+  it("cleanupProcessed() does not remove unprocessed or recent inputs", async () => {
+    const svc = new TriggerWakeupService();
+
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: {}
+    });
+
+    // Not processed — should not be removed
+    const removed = await svc.cleanupProcessed("r1", "n1", 0);
+    expect(removed).toBe(0);
+
+    const pending = await svc.getPendingInputs("r1", "n1");
+    expect(pending).toHaveLength(1);
+  });
+});
+
+describe("TriggerWakeupService — durable store delivery", () => {
+  it("appends the payload to the provided store under the 'trigger' handle", async () => {
+    const store = new MemoryDurableInboxStore();
+    const svc = new TriggerWakeupService(store);
+
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: { e: 1 }
+    });
+
+    const pending = await store.findPending("r1", "n1", "trigger", 100);
+    expect(pending).toHaveLength(1);
+    expect(pending[0].messageId).toBe("trigger-i1");
+    expect(pending[0].payload).toEqual({ e: 1 });
+  });
+});
+
+describe("TriggerWakeupService — concurrent delivery sequencing (finding #9)", () => {
+  it("assigns strictly increasing, duplicate-free seq under concurrent deliveries for the same (run, node)", async () => {
+    const store = new MemoryDurableInboxStore();
+    const svc = new TriggerWakeupService(store);
+
+    const N = 50;
+    const results = await Promise.all(
+      Array.from({ length: N }, (_, i) =>
+        svc.deliverTriggerInput({
+          runId: "r1",
+          nodeId: "n1",
+          inputId: `input-${i}`,
+          payload: { i }
+        })
+      )
+    );
+
+    // Every distinct inputId is a new delivery.
+    expect(results.every((r) => r === true)).toBe(true);
+
+    const persisted = await store.findPending("r1", "n1", "trigger", N * 2);
+    expect(persisted).toHaveLength(N);
+
+    const seqs = persisted.map((m) => m.seq);
+    // Duplicate-free.
+    expect(new Set(seqs).size).toBe(N);
+    // Strictly increasing 1..N (findPending sorts by seq).
+    expect(seqs).toEqual(Array.from({ length: N }, (_, i) => i + 1));
+  });
+
+  it("keeps sequences independent across distinct (run, node) pairs", async () => {
+    const store = new MemoryDurableInboxStore();
+    const svc = new TriggerWakeupService(store);
+
+    await Promise.all([
+      svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "a",
+        payload: {}
+      }),
+      svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n2",
+        inputId: "b",
+        payload: {}
+      }),
+      // A colliding plain-":" join of these two would be "r1:n2:x" vs
+      // "r1:n2x" — JSON keying keeps them apart.
+      svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n2x",
+        inputId: "c",
+        payload: {}
+      })
+    ]);
+
+    expect(await store.findPending("r1", "n1", "trigger", 10)).toHaveLength(1);
+    expect(await store.findPending("r1", "n2", "trigger", 10)).toHaveLength(1);
+    expect(await store.findPending("r1", "n2x", "trigger", 10)).toHaveLength(1);
+  });
+});
+
+describe("TriggerWakeupService — getPendingInputs filtering", () => {
+  it("respects the limit", async () => {
+    const svc = new TriggerWakeupService();
+    for (const id of ["a", "b", "c"]) {
+      await svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: id,
+        payload: {}
+      });
+    }
+    expect(await svc.getPendingInputs("r1", "n1", 2)).toHaveLength(2);
+  });
+
+  it("filters by runId", async () => {
+    const svc = new TriggerWakeupService();
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: {}
+    });
+    await svc.deliverTriggerInput({
+      runId: "r2",
+      nodeId: "n1",
+      inputId: "i2",
+      payload: {}
+    });
+    expect((await svc.getPendingInputs("r1", "n1")).map((i) => i.inputId)).toEqual([
+      "i1"
+    ]);
+  });
+});
+
+describe("TriggerWakeupService — markProcessed targeting", () => {
+  it("marks only the input with the given id", async () => {
+    const svc = new TriggerWakeupService();
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: {}
+    });
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i2",
+      payload: {}
+    });
+    await svc.markProcessed("i2");
+    expect((await svc.getPendingInputs("r1", "n1")).map((i) => i.inputId)).toEqual([
+      "i1"
+    ]);
+  });
+
+  it("is a no-op for an unknown id", async () => {
+    const svc = new TriggerWakeupService();
+    await svc.deliverTriggerInput({
+      runId: "r1",
+      nodeId: "n1",
+      inputId: "i1",
+      payload: {}
+    });
+    await expect(svc.markProcessed("nope")).resolves.toBeUndefined();
+    expect(await svc.getPendingInputs("r1", "n1")).toHaveLength(1);
+  });
+});
+
+describe("TriggerWakeupService — cleanupProcessed details", () => {
+  it("removes only matching, processed, old inputs", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2024-01-01T00:00:00Z"));
+      const svc = new TriggerWakeupService();
+      await svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "match",
+        payload: {}
+      });
+      await svc.deliverTriggerInput({
+        runId: "r2",
+        nodeId: "n1",
+        inputId: "otherRun",
+        payload: {}
+      });
+      await svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n2",
+        inputId: "otherNode",
+        payload: {}
+      });
+      await svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "unprocessed",
+        payload: {}
+      });
+      await svc.markProcessed("match");
+      await svc.markProcessed("otherRun");
+      await svc.markProcessed("otherNode");
+
+      vi.setSystemTime(new Date("2024-01-02T00:00:00Z")); // a day later
+
+      expect(await svc.cleanupProcessed("r1", "n1", 1)).toBe(1); // only "match"
+      // The others were untouched, so they are still individually removable.
+      expect(await svc.cleanupProcessed("r2", "n1", 1)).toBe(1); // otherRun
+      expect(await svc.cleanupProcessed("r1", "n2", 1)).toBe(1); // otherNode
+      expect((await svc.getPendingInputs("r1", "n1")).map((i) => i.inputId)).toEqual([
+        "unprocessed"
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps inputs newer than the age threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2024-01-01T00:00:00Z"));
+      const svc = new TriggerWakeupService();
+      await svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "i1",
+        payload: {}
+      });
+      await svc.markProcessed("i1"); // processedAt = 00:00
+      vi.setSystemTime(new Date("2024-01-01T00:30:00Z")); // 30 min later
+      // threshold 2h => cutoff 22:30 yesterday; processed at 00:00 is newer
+      expect(await svc.cleanupProcessed("r1", "n1", 2)).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not remove an input processed exactly at the cutoff", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2024-01-01T00:00:00Z"));
+      const svc = new TriggerWakeupService();
+      await svc.deliverTriggerInput({
+        runId: "r1",
+        nodeId: "n1",
+        inputId: "i1",
+        payload: {}
+      });
+      await svc.markProcessed("i1"); // processedAt = T0
+      vi.setSystemTime(new Date("2024-01-01T01:00:00Z")); // +1h
+      // cutoff = now - 1h = T0 exactly; the comparison is strict `<`
+      expect(await svc.cleanupProcessed("r1", "n1", 1)).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

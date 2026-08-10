@@ -1,0 +1,206 @@
+/** @jsxImportSource @emotion/react */
+import { css } from "@emotion/react";
+import { useState, useCallback, memo, useMemo } from "react";
+import PropertyLabel from "../node/PropertyLabel";
+import { PropertyProps } from "../node/PropertyInput";
+import TextEditorModal from "./TextEditorModal";
+import isEqual from "../../utils/isEqual";
+import { useNodes } from "../../contexts/NodeContext";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { CopyButton, ToolbarIconButton, SPACING, Z_INDEX } from "../ui_primitives";
+import OpenInFullIcon from "@mui/icons-material/OpenInFull";
+import { NodeTextField, editorClassNames, cn } from "../editor_ui";
+import { useIsConnectedSelector } from "../../hooks/nodes/useIsConnected";
+import ConnectedBadge from "./ConnectedBadge";
+import { useInspectorHeaderSupplementalRegistration } from "../../hooks/useInspectorHeaderSupplemental";
+import { getCodeNodeLanguage } from "../node/codeNodeUi";
+
+const propertyStyles = (theme: Theme) =>
+  css({
+    ".property-row": {
+      width: "100%",
+      display: "flex",
+      flexDirection: "column"
+    },
+    ".property-row > .property-label": {
+      order: 1
+    },
+    ".value-container": {
+      width: "100%",
+      order: 2
+    },
+    ".string-action-buttons": {
+      position: "absolute",
+      right: 0,
+      top: "-3px",
+      opacity: 0.8,
+      zIndex: Z_INDEX.dropdown
+    },
+    ".string-action-buttons .MuiIconButton-root": {
+      margin: `0 0 0 ${theme.spacing(SPACING.sm)}`,
+      padding: 0
+    },
+    ".string-action-buttons .MuiIconButton-root svg": {
+      fontSize: "var(--fontSizeSmall)"
+    }
+  });
+
+const StringProperty = ({
+  property,
+  propertyIndex,
+  value,
+  onChange,
+  tabIndex,
+  nodeId,
+  nodeType,
+  isDynamicProperty,
+  isInspector,
+  onPropertyContextMenu
+}: PropertyProps) => {
+  const id = `textfield-${property.name}-${propertyIndex}`;
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const [isHovered, setIsHovered] = useState(false);
+
+  const isConnectedSelector = useIsConnectedSelector(nodeId, property.name);
+  const isConnected = useNodes(isConnectedSelector);
+  const theme = useTheme();
+  const inspectorToolbarActionSx = useMemo(
+    () => ({
+      color: theme.vars.palette.common.white,
+      "& svg": { fontSize: "var(--fontSizeNormal)" }
+    }),
+    [theme]
+  );
+
+  const codeLanguage = getCodeNodeLanguage(nodeType);
+  const stringValue = typeof value === "string" ? value : "";
+
+  const toggleExpand = useCallback(() => {
+    setIsExpanded((prev) => {
+      const next = !prev;
+      if (next) {
+        window.dispatchEvent(new Event("close-text-editor-modal"));
+      }
+      return next;
+    });
+  }, []);
+
+  const editorActions = useMemo(
+    () => (
+      <>
+        <ToolbarIconButton
+          className="inspector-supplemental-action"
+          tooltip="Open Editor"
+          icon={<OpenInFullIcon />}
+          onClick={toggleExpand}
+          size="small"
+          sx={inspectorToolbarActionSx}
+        />
+        <CopyButton
+          className="inspector-supplemental-action"
+          value={value}
+          buttonSize="small"
+          sx={inspectorToolbarActionSx}
+        />
+      </>
+    ),
+    [inspectorToolbarActionSx, toggleExpand, value]
+  );
+
+  useInspectorHeaderSupplementalRegistration(
+    editorActions,
+    isInspector === true
+  );
+
+  if (isConnected) {
+    return (
+      <div className="string-property connected">
+        <PropertyLabel
+          name={property.name}
+          description={property.description}
+          id={id}
+        />
+        <ConnectedBadge />
+      </div>
+    );
+  }
+
+  return (
+    <div className="string-property" css={propertyStyles(theme)}>
+      <div
+        className="property-row"
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+      >
+        <PropertyLabel
+          name={property.name}
+          description={property.description}
+          id={id}
+          isDynamicProperty={isDynamicProperty}
+        />
+        {!isInspector && isHovered ? (
+          <div className="string-action-buttons">
+            <ToolbarIconButton
+              tooltip="Open Editor"
+              icon={<OpenInFullIcon />}
+              onClick={toggleExpand}
+              size="small"
+            />
+            <CopyButton value={value} buttonSize="small" />
+          </div>
+        ) : null}
+        <div
+          className="value-container"
+          onContextMenuCapture={onPropertyContextMenu}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <NodeTextField
+            className={cn(
+              "string-value-input",
+              isFocused && editorClassNames.nowheel
+            )}
+            value={stringValue}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+              onChange(e.target.value ?? "");
+            }}
+            onFocus={(e) => {
+              e.preventDefault();
+              setIsFocused(true);
+            }}
+            onBlur={() => {
+              setIsFocused(false);
+            }}
+            onMouseDown={(e) => {
+              e.stopPropagation();
+            }}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+            }}
+            tabIndex={tabIndex}
+            multiline
+            minRows={3}
+            maxRows={3}
+            autoFocus={false}
+          />
+        </div>
+      </div>
+      {isExpanded && (
+        <TextEditorModal
+          value={stringValue}
+          language={codeLanguage}
+          nodeType={nodeType}
+          propertyType={property.type?.type}
+          onChange={(next) => onChange(next)}
+          onClose={toggleExpand}
+          propertyName={property.name}
+          propertyDescription={property.description || ""}
+        />
+      )}
+    </div>
+  );
+};
+
+export default memo(StringProperty, isEqual);

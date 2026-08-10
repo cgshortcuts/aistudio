@@ -1,0 +1,34 @@
+---
+layout: page
+title: "Chat with Docs"
+---
+
+## Overview
+
+Document retrieval and question-answering using vector search and local LLMs.
+
+> This tutorial does not ship as an importable template. Build it manually by following the steps below.
+
+## Demo
+
+<video controls preload="metadata" poster="{{ '/assets/cookbook/chat-with-docs.jpg' | relative_url }}">
+  <source src="{{ '/assets/cookbook/chat-with-docs.mp4' | relative_url }}" type="video/mp4">
+</video>
+
+## Tags
+
+chat, rag
+
+## Workflow Diagram
+
+{% mermaid %}
+graph TD
+  formattext_9["FormatText"]
+  hybridsearch_8e9b81["HybridSearch"]
+  query_2cff53["Query"]
+  agent_d83380["Agent"]
+  query_2cff53 --> hybridsearch_8e9b81
+  hybridsearch_8e9b81 --> formattext_9
+  query_2cff53 --> formattext_9
+  formattext_9 --> agent_d83380
+{% endmermaid %}

@@ -1,0 +1,197 @@
+/**
+ * CodeAct system prompt — the action contract, the tool catalog rendered as
+ * typed signatures, and a condensed sandbox API reference derived from the
+ * same manifest the Code-node prompt uses (so it cannot advertise an API the
+ * sandbox does not marshal).
+ */
+
+import {
+  getSandboxManifest,
+  type SandboxManifest
+} from "../code-gen/sandbox-manifest.js";
+import { renderToolCatalog, type ToolSignatureSource } from "./tool-api.js";
+
+const ACTION_CONTRACT_BASE = `# CodeAct Execution
+
+You act by writing JavaScript. Each turn, call the \`execute_code\` tool with a
+program; it runs in a sandbox and the observation (return value, console logs,
+error) comes back as the tool result. Repair and continue based on what you
+observe.
+
+Rules:
+- Every \`execute_code\` call carries a \`title\`: 3-8 words, user-facing,
+  naming what THIS action does ("Rendering product images from CSV") — it is
+  the only thing the user sees while your code runs.
+- Chain the WHOLE pipeline into one action: call several tools, loop over
+  items, branch on intermediate results, retry inside try/catch, and
+  post-process in the same program. An action that makes one tool call and
+  returns to look at it is JSON tool-calling with extra steps — reach for a
+  new action only when you genuinely cannot decide the next call without
+  seeing an observation first (and then finish the rest in that next action).
+- Multi-round protocols (poll a job, answer run escalations, retry a flaky
+  call) are ONE action: write the loop, not one action per round.
+- Independent work runs CONCURRENTLY, and a sequential \`for\` loop over
+  \`await\` is the most common way an action wastes wall-clock. A call starts
+  its work when invoked, not when awaited, so
+  \`await Promise.all(items.map(x => tools.foo(x)))\` fans out for real —
+  ten independent lookups take one round trip, not ten. Use
+  \`await parallelMap(items, async (x) => …, 5)\` when the list is long enough
+  that unbounded fan-out would blow a rate limit or the per-action tool
+  budget; it preserves input order and keeps at most N in flight.
+  \`Promise.allSettled\` when some are allowed to fail. Sequence only what
+  genuinely depends on a previous result.
+- \`state\` is a plain object that persists across your actions in this step.
+  Stash fetched data and intermediates there (\`state.rows = ...\`) and reuse
+  them next turn — never re-fetch what you already have.
+- Keep observations small. \`return\` a compact summary (counts, ids, the few
+  fields you need); large payloads belong in \`state\` or agent memory — not in
+  the transcript.
+- Extract fields you have verified exist. Coercing an unread object to a
+  string yields "[object Object]", and a plausible-looking wrong field passes
+  schema validation. Return shapes are NOT documented in the catalog, so the
+  first time a pipeline uses an unfamiliar tool's value,
+  \`console.log(JSON.stringify(x))\` it before extracting — the log rides
+  along in the same observation, costs nothing, and turns a wrong guess into
+  something you can fix inside the same program instead of a probe action.
+- A failed tool call throws; use try/catch when partial failure is acceptable.
+- Top-level \`await\` and \`return\` work. There is no module loader: no
+  \`import\`/\`require\`, and \`eval\`/\`Function\` are disabled.`;
+
+const ACTION_CONTRACT_STEP = `${ACTION_CONTRACT_BASE}
+- For file work use the sandbox's own \`workspace.*\` API (\`read\`, \`write\`,
+  \`list\`, \`readBytes\`, \`writeBytes\`, \`stat\`, \`copy\`, \`move\`, \`mkdir\`,
+  \`remove\`) — it is in-process, so a read costs nothing a tool call would.
+- Do not ask the user questions. Choose a reasonable assumption and proceed.`;
+
+const ACTION_CONTRACT_CHAT = `${ACTION_CONTRACT_BASE}
+- Network, secrets, files, and assets are available only through \`tools.*\`.
+  Direct \`fetch\`, \`getSecret\`, \`workspace\`, \`assetToSandbox\`, and
+  \`sandboxToAsset\` access is disabled so permission checks and approvals
+  cannot be bypassed.
+- When you need the user's decision, stop writing code and ask in a plain
+  assistant message.`;
+
+const CHAT_COMPLETION = `# Answering the user
+
+This is a chat turn, not a step: there is no \`finish()\`. When the work is
+done, reply to the user with a normal assistant message containing no tool
+call — that message ends the turn.`;
+
+const FINISH_SCHEMA = `# Completing the step
+
+Call \`await finish(result)\` when the objective is met. The result is validated
+against the output schema below; an invalid result throws with the violations
+so you can correct it. The step ONLY completes through \`finish\`. Call it in
+the SAME action that computes the final value — a separate finish-only turn
+is a wasted round trip. Wrap it in try/catch: on a validation error, log the
+raw values you built the result from, fix the extraction, and call \`finish\`
+again in the SAME program — do not spend a fresh action recovering from a
+shape you can see right there. The schema checks types, not truth: a status,
+an id, or a stringified envelope passes where the asked-for content should
+be — log each value and confirm it IS the thing requested before finishing.
+Never satisfy a string field by stringifying an envelope: dig out the
+innermost value that was asked for (\`r.result.outputs.name\`, not
+\`JSON.stringify(r.result)\`).`;
+
+const FINISH_FREEFORM = `# Completing the step
+
+Call \`await finish(result)\` when the objective is met, or — for a purely
+textual answer — reply with a final assistant message containing no tool call.`;
+
+/** Compact, manifest-derived sandbox reference: signatures only. */
+function renderSandboxSummary(
+  manifest: SandboxManifest,
+  variant: "step" | "chat"
+): string {
+  const unavailableInChat = new Set([
+    "fetch",
+    "getSecret",
+    "workspace",
+    "assetToSandbox",
+    "sandboxToAsset"
+  ]);
+  const lines: string[] = [];
+  for (const bridge of Object.values(manifest.bridges)) {
+    if (bridge.internal || bridge.members.length === 0) continue;
+    if (variant === "chat" && unavailableInChat.has(bridge.name)) continue;
+    for (const member of bridge.members) {
+      lines.push(`- ${member.signature}`);
+    }
+  }
+  for (const helper of Object.values(manifest.guestHelpers)) {
+    lines.push(`- ${helper.signature}`);
+  }
+  const besides =
+    variant === "chat" ? "`tools.*`, `state`" : "`tools.*`, `state`, `finish`";
+  return [
+    `# Sandbox API (besides ${besides})`,
+    lines.join("\n"),
+    `Built-ins: ${manifest.nativeGlobals.join(", ")}.`,
+    `Not available: ${manifest.blockedGlobals.join(", ")}.`,
+    `Each action runs under the sandbox limits (execution timeout, memory, fetch count/size). Only work that would actually exceed them gets split across actions (carry progress in \`state\`); everything else belongs in one action.`
+  ].join("\n\n");
+}
+
+export interface CodeActPromptOptions {
+  /** Tools documented in full (signature + description) in the prompt. */
+  tools: ToolSignatureSource[];
+  /**
+   * Deferred long tail: callable like any other tool, but listed by name
+   * only — the model pulls a signature in with `searchTools()` first.
+   */
+  deferredTools?: ToolSignatureSource[];
+  /** Declared output schema (JSON schema) of the step, if any. */
+  resultSchema?: Record<string, unknown> | null;
+  /** Caller preamble — layered before the contract, never replacing it. */
+  preamble?: string;
+  manifest?: SandboxManifest;
+  /**
+   * `"step"` (default) is the agent-step contract: `finish()` completes the
+   * step and user questions are forbidden. `"chat"` is the chat-turn
+   * contract: no `finish()`, a plain assistant message answers the user, and
+   * asking the user is allowed. Chat callers ignore `resultSchema`.
+   */
+  variant?: "step" | "chat";
+  /** Extra sections appended after the tool catalog (e.g. the graph model). */
+  extraSections?: string[];
+}
+
+export function buildCodeActSystemPrompt(
+  options: CodeActPromptOptions
+): string {
+  const manifest = options.manifest ?? getSandboxManifest();
+  const variant = options.variant ?? "step";
+  const sections: string[] = [];
+  if (options.preamble?.trim()) sections.push(options.preamble.trim());
+  sections.push(
+    variant === "chat" ? ACTION_CONTRACT_CHAT : ACTION_CONTRACT_STEP
+  );
+  if (variant === "chat") {
+    sections.push(CHAT_COMPLETION);
+  } else {
+    sections.push(options.resultSchema ? FINISH_SCHEMA : FINISH_FREEFORM);
+    if (options.resultSchema) {
+      sections.push(
+        `# Output schema\n\`\`\`json\n${JSON.stringify(options.resultSchema, null, 2)}\n\`\`\``
+      );
+    }
+  }
+  sections.push(`# Tools\n${renderToolCatalog(options.tools)}`);
+  const deferred = options.deferredTools ?? [];
+  if (deferred.length > 0) {
+    sections.push(
+      `# More tools (discover before calling)\n` +
+        `These are also callable via \`tools.<name>()\`, but only their names ` +
+        `are listed here. Call \`await searchTools("query")\` (or ` +
+        `\`searchTools("select:name1,name2")\`) first — it returns each ` +
+        `match's signature and description. Do not guess arguments for a ` +
+        `tool you have not looked up.\n\n` +
+        deferred.map((t) => t.name).join(", ")
+    );
+  }
+  for (const section of options.extraSections ?? []) {
+    if (section.trim()) sections.push(section.trim());
+  }
+  sections.push(renderSandboxSummary(manifest, variant));
+  return sections.join("\n\n");
+}

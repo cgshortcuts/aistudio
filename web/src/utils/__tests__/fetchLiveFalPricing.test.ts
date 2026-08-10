@@ -1,0 +1,123 @@
+import { fetchLiveFalPricing } from "../fetchLiveFalPricing";
+
+const mockFetch = jest.fn();
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  global.fetch = mockFetch as unknown as typeof fetch;
+});
+
+describe("fetchLiveFalPricing", () => {
+  it("returns null for empty endpointIds", async () => {
+    const result = await fetchLiveFalPricing({}, []);
+    expect(result).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("fetches with correct URL and returns updated pricing without mutating input", async () => {
+    const originalPricing = { endpoint_id: "fal-ai/fast-sdxl" };
+    const metadataByType: Record<string, any> = {
+      "fal.FastSDXL": {
+        fal_unit_pricing: originalPricing
+      }
+    };
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          byEndpointId: {
+            "fal-ai/fast-sdxl": {
+              unit_price: 0.02,
+              billing_unit: "image",
+              currency: "usd"
+            }
+          },
+          fetched_at: "2026-01-20T00:00:00Z"
+        })
+    });
+
+    const result = await fetchLiveFalPricing(metadataByType, [
+      "fal-ai/fast-sdxl"
+    ]);
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `${window.location.origin}/api/fal/pricing?endpoint_id=fal-ai%2Ffast-sdxl`
+    );
+    expect(result).toEqual({
+      "fal.FastSDXL": {
+        endpoint_id: "fal-ai/fast-sdxl",
+        unit_price: 0.02,
+        billing_unit: "image",
+        currency: "usd",
+        source: "live",
+        checked_at: "2026-01-20T00:00:00Z"
+      }
+    });
+    // The input metadata is left untouched — callers merge the returned
+    // pricing into NEW metadata objects so per-node selectors re-render.
+    expect(metadataByType["fal.FastSDXL"].fal_unit_pricing).toBe(
+      originalPricing
+    );
+    expect(metadataByType["fal.FastSDXL"].fal_unit_pricing).toEqual({
+      endpoint_id: "fal-ai/fast-sdxl"
+    });
+  });
+
+  it("returns null when no matching entries", async () => {
+    const metadataByType: Record<string, any> = {
+      "fal.FastSDXL": {
+        fal_unit_pricing: { endpoint_id: "fal-ai/fast-sdxl" }
+      }
+    };
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          byEndpointId: {
+            "fal-ai/other-model": {
+              unit_price: 0.05,
+              billing_unit: "second",
+              currency: "usd"
+            }
+          },
+          fetched_at: "2026-01-20T00:00:00Z"
+        })
+    });
+
+    const result = await fetchLiveFalPricing(metadataByType, [
+      "fal-ai/fast-sdxl"
+    ]);
+    expect(result).toBeNull();
+  });
+
+  it("returns null on fetch error", async () => {
+    mockFetch.mockRejectedValue(new Error("Network error"));
+
+    const result = await fetchLiveFalPricing({}, ["fal-ai/fast-sdxl"]);
+    expect(result).toBeNull();
+  });
+
+  it("returns null on non-ok response", async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500
+    });
+
+    const result = await fetchLiveFalPricing({}, ["fal-ai/fast-sdxl"]);
+    expect(result).toBeNull();
+  });
+
+  it("returns null on 204 response", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204
+    });
+
+    const result = await fetchLiveFalPricing({}, ["fal-ai/fast-sdxl"]);
+    expect(result).toBeNull();
+  });
+});

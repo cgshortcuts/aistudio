@@ -1,0 +1,119 @@
+/**
+ * Image utility functions for converting various image data formats to displayable URLs.
+ */
+
+import { packageAssetHttpPath } from "@nodetool-ai/protocol";
+import { BASE_URL } from "../stores/BASE_URL";
+
+export type ImageData = string | Uint8Array | number[];
+
+export interface ImageSource {
+  uri?: string;
+  data?: ImageData;
+}
+
+/**
+ * Resolve a URI string to a fetchable URL.
+ * - `asset://{id}` → `${BASE_URL}/api/storage/{id}`.
+ * - `package://{pkg}/{path}` → `${BASE_URL}/api/assets/packages/{pkg}/{path}`.
+ * - `/api/...` → prefixed with `BASE_URL`.
+ * - Other absolute URIs (`data:`, `blob:`, `http:`, `https:`) returned as-is.
+ */
+export const resolveUri = (uri: string): string => {
+  if (uri.startsWith("asset://")) {
+    const assetId = uri.slice("asset://".length);
+    return `${BASE_URL}/api/storage/${assetId}`;
+  }
+  const pkgPath = packageAssetHttpPath(uri);
+  if (pkgPath) {
+    return `${BASE_URL}${pkgPath}`;
+  }
+  if (uri.startsWith("/api/")) {
+    return `${BASE_URL}${uri}`;
+  }
+  return uri;
+};
+
+/**
+ * Converts image data to a displayable URL.
+ * Handles: URI strings, data URIs, base64 strings, Uint8Array, and number arrays.
+ *
+ * Accepts either:
+ * - An ImageSource object with `uri` and/or `data` properties
+ * - A raw value (string, Uint8Array, or number[])
+ *
+ * @param source - The image source (object or raw value)
+ * @param previousBlobUrl - Previous blob URL to revoke (prevents memory leaks)
+ * @returns Object containing the URL and the new blob URL (if created)
+ */
+export const createImageUrl = (
+  source: ImageSource | ImageData | null | undefined,
+  previousBlobUrl: string | null
+): { url: string; blobUrl: string | null } => {
+  if (previousBlobUrl) {
+    URL.revokeObjectURL(previousBlobUrl);
+  }
+
+  if (!source) {
+    return { url: "", blobUrl: null };
+  }
+
+  let uri: string | undefined;
+  let data: ImageData | undefined;
+
+  if (
+    typeof source === "object" &&
+    !Array.isArray(source) &&
+    !(source instanceof Uint8Array)
+  ) {
+    uri = source.uri;
+    data = source.data;
+  } else {
+    data = source;
+  }
+
+  if (uri) {
+    return { url: resolveUri(uri), blobUrl: null };
+  }
+
+  if (!data) {
+    return { url: "", blobUrl: null };
+  }
+
+  if (typeof data === "string") {
+    if (
+      data.startsWith("data:") ||
+      data.startsWith("blob:") ||
+      data.startsWith("http") ||
+      data.startsWith("asset://") ||
+      data.startsWith("package://")
+    ) {
+      return { url: resolveUri(data), blobUrl: null };
+    }
+    if (data.startsWith("/")) {
+      const resolved = data.startsWith("/api/") ? `${BASE_URL}${data}` : data;
+      return { url: resolved, blobUrl: null };
+    }
+    // Assume base64 encoded
+    return { url: `data:image/png;base64,${data}`, blobUrl: null };
+  }
+
+  let bytes: Uint8Array;
+  if (data instanceof Uint8Array) {
+    bytes = data;
+  } else if (Array.isArray(data)) {
+    bytes = new Uint8Array(data);
+  } else {
+    return { url: "", blobUrl: null };
+  }
+
+  // Convert to ArrayBuffer for Blob constructor compatibility
+  const buffer = (bytes.buffer as ArrayBuffer).slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength
+  );
+  const blob = new Blob([buffer], { type: "image/png" });
+  const blobUrl = URL.createObjectURL(blob);
+  return { url: blobUrl, blobUrl };
+};
+

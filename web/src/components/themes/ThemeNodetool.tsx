@@ -1,0 +1,400 @@
+import { createTheme } from "@mui/material/styles";
+import type {} from "@mui/material/themeCssVarsAugmentation";
+import { paletteDark } from "./paletteDark";
+import { paletteLight } from "./paletteLight";
+import { editorControlsComponents } from "./components/editorControls";
+import { CONTROL } from "../ui_primitives";
+
+// Latin subsets only. The unsuffixed `@fontsource/<font>/<weight>.css` files
+// declare every subset the family ships (cyrillic, cyrillic-ext, greek,
+// greek-ext, vietnamese, latin, latin-ext) — 7 @font-face rules per weight,
+// 56 across the two families, in the render-blocking entry stylesheet. The UI
+// is latin, so the other subsets only ever cost parse time.
+// (`@fontsource/inter` with no path is an alias for its 400 weight; importing
+// both duplicated every rule.)
+import "@fontsource/inter/latin-200.css";
+import "@fontsource/inter/latin-300.css";
+import "@fontsource/inter/latin-400.css";
+import "@fontsource/inter/latin-600.css";
+
+import "@fontsource/jetbrains-mono/latin-200.css";
+import "@fontsource/jetbrains-mono/latin-300.css";
+import "@fontsource/jetbrains-mono/latin-400.css";
+import "@fontsource/jetbrains-mono/latin-600.css";
+
+// Theme augmentation moved to a single global file `theme.d.ts` to avoid duplication
+
+const ThemeNodetool = createTheme({
+  cssVariables: {
+    cssVarPrefix: "",
+    colorSchemeSelector: "class"
+  },
+  colorSchemes: {
+    light: {
+      palette: paletteLight
+    },
+    dark: {
+      palette: paletteDark
+    }
+  },
+  // Canonical sans type scale — five sizes (22 / 18 / 15 / 13 / 11px), five
+  // names, no aliases. These fields are the SINGLE SOURCE OF TRUTH: MUI emits
+  // them as the `--fontSize*` CSS custom properties that the rest of the app
+  // references via `var(--fontSize*)`. Change a size HERE and it propagates
+  // everywhere. See ui_primitives/tokens.ts (TYPOGRAPHY) for the size+weight
+  // combinations.
+  fontSizeGiant: "22px", // → display
+  fontSizeBig: "18px", // → title
+  fontSizeNormal: "15px", // → body
+  fontSizeSmall: "13px", // → label
+  fontSizeSmaller: "11px", // → caption
+  fontFamily1: "'Inter', Arial, sans-serif",
+  fontFamily2: "'JetBrains Mono', 'Inter', Arial, sans-serif",
+  // Canonical border-radius tokens. Prefer these over hardcoded values.
+  // Size scale (xs…xxl) for generic surfaces; semantic aliases below map to
+  // concrete product concepts. Also exposed as `--rounded-<key>` CSS vars via
+  // MuiCssBaseline so plain CSS files can reference them.
+  rounded: {
+    xs: "2px",
+    sm: "4px",
+    md: "6px",
+    lg: "8px",
+    xl: "12px",
+    xxl: "16px",
+    pill: "9999px",
+    circle: "50%",
+    dialog: "20px",
+    node: "8px",
+    buttonSmall: "4px",
+    buttonLarge: "6px"
+  },
+  // Minimal editor-specific values. Keep this small; expand only when needed.
+  // Applied only behind editor marker classes to avoid cross-screen leakage.
+  editor: {
+    heightNode: `${CONTROL.height.sm}px`,
+    heightInspector: `${CONTROL.height.md}px`,
+    padXNode: "8px",
+    padYNode: "4px",
+    padXInspector: "10px",
+    padYInspector: "6px",
+    controlRadius: CONTROL.radius,
+    menuRadius: "8px",
+    menuShadow: "0 10px 30px rgba(0, 0, 0, 0.5)"
+  },
+  // TanStack Virtual overscan — extra item/row count rendered outside the viewport.
+  virtualScroll: {
+    overscan: {
+      small: 10,
+      normal: 25,
+      large: 50,
+      gridRow: 4
+    }
+  },
+  typography: {
+    fontFamily: "'Inter', sans-serif",
+    fontSize: 15
+  },
+  spacing: 4,
+  shape: {
+    // MUI's base shape multiplier (unitless px) — the fallback radius for any
+    // MUI component that reads `theme.shape.borderRadius`. Not a BORDER_RADIUS
+    // token: component code uses BORDER_RADIUS.* / theme.rounded.*, this is the
+    // theme-level default those tokens are defined alongside.
+    // eslint-disable-next-line design-tokens/border-radius-tokens
+    borderRadius: 6
+  },
+  zIndex: {
+    // MUI
+    mobileStepper: 1000,
+    fab: 1050,
+    speedDial: 1050,
+    appBar: 1100,
+    drawer: 1200,
+    modal: 1300,
+    snackbar: 1400,
+    tooltip: 1500,
+
+    // Nodetool
+    behind: -1,
+    base: 0,
+    commandMenu: 9999,
+    popover: 10001,
+    popover2: 99990,
+    autocomplete: 10002,
+    floating: 10003,
+    // Draggable floating panels that must sit above editor content and popovers
+    // (node menu, asset viewer, find-in-workflow dialog).
+    floatingPanel: 20000,
+    highest: 100000
+  },
+  components: {
+    MuiCssBaseline: {
+      styleOverrides: (theme) => ({
+        // Expose `theme.rounded.*` as `--rounded-*` CSS custom properties on
+        // :root so plain CSS files (and raw style props) can reference them.
+        ":root": {
+          "--rounded-xs": theme.rounded.xs,
+          "--rounded-sm": theme.rounded.sm,
+          "--rounded-md": theme.rounded.md,
+          "--rounded-lg": theme.rounded.lg,
+          "--rounded-xl": theme.rounded.xl,
+          "--rounded-xxl": theme.rounded.xxl,
+          "--rounded-pill": theme.rounded.pill,
+          "--rounded-circle": theme.rounded.circle,
+          "--rounded-dialog": theme.rounded.dialog,
+          "--rounded-node": theme.rounded.node,
+          "--rounded-buttonSmall": theme.rounded.buttonSmall,
+          "--rounded-buttonLarge": theme.rounded.buttonLarge
+        }
+      })
+    },
+    MuiTypography: {
+      styleOverrides: {
+        // Headings collapse onto two sanctioned sans combos: h1–h3 use the
+        // `title` style (18px/600); h4–h6 use the `label` style (13px/500).
+        // Hierarchy is conveyed by margin, letter-spacing, color and case —
+        // not by introducing extra font sizes.
+        h1: ({ theme }) => ({
+          cursor: "default",
+          fontSize: theme.fontSizeBig, // 18px — title
+          fontWeight: 600,
+          letterSpacing: "-0.02em",
+          marginTop: theme.spacing(4),
+          marginBottom: theme.spacing(2),
+          fontFamily: theme.fontFamily1,
+          lineHeight: 1.3
+        }),
+        h2: ({ theme }) => ({
+          cursor: "default",
+          fontSize: theme.fontSizeBig, // 18px — title
+          fontWeight: 600,
+          letterSpacing: "-0.015em",
+          marginTop: theme.spacing(4),
+          marginBottom: theme.spacing(2),
+          fontFamily: theme.fontFamily1,
+          lineHeight: 1.3
+        }),
+        h3: ({ theme }) => ({
+          cursor: "default",
+          fontSize: theme.fontSizeBig, // 18px — title
+          fontWeight: 600,
+          letterSpacing: "-0.01em",
+          marginTop: theme.spacing(3),
+          marginBottom: theme.spacing(2),
+          fontFamily: theme.fontFamily1,
+          lineHeight: 1.3
+        }),
+        h4: ({ theme }) => ({
+          cursor: "default",
+          fontSize: theme.fontSizeSmall, // 13px — label
+          fontWeight: 500,
+          marginTop: theme.spacing(3),
+          marginBottom: theme.spacing(1),
+          fontFamily: theme.fontFamily1,
+          color: theme.vars.palette.text.primary,
+          lineHeight: 1.35,
+          wordBreak: "break-word"
+        }),
+        h5: ({ theme }) => ({
+          cursor: "default",
+          fontSize: theme.fontSizeSmall, // 13px — label
+          fontWeight: 500,
+          letterSpacing: "0.02em",
+          marginTop: theme.spacing(3),
+          marginBottom: theme.spacing(1.5),
+          fontFamily: theme.fontFamily1,
+          color: theme.vars.palette.text.secondary,
+          lineHeight: 1.35
+        }),
+        h6: ({ theme }) => ({
+          cursor: "default",
+          fontSize: theme.fontSizeSmall, // 13px — label
+          fontWeight: 500,
+          letterSpacing: "0.04em",
+          textTransform: "uppercase",
+          marginTop: theme.spacing(3),
+          marginBottom: theme.spacing(1),
+          fontFamily: theme.fontFamily1,
+          color: theme.vars.palette.text.secondary
+        }),
+        body1: ({ theme }) => ({
+          fontSize: theme.fontSizeNormal, // 15px — body
+          fontFamily: theme.fontFamily1,
+          fontWeight: 400,
+          wordSpacing: "0",
+          lineHeight: 1.45,
+          marginTop: theme.spacing(0),
+          marginBottom: theme.spacing(0)
+        }),
+        body2: ({ theme }) => ({
+          fontSize: theme.fontSizeSmall, // 13px — label combo
+          lineHeight: 1.4,
+          fontWeight: 500,
+          color: theme.vars.palette.text.secondary,
+          fontFamily: theme.fontFamily1
+        })
+      }
+    },
+    MuiButton: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          minWidth: 36,
+          textTransform: "none",
+          fontWeight: 500,
+          letterSpacing: "0.005em",
+          borderRadius: theme.rounded.buttonLarge,
+          boxShadow: "none",
+          "&:hover": {
+            boxShadow: "none"
+          }
+        })
+      }
+    },
+    MuiFormLabel: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          fontSize: theme.fontSizeSmall, // 13px — label
+          fontWeight: 500,
+          lineHeight: "1em",
+          color: theme.vars.palette.grey[0],
+          "&.Mui-focused": {
+            color: theme.vars.palette.primary.main
+          }
+        })
+      }
+    },
+    MuiFormControl: {
+      styleOverrides: {
+        root: () => ({
+          width: "100%"
+        })
+      }
+    },
+    MuiPopover: {
+      styleOverrides: {
+        root: ({ theme }) => ({ zIndex: theme.zIndex.popover2 })
+      }
+    },
+    MuiModal: {
+      styleOverrides: {
+        root: ({ theme }) => ({ zIndex: theme.zIndex.modal })
+      }
+    },
+    MuiToolbar: {
+      styleOverrides: {
+        dense: ({ theme }) => ({
+          backgroundColor: theme.vars.palette.background.paper,
+          height: "100%",
+          display: "flex",
+          justifyContent: "space-between"
+        })
+      }
+    },
+    MuiDialogTitle: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          fontFamily: theme.fontFamily1,
+          fontSize: theme.fontSizeBig, // 18px — title
+          fontWeight: 600,
+          letterSpacing: "-0.01em"
+        })
+      }
+    },
+    MuiTooltip: {
+      styleOverrides: {
+        tooltip: ({ theme }) => ({
+          backgroundColor: "var(--palette-c_scrim_strong)",
+          backdropFilter: "blur(8px)",
+          border: `1px solid ${theme.vars.palette.divider}`,
+          color: theme.vars.palette.text.primary,
+          maxWidth: 300,
+          fontSize: theme.fontSizeSmall, // 13px — label
+          fontWeight: 500,
+          borderRadius: theme.rounded.md,
+          padding: theme.spacing(1.5, 2), // 6px / 8px
+          boxShadow:
+            "0 8px 24px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)"
+        }),
+        arrow: () => ({
+          color: "var(--palette-c_scrim_strong)"
+        })
+      }
+    },
+    MuiDivider: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          borderColor: theme.vars.palette.divider
+        })
+      }
+    },
+    // The raw re-exports in ui_primitives/muiReexports.ts lean on these
+    // overrides — every override here matches the equivalent styled
+    // primitive so the two systems agree.
+    MuiTabs: {
+      styleOverrides: {
+        root: {
+          minHeight: "40px",
+          "& .MuiTabs-indicator": {
+            height: "2px"
+          }
+        }
+      }
+    },
+    MuiTab: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          // Full TabGroup mirror: MUI's stock 12px vertical padding and 48px
+          // min-height would keep tabs at the stock size despite the
+          // minHeight, so padding and minWidth come along too.
+          minHeight: "40px",
+          minWidth: "auto",
+          padding: theme.spacing(2, 4), // 8px 16px — matches TabGroup
+          fontSize: theme.fontSizeSmall, // 13px — label
+          fontWeight: 600, // matches TabGroup
+          textTransform: "none"
+        })
+      }
+    },
+    MuiToggleButton: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          minHeight: `${CONTROL.height.md}px`,
+          padding: `0 ${CONTROL.paddingX.normal}px`,
+          borderRadius: theme.rounded.md,
+          fontSize: theme.fontSizeSmall, // 13px — label
+          fontWeight: 500,
+          textTransform: "none"
+        })
+      }
+    },
+    MuiAccordion: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          backgroundColor: theme.vars.palette.Paper.paper,
+          border: `1px solid ${theme.vars.palette.divider}`,
+          borderRadius: theme.rounded.md,
+          boxShadow: "none",
+          // MUI's default hairline between stacked accordions doubles up
+          // with the border.
+          "&::before": {
+            display: "none"
+          }
+        })
+      }
+    },
+    MuiLinearProgress: {
+      styleOverrides: {
+        root: ({ theme }) => ({
+          // Matches the ProgressBar primitive: 6px pill-ish track on the
+          // hover tint, primary bar.
+          height: 6,
+          borderRadius: theme.rounded.sm,
+          backgroundColor: theme.vars.palette.action.hover
+        })
+      }
+    },
+    ...editorControlsComponents
+  }
+});
+
+export default ThemeNodetool;

@@ -1,0 +1,154 @@
+{
+    "appId": "com.aistudio.desktop",
+    "productName": "AiStudio",
+    "directories": {
+        "output": "dist",
+        "buildResources": "resources"
+    },
+    "afterPack": "scripts/after-pack.cjs",
+    "files": [
+        "assets/**/*",
+        "dist-electron/main.js",
+        "dist-electron/**/*",
+        "dist-web/**/*",
+        "!dist-web/**/*.map",
+        "!dist-electron/**/*.map",
+        "app-update.yml",
+        "!node_modules/sharp/**",
+        "!node_modules/@img/**",
+        "!node_modules/better-sqlite3/**",
+        "!node_modules/sqlite-vec/**",
+        "!node_modules/bufferutil/**"
+    ],
+    "asarUnpack": [
+        "**/node-llama-cpp/**/*.node",
+        "**/@node-llama-cpp/**/*.node",
+        "**/node-llama-cpp/llama/**"
+    ],
+    "extraResources": [
+        {
+            "from": "../web/dist",
+            "to": "web",
+            "filter": [
+                "**/*",
+                "!**/*.map"
+            ]
+        },
+        {
+            "from": "../chrome-extension/dist",
+            "to": "chrome-extension"
+        },
+        {
+            "from": "backend-bundle",
+            "to": "backend",
+            "filter": [
+                "**/*",
+                "!**/*.map"
+            ]
+        },
+        {
+            "from": "mcpb",
+            "to": "mcpb"
+        }
+    ],
+    "publish": [
+        {
+            "provider": "github",
+            "owner": "cgshortcuts",
+            "repo": "aistudio"
+        }
+    ],
+    "dmg": {
+        "size": "4g"
+    },
+    "mac": {
+        "category": "public.app-category.developer-tools",
+        "target": [
+            {
+                "target": "zip",
+                "arch": [
+                    "x64",
+                    "arm64"
+                ]
+            },
+            {
+                "target": "dmg",
+                "arch": [
+                    "x64",
+                    "arm64"
+                ]
+            }
+        ],
+        "hardenedRuntime": true,
+        "gatekeeperAssess": false,
+        "entitlements": "entitlements.mac.plist",
+        "entitlementsInherit": "entitlements.mac.plist",
+        "notarize": true,
+        "extendInfo": {
+            "NSMicrophoneUsageDescription": "Allow access to your microphone for audio recording",
+            "NSCameraUsageDescription": "Allow access to your camera for video recording",
+            "com.apple.security.device.audio-input": true,
+            "com.apple.security.device.camera": true
+        }
+    },
+    "win": {
+        "target": [
+            {
+                "target": "nsis",
+                "arch": [
+                    "x64"
+                ]
+            }
+        ],
+        "icon": "resources/icon.ico"
+    },
+    "linux": {
+        "target": [
+            "AppImage",
+            "flatpak"
+        ],
+        "category": "Development",
+        "maintainer": "hello@nodetool.ai",
+        "desktop": {
+            "entry": {
+                "Name": "AiStudio",
+                "Comment": "Visual Builder for AI Workflows and Agents",
+                "GenericName": "AI Workflow Editor",
+                "Keywords": "AI;Development;Workflow;Node;Editor;Machine Learning;",
+                "Categories": "Development;IDE;",
+                "MimeType": "x-scheme-handler/aistudio;",
+                "StartupWMClass": "AiStudio"
+            }
+        }
+    },
+    "flatpak": {
+        "useWaylandFlags": true,
+        "finishArgs": [
+            "--share=ipc",
+            "--socket=x11",
+            "--socket=wayland",
+            "--device=dri",
+            "--socket=pulseaudio",
+            "--share=network",
+            "--filesystem=home",
+            "--talk-name=org.freedesktop.Notifications",
+            "--device=all"
+        ],
+        "runtime": "org.freedesktop.Platform",
+        "runtimeVersion": "24.08",
+        "sdk": "org.freedesktop.Sdk",
+        "base": "org.electronjs.Electron2.BaseApp",
+        "baseVersion": "24.08"
+    },
+    "nsis": {
+        "oneClick": false,
+        "allowToChangeInstallationDirectory": true,
+        "createDesktopShortcut": true,
+        "runAfterFinish": true,
+        "warningsAsErrors": false,
+        "include": "resources/installer.nsh",
+        "artifactName": "AiStudio-Setup.${ext}"
+    },
+    "artifactName": "${productName}-${version}-${arch}.${ext}",
+    "generateUpdatesFilesForAllChannels": true
+}

@@ -1,0 +1,116 @@
+{
+  "graph": {
+    "nodes": [
+      {
+        "id": "title",
+        "type": "nodetool.input.StringInput",
+        "name": "title",
+        "data": {
+          "name": "title"
+        }
+      },
+      {
+        "id": "system",
+        "type": "nodetool.input.StringInput",
+        "name": "system",
+        "data": {
+          "name": "system"
+        }
+      },
+      {
+        "id": "prompt",
+        "type": "nodetool.input.StringInput",
+        "name": "prompt",
+        "data": {
+          "name": "prompt"
+        }
+      },
+      {
+        "id": "model",
+        "type": "nodetool.input.LanguageModelInput",
+        "name": "model",
+        "data": {
+          "value": {
+            "type": "language_model",
+            "provider": "openai",
+            "id": "gpt-4o-mini",
+            "name": "GPT-4o Mini"
+          },
+          "name": "model"
+        }
+      },
+      {
+        "id": "thread",
+        "type": "nodetool.agents.CreateThread"
+      },
+      {
+        "id": "thread_sink",
+        "type": "nodetool.control.Reroute",
+        "name": "thread_id"
+      },
+      {
+        "id": "agent",
+        "type": "nodetool.agents.Agent"
+      },
+      {
+        "id": "text_sink",
+        "type": "nodetool.control.Reroute",
+        "name": "agent_text"
+      }
+    ],
+    "edges": [
+      {
+        "source": "title",
+        "sourceHandle": "output",
+        "target": "thread",
+        "targetHandle": "title"
+      },
+      {
+        "source": "thread",
+        "sourceHandle": "thread_id",
+        "target": "thread_sink",
+        "targetHandle": "input_value"
+      },
+      {
+        "source": "thread",
+        "sourceHandle": "thread_id",
+        "target": "agent",
+        "targetHandle": "thread_id"
+      },
+      {
+        "source": "system",
+        "sourceHandle": "output",
+        "target": "agent",
+        "targetHandle": "system"
+      },
+      {
+        "source": "prompt",
+        "sourceHandle": "output",
+        "target": "agent",
+        "targetHandle": "prompt"
+      },
+      {
+        "source": "model",
+        "sourceHandle": "output",
+        "target": "agent",
+        "targetHandle": "model"
+      },
+      {
+        "source": "agent",
+        "sourceHandle": "text",
+        "target": "text_sink",
+        "targetHandle": "input_value"
+      }
+    ]
+  },
+  "params": {
+    "title": "OpenAI Agent Demo",
+    "system": "You are an assistant that answers in bullet points.",
+    "prompt": "List two benefits of workflow automation.",
+    "model": {
+      "provider": "openai",
+      "id": "gpt-4o-mini",
+      "name": "GPT-4o Mini"
+    }
+  }
+}

@@ -1,0 +1,126 @@
+.command-menu {
+  width: 100%;
+  min-height: 400px;
+}
+
+[cmdk-dialog] {
+  z-index: 9999;
+}
+
+[cmdk-root] {
+  width: 100%;
+  border-radius: var(--rounded-xl);
+  overflow: hidden;
+  padding: var(--spacing-md);
+  color: var(--palette-grey-800);
+  box-shadow: 0 20px 68px var(--palette-grey-1000);
+  background: var(--palette-grey-900);
+  backdrop-filter: blur(10px);
+}
+
+[cmdk-input] {
+  width: calc(100% - 32px);
+  margin: var(--spacing-xl);
+  padding: var(--spacing-lg) var(--spacing-xl);
+  font-size: var(--fontSizeBig);
+  border: none;
+  outline: none;
+  background: var(--palette-grey-800);
+  color: var(--palette-grey-0);
+  border-radius: var(--rounded-lg);
+  transition: all var(--motion-normal) ease;
+}
+
+[cmdk-input]:hover,
+[cmdk-input]:focus {
+  background: var(--palette-grey-700);
+  box-shadow: 0 0 0 2px var(--palette-primary-main);
+}
+
+[cmdk-input]::placeholder {
+  color: var(--c_gray9);
+}
+
+[cmdk-item] {
+  position: relative;
+  content-visibility: auto;
+  cursor: pointer;
+  height: 40px;
+  font-size: var(--fontSizeNormal);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-lg);
+  padding: 0 var(--spacing-xl);
+  color: var(--palette-grey-100);
+  user-select: none;
+  will-change: background, color;
+  transition: all var(--motion-fast) ease;
+  border-radius: var(--rounded-lg);
+  margin: 0 var(--spacing-md);
+}
+
+[cmdk-item][data-selected="true"] {
+  background: var(--palette-grey-700);
+  color: var(--palette-grey-0);
+}
+
+[cmdk-item][data-selected="true"]:after {
+  content: "";
+  position: absolute;
+  left: 0;
+  width: 3px;
+  height: 20px;
+  background: var(--palette-primary-main);
+  border-radius: 0 var(--rounded-sm) var(--rounded-sm) 0;
+  transition: all var(--motion-fast) ease;
+}
+
+[cmdk-item]:active {
+  background: var(--palette-grey-600);
+}
+
+[cmdk-item] svg {
+  width: 18px;
+  height: 18px;
+  color: var(--palette-grey-200);
+}
+
+[cmdk-list] {
+  height: 330px;
+  max-height: 400px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  transition: var(--motion-fast) ease;
+  transition-property: height;
+  scrollbar-width: thin;
+  scrollbar-color: var(--palette-grey-100) transparent;
+}
+
+[cmdk-list]::-webkit-scrollbar {
+  width: 6px;
+}
+
+[cmdk-list]::-webkit-scrollbar-thumb {
+  background-color: var(--palette-grey-100);
+  border-radius: var(--rounded-sm);
+}
+
+[cmdk-group-heading] {
+  user-select: none;
+  font-size: var(--fontSizeSmall);
+  font-weight: 600;
+  margin: var(--spacing-xl) var(--spacing-xl) var(--spacing-md);
+  color: var(--palette-grey-500);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+[cmdk-empty] {
+  font-size: var(--fontSizeNormal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 64px;
+  white-space: pre-wrap;
+  color: var(--palette-grey-100);
+}

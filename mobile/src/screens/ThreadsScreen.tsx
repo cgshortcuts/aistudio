@@ -1,0 +1,295 @@
+/**
+ * Threads (chat history) screen.
+ * Lists past chat threads from the server, lets the user open a previous
+ * thread back into the chat screen or delete it. Mirrors the web
+ * ThreadList sidebar.
+ */
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { RootStackParamList } from '../navigation/types';
+import { type Thread } from '../services/api';
+import { trpc } from '../trpc/client';
+import { useTheme } from '../hooks/useTheme';
+import type { ThemeColors, ThemeShadows } from '../utils/theme';
+
+type Props = {
+  navigation: NativeStackNavigationProp<RootStackParamList, 'Threads'>;
+};
+
+function formatRelative(iso: string | null | undefined): string {
+  if (!iso) { return ''; }
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) { return iso; }
+  const diff = Date.now() - t;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) { return 'just now'; }
+  if (minutes < 60) { return `${minutes}m ago`; }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) { return `${hours}h ago`; }
+  const days = Math.floor(hours / 24);
+  if (days < 7) { return `${days}d ago`; }
+  return new Date(iso).toLocaleDateString();
+}
+
+const keyExtractor = (thread: Thread) => thread.id;
+
+const ThreadRow = React.memo(function ThreadRow({
+  thread,
+  colors,
+  shadows,
+  onOpen,
+  onDelete,
+}: {
+  thread: Thread;
+  colors: ThemeColors;
+  shadows: ThemeShadows;
+  onOpen: (thread: Thread) => void;
+  onDelete: (thread: Thread) => void;
+}) {
+  const handleOpen = useCallback(() => onOpen(thread), [onOpen, thread]);
+  const handleDelete = useCallback(() => onDelete(thread), [onDelete, thread]);
+
+  return (
+    <TouchableOpacity
+      onPress={handleOpen}
+      activeOpacity={0.7}
+      style={[
+        styles.card,
+        shadows.small,
+        { backgroundColor: colors.cardBg, borderColor: colors.borderLight },
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={`Open thread ${thread.title || 'untitled'}`}
+    >
+      <View style={[styles.iconWrap, { backgroundColor: colors.primaryMuted }]}>
+        <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.primary} />
+      </View>
+      <View style={styles.meta}>
+        <Text style={[styles.title, { color: colors.text }]} numberOfLines={1}>
+          {thread.title || 'Untitled conversation'}
+        </Text>
+        <Text style={[styles.subtitle, { color: colors.textTertiary }]}>
+          {formatRelative(thread.updated_at || thread.created_at)}
+        </Text>
+      </View>
+      <TouchableOpacity
+        onPress={handleDelete}
+        style={styles.deleteBtn}
+        accessibilityRole="button"
+        accessibilityLabel={`Delete thread ${thread.title || 'untitled'}`}
+        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      >
+        <Ionicons name="trash-outline" size={18} color={colors.error} />
+      </TouchableOpacity>
+    </TouchableOpacity>
+  );
+});
+
+export default function ThreadsScreen({ navigation }: Props) {
+  const { colors, shadows } = useTheme();
+  const insets = useSafeAreaInsets();
+
+  const [query, setQuery] = useState('');
+
+  const utils = trpc.useUtils();
+  const {
+    data,
+    isLoading,
+    isRefetching,
+    error,
+    refetch,
+  } = trpc.threads.list.useQuery({ limit: 100, reverse: true });
+  const threads = useMemo(() => (data?.threads ?? []) as Thread[], [data]);
+  const loadError = error ? error.message || 'Failed to load threads' : null;
+
+  const deleteThread = trpc.threads.delete.useMutation({
+    onSuccess: () => { utils.threads.list.invalidate(); },
+    onError: (e) => { Alert.alert('Delete failed', e.message); },
+  });
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) { return threads; }
+    return threads.filter((t) => (t.title || '').toLowerCase().includes(q));
+  }, [threads, query]);
+
+  const handleOpen = useCallback((thread: Thread) => {
+    navigation.navigate('Chat', { threadId: thread.id });
+  }, [navigation]);
+
+  const handleNew = useCallback(() => {
+    navigation.navigate('Chat', { threadId: undefined });
+  }, [navigation]);
+
+  const handleDelete = useCallback((thread: Thread) => {
+    Alert.alert(
+      'Delete thread',
+      `Delete "${thread.title || 'Untitled'}"? Messages will be permanently removed.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => { deleteThread.mutate({ id: thread.id }); },
+        },
+      ],
+    );
+  }, [deleteThread]);
+
+  const renderItem = useCallback(
+    ({ item }: { item: Thread }) => (
+      <ThreadRow
+        thread={item}
+        colors={colors}
+        shadows={shadows}
+        onOpen={handleOpen}
+        onDelete={handleDelete}
+      />
+    ),
+    [colors, shadows, handleOpen, handleDelete],
+  );
+
+  if (isLoading) {
+    return (
+      <View style={[styles.loading, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  return (
+    <View style={[styles.container, { backgroundColor: colors.background }]}>
+      <View style={styles.searchWrap}>
+        <View style={[styles.search, { backgroundColor: colors.inputBg, borderColor: colors.borderLight }]}>
+          <Ionicons name="search" size={16} color={colors.textTertiary} style={{ marginRight: 8 }} />
+          <TextInput
+            style={[styles.searchInput, { color: colors.text }]}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search threads..."
+            placeholderTextColor={colors.textTertiary}
+            autoCapitalize="none"
+            autoCorrect={false}
+            accessibilityLabel="Search threads"
+          />
+          {query.length > 0 && (
+            <TouchableOpacity onPress={() => setQuery('')} accessibilityLabel="Clear search">
+              <Ionicons name="close-circle" size={16} color={colors.textTertiary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {loadError && (
+        <View style={[styles.banner, { backgroundColor: colors.error + '18' }]}>
+          <Ionicons name="warning-outline" size={14} color={colors.error} style={{ marginRight: 6 }} />
+          <Text style={[styles.bannerText, { color: colors.error }]}>{loadError}</Text>
+        </View>
+      )}
+
+      <FlatList
+        data={filtered}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + 96 }]}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefetching}
+            onRefresh={() => { refetch(); }}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
+        ListEmptyComponent={
+          <View style={styles.empty}>
+            <Ionicons name="chatbubbles-outline" size={36} color={colors.textTertiary} />
+            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+              {query.length > 0 ? `No threads matching "${query}"` : 'No conversations yet'}
+            </Text>
+          </View>
+        }
+      />
+
+      <TouchableOpacity
+        style={[
+          styles.fab,
+          shadows.medium,
+          { backgroundColor: colors.primary, bottom: insets.bottom + 20 },
+        ]}
+        onPress={handleNew}
+        accessibilityRole="button"
+        accessibilityLabel="Start new conversation"
+      >
+        <Ionicons name="add" size={26} color="#fff" />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  searchWrap: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 },
+  search: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: 12,
+    height: 40,
+  },
+  searchInput: { flex: 1, fontSize: 15, paddingVertical: 0 },
+  banner: {
+    flexDirection: 'row',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bannerText: { fontSize: 13, fontWeight: '500', flexShrink: 1 },
+  list: { padding: 16, paddingTop: 4 },
+  card: {
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  iconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  meta: { flex: 1, marginRight: 8 },
+  title: { fontSize: 15, fontWeight: '600', letterSpacing: -0.2 },
+  subtitle: { fontSize: 12, marginTop: 2 },
+  deleteBtn: { padding: 4 },
+  empty: { alignItems: 'center', paddingTop: 60, gap: 10 },
+  emptyText: { fontSize: 14 },
+  fab: {
+    position: 'absolute',
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});

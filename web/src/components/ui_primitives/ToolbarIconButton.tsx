@@ -1,0 +1,218 @@
+/** @jsxImportSource @emotion/react */
+/**
+ * ToolbarIconButton
+ *
+ * A standardized IconButton for toolbar actions with built-in tooltip support.
+ * Used in toolbars, panels, and action bars throughout the application.
+ *
+ * @example
+ * <ToolbarIconButton
+ *   icon={<SaveIcon />}
+ *   tooltip="Save"
+ *   shortcut={["Ctrl", "S"]}
+ *   onClick={handleSave}
+ * />
+ */
+
+import React, { forwardRef, memo, useMemo } from "react";
+import { IconButton, IconButtonProps, Tooltip, Box } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
+import {
+  TOOLTIP_ENTER_DELAY,
+  TOOLTIP_ENTER_NEXT_DELAY
+} from "../../config/constants";
+import { editorClassNames, cn } from "../editor_ui/editorUtils";
+import { ShortcutHint } from "./ShortcutHint";
+
+export interface ToolbarIconButtonProps
+  extends Omit<IconButtonProps, "children" | "title"> {
+  /**
+   * The icon to display. Falls back to children if not provided.
+   */
+  icon?: React.ReactNode;
+  /**
+   * Tooltip text or element. Falls back to title if not provided.
+   */
+  tooltip?: React.ReactNode;
+  /**
+   * Children as fallback for icon prop (legacy pattern)
+   */
+  children?: React.ReactNode;
+  /**
+   * Alias for tooltip (legacy pattern). Use `tooltip` instead.
+   */
+  title?: React.ReactNode;
+  /**
+   * Tooltip enter delay in ms (legacy pattern). Overrides the default delay.
+   */
+  delay?: number;
+  /**
+   * Tooltip placement
+   * @default "bottom"
+   */
+  tooltipPlacement?:
+    | "top"
+    | "bottom"
+    | "left"
+    | "right"
+    | "bottom-end"
+    | "bottom-start"
+    | "left-end"
+    | "left-start"
+    | "right-end"
+    | "right-start"
+    | "top-end"
+    | "top-start";
+  /**
+   * Whether to add nodrag class for ReactFlow compatibility
+   * @default true
+   */
+  nodrag?: boolean;
+  /**
+   * Visual variant
+   * @default "default"
+   */
+  variant?: "default" | "primary" | "error";
+  /**
+   * Whether button is in active/selected state
+   * @default false
+   */
+  active?: boolean;
+  /**
+   * Keyboard shortcut to display in tooltip, e.g., ["Ctrl", "S"]
+   * Will be shown as a compact badge
+   */
+  shortcut?: string[];
+  /**
+   * Tab index for keyboard navigation
+   * @default 0
+   */
+  tabIndex?: number;
+  /**
+   * Explicit aria-label for accessibility (required when tooltip is not a string)
+   */
+  ariaLabel?: string;
+  /**
+   * Render as an anchor element. When provided, `href`, `target`, and `rel` are forwarded.
+   */
+  component?: React.ElementType;
+  /** Link href (requires `component="a"`) */
+  href?: string;
+  /** Anchor target attribute */
+  target?: string;
+  /** Anchor rel attribute */
+  rel?: string;
+}
+
+/**
+ * Standardized toolbar icon button with tooltip and consistent styling.
+ */
+export const ToolbarIconButton = memo(
+  forwardRef<HTMLButtonElement, ToolbarIconButtonProps>(
+    (
+      {
+        icon,
+        tooltip,
+        title,
+        children,
+        delay,
+        tooltipPlacement = "bottom",
+        nodrag = true,
+        variant = "default",
+        active = false,
+        shortcut,
+        className,
+        size = "small",
+        sx,
+        tabIndex = 0,
+        ariaLabel,
+        ...props
+      },
+      ref
+    ) => {
+      const theme = useTheme();
+      const resolvedTooltip = tooltip ?? title ?? "";
+      const resolvedIcon = icon ?? children;
+
+      const variantStyles = useMemo(() => {
+        switch (variant) {
+          case "primary":
+            return {
+              color: "var(--palette-primary-main)",
+              "&:hover": {
+                backgroundColor: theme.vars.palette.grey[800],
+                color: "var(--palette-primary-light)"
+              }
+            };
+          case "error":
+            return {
+              color: theme.vars.palette.error.main,
+              "&:hover": {
+                backgroundColor: theme.vars.palette.error.dark,
+                color: theme.vars.palette.grey[0]
+              }
+            };
+          default:
+            return {
+              color: theme.vars.palette.grey[200],
+              "&:hover": {
+                backgroundColor: theme.vars.palette.grey[800],
+                color: theme.vars.palette.grey[0]
+              }
+            };
+        }
+      }, [variant, theme]);
+
+      const tooltipContent = shortcut ? (
+        <Box
+          sx={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 0.5,
+          }}
+        >
+          <Box>{resolvedTooltip}</Box>
+          <ShortcutHint shortcut={shortcut} size="small" />
+        </Box>
+      ) : resolvedTooltip;
+
+      const label = ariaLabel || (typeof resolvedTooltip === "string" ? resolvedTooltip : undefined);
+
+      return (
+        <Tooltip
+          title={tooltipContent}
+          enterDelay={delay ?? TOOLTIP_ENTER_DELAY}
+          enterNextDelay={TOOLTIP_ENTER_NEXT_DELAY}
+          placement={tooltipPlacement}
+        >
+          <IconButton
+            ref={ref}
+            aria-label={label}
+            className={cn(
+              "toolbar-icon-button",
+              nodrag && editorClassNames.nodrag,
+              active && "active",
+              className
+            )}
+            size={size}
+            tabIndex={tabIndex}
+            sx={{
+              ...variantStyles,
+              ...(active && {
+                backgroundColor: theme.vars.palette.grey[800],
+                color: "var(--palette-primary-main)"
+              }),
+              ...sx
+            }}
+            {...props}
+          >
+            {resolvedIcon}
+          </IconButton>
+        </Tooltip>
+      );
+    }
+  )
+);
+
+ToolbarIconButton.displayName = "ToolbarIconButton";

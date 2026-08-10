@@ -1,0 +1,206 @@
+/** @jsxImportSource @emotion/react */
+import { css, keyframes } from "@emotion/react";
+import React from "react";
+import { useState, useMemo } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  FormField,
+  Text,
+  FlexRow,
+  FlexColumn,
+  LoadingSpinner,
+  TextInput,
+  EditorButton,
+  Box,
+  MOTION,
+  BORDER_RADIUS
+} from "../ui_primitives";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+import { CollectionCreate } from "../../stores/ApiTypes";
+import { trpcClient } from "../../trpc/client";
+import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
+import EmbeddingModelSelect from "../properties/EmbeddingModelSelect";
+
+const slideIn = keyframes`
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+`;
+
+const styles = (theme: Theme) =>
+  css({
+    "&.collection-form": {
+      width: "100%",
+      padding: theme.spacing(2, 3),
+      background: theme.vars.palette.background.paper,
+      position: "relative",
+      animation: `${slideIn} ${MOTION.normal}`,
+      boxSizing: "border-box"
+    },
+    ".text-input": {
+      "& .MuiOutlinedInput-root": {
+        borderRadius: BORDER_RADIUS.lg,
+        backgroundColor: theme.vars.palette.background.default,
+        "& fieldset": {
+          borderColor: theme.vars.palette.divider
+        },
+        "&:hover fieldset": {
+          borderColor: theme.vars.palette.text.secondary
+        },
+        "&.Mui-focused fieldset": {
+          borderColor: theme.vars.palette.primary.main,
+          borderWidth: 1
+        }
+      }
+      // Height/padding/font are owned by the TextInput primitive (size="small"
+      // gives the compact height) — no internal padding override here.
+    },
+    ".model-select": {
+      "& button": {
+        borderRadius: `${BORDER_RADIUS.lg} !important`,
+        backgroundColor: `${theme.vars.palette.background.default} !important`,
+        border: `1px solid ${theme.vars.palette.divider} !important`,
+        "&:hover": {
+          borderColor: `${theme.vars.palette.text.secondary} !important`
+        }
+      }
+    },
+    ".error-box": {
+      marginTop: theme.spacing(2),
+      padding: theme.spacing(1.5),
+      borderRadius: BORDER_RADIUS.lg,
+      background: `color-mix(in srgb, ${theme.vars.palette.error.main} 10%, transparent)`,
+      border: `1px solid color-mix(in srgb, ${theme.vars.palette.error.main} 25%, transparent)`
+    }
+  });
+
+interface CollectionFormProps {
+  onClose: () => void;
+  onSuccess?: () => void;
+}
+
+const CollectionForm = ({ onClose, onSuccess }: CollectionFormProps) => {
+  const theme = useTheme();
+  const queryClient = useQueryClient();
+  const [formData, setFormData] = useState<CollectionCreate>({
+    name: "",
+    embedding_model: ""
+  });
+
+  const createMutation = useMutation({
+    mutationFn: async (body: CollectionCreate) => {
+      return trpcClient.collections.create.mutate({
+        name: body.name,
+        embedding_model: body.embedding_model,
+        ...(body.embedding_provider
+          ? { embedding_provider: body.embedding_provider }
+          : {})
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["collections"] });
+      setFormData({ name: "", embedding_model: "" });
+      onSuccess?.();
+      onClose();
+    }
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    createMutation.mutate(formData);
+  };
+
+  const isSubmitDisabled = useMemo(() => {
+    return (
+      !formData.name.trim() ||
+      !formData.embedding_model.trim() ||
+      createMutation.isPending
+    );
+  }, [formData.name, formData.embedding_model, createMutation.isPending]);
+
+  const handleEmbeddingModelChange = (model: { type: string; id: string }) => {
+    setFormData((prev: { name: string; embedding_model: string }) => ({
+      ...prev,
+      embedding_model: model.id
+    }));
+  };
+
+  return (
+    <FlexColumn
+      component="form"
+      onSubmit={handleSubmit}
+      css={styles(theme)}
+      className="collection-form"
+    >
+      <FlexRow gap={2} align="center" wrap>
+        <FormField
+          label="Collection Name"
+          required
+          compact
+          sx={{ flex: 1, minWidth: 180 }}
+        >
+          <TextInput
+            className="text-input"
+            value={formData.name}
+            onChange={(e) =>
+              setFormData((prev: { name: string; embedding_model: string }) => ({ ...prev, name: e.target.value }))
+            }
+            placeholder="my-collection"
+            required
+            fullWidth
+            size="small"
+            disabled={createMutation.isPending}
+            autoFocus
+          />
+        </FormField>
+
+        <FormField
+          label="Embedding Model"
+          compact
+          className="model-select"
+          sx={{ flex: 1, minWidth: 200 }}
+        >
+          <EmbeddingModelSelect
+            value={formData.embedding_model}
+            onChange={handleEmbeddingModelChange}
+          />
+        </FormField>
+
+        <EditorButton
+          type="submit"
+          variant="contained"
+          disabled={isSubmitDisabled}
+          disableElevation
+          sx={{ alignSelf: "flex-end", mb: 0.5 }}
+          startIcon={
+            createMutation.isPending ? (
+              <LoadingSpinner size="small" color="inherit" />
+            ) : (
+              <AddCircleOutlineIcon sx={{ fontSize: "var(--fontSizeBig)" }} />
+            )
+          }
+        >
+          {createMutation.isPending ? "Creating..." : "Create"}
+        </EditorButton>
+      </FlexRow>
+
+      {createMutation.isError && (
+        <Box className="error-box" sx={{ mt: 2 }}>
+          <Text size="small" color="error">
+            {createMutation.error instanceof Error
+              ? createMutation.error.message
+              : "Failed to create collection"}
+          </Text>
+        </Box>
+      )}
+    </FlexColumn>
+  );
+};
+
+export default CollectionForm;

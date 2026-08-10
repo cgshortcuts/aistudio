@@ -1,0 +1,68 @@
+import { shallow } from "zustand/shallow";
+import { PartializedNodeStore } from "./NodeStore";
+import { Edge, Node } from "@xyflow/react";
+import { NodeData } from "./NodeData";
+
+function compareEdge(a: Edge, b: Edge): boolean {
+  return (
+    a.id === b.id &&
+    a.source === b.source &&
+    a.target === b.target &&
+    a.sourceHandle === b.sourceHandle &&
+    a.targetHandle === b.targetHandle
+  );
+}
+
+function compareNode(a: Node<NodeData>, b: Node<NodeData>): boolean {
+  return (
+    a.id === b.id &&
+    a.type === b.type &&
+    a.data.collapsed === b.data.collapsed &&
+    a.data.bypassed === b.data.bypassed &&
+    a.data.title === b.data.title &&
+    shallow(a.data.properties, b.data.properties) &&
+    shallow(a.data.dynamic_properties, b.data.dynamic_properties) &&
+    shallow(a.data.dynamic_outputs, b.data.dynamic_outputs) &&
+    shallow(a.data.dynamic_inputs, b.data.dynamic_inputs) &&
+    shallow(a.data.exposedInputs, b.data.exposedInputs) &&
+    shallow(a.data.exposedInputsLabeled, b.data.exposedInputsLabeled) &&
+    shallow(a.data.exposedInputsHidden, b.data.exposedInputsHidden) &&
+    a.position.x === b.position.x &&
+    a.position.y === b.position.y &&
+    a.parentId === b.parentId
+  );
+}
+
+export function customEquality(
+  previous: PartializedNodeStore | undefined,
+  current: PartializedNodeStore | undefined
+): boolean {
+  /*
+  customEquality:
+  - results in a history item being created if the return value is false
+  - omits some fields to prevent unnecessary history items being created
+  */
+  if (!previous || !current) {
+    return false;
+  }
+  if (!previous.nodes || !current.nodes || previous.nodes.length !== current.nodes.length) {
+    return false;
+  }
+  if (!previous.edges || !current.edges || previous.edges.length !== current.edges.length) {
+    return false;
+  }
+
+  for (let i = 0; i < previous.nodes.length; i++) {
+    if (!compareNode(previous.nodes[i], current.nodes[i])) {
+      return false;
+    }
+  }
+
+  for (let i = 0; i < previous.edges.length; i++) {
+    if (!compareEdge(previous.edges[i], current.edges[i])) {
+      return false;
+    }
+  }
+
+  return shallow(previous.workflow, current.workflow);
+}

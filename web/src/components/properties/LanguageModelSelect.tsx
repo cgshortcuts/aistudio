@@ -1,0 +1,102 @@
+import React, { useState, useCallback, useMemo, useRef } from "react";
+import isEqual from "../../utils/isEqual";
+import LanguageModelMenuDialog from "../model_menu/LanguageModelMenuDialog";
+import useModelPreferencesStore from "../../stores/ModelPreferencesStore";
+import type {
+  LanguageModel,
+  LanguageModelValue,
+  ModelPack,
+  UnifiedModel
+} from "../../stores/ApiTypes";
+import { useLanguageModelsByProvider } from "../../hooks/useModelsByProvider";
+import ModelSelectButton from "./shared/ModelSelectButton";
+
+interface LanguageModelSelectProps {
+  onChange: (value: LanguageModelValue) => void;
+  value: string;
+  allowedProviders?: string[];
+  /**
+   * Hide models the provider declares as non-tool-capable. Pass `true` from
+   * contexts that need function calling.
+   */
+  requireToolSupport?: boolean;
+  /** Button label when nothing is selected. Defaults to "Select Model". */
+  placeholder?: string;
+  recommendedModels?: UnifiedModel[];
+  modelPacks?: ModelPack[];
+}
+
+const LanguageModelSelect: React.FC<LanguageModelSelectProps> = ({
+  onChange,
+  value,
+  allowedProviders,
+  requireToolSupport,
+  placeholder = "Select Model",
+  recommendedModels,
+  modelPacks
+}) => {
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const addRecent = useModelPreferencesStore((s) => s.addRecent);
+
+  const { models: fetchedModels } = useLanguageModelsByProvider({
+    allowedProviders
+  });
+
+  const currentSelectedModelDetails = useMemo(() => {
+    if (!fetchedModels || !value) { return null; }
+    return fetchedModels.find((m) => m.id === value);
+  }, [fetchedModels, value]);
+
+  const handleClick = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    setAnchorEl(event.currentTarget);
+  }, []);
+
+  const handleClose = useCallback(() => {
+    setAnchorEl(null);
+  }, []);
+
+  const handleDialogModelSelect = useCallback(
+    (model: LanguageModel) => {
+      const modelToPass = {
+        type: "language_model" as const,
+        id: model.id,
+        provider: model.provider,
+        name: model.name || ""
+      };
+      onChange(modelToPass);
+      addRecent({
+        provider: model.provider || "",
+        id: model.id || "",
+        name: model.name || ""
+      });
+      setAnchorEl(null);
+    },
+    [onChange, addRecent]
+  );
+
+  return (
+    <>
+      <ModelSelectButton
+        ref={buttonRef}
+        active={!!value}
+        label={currentSelectedModelDetails?.name || value || placeholder}
+        secondaryLabel={currentSelectedModelDetails?.provider}
+        subLabel={placeholder}
+        onClick={handleClick}
+      />
+      <LanguageModelMenuDialog
+        open={!!anchorEl}
+        anchorEl={anchorEl}
+        onClose={handleClose}
+        onModelChange={handleDialogModelSelect}
+        allowedProviders={allowedProviders}
+        requireToolSupport={requireToolSupport}
+        recommendedModels={recommendedModels}
+        modelPacks={modelPacks}
+      />
+    </>
+  );
+};
+
+export default React.memo(LanguageModelSelect, isEqual);

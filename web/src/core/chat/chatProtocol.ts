@@ -1,0 +1,1513 @@
+/**
+ * Global chat protocol reducer.
+ *
+ * The chat WebSocket streams mixed message types: user/assistant Messages,
+ * Chunk streams for assistant text, Job/Node updates, ToolCall/ToolResult,
+ * Planning/Task updates, workflow graph create/update events, and generation
+ * stop notices. Ordering is preserved per thread; updates are merged into the
+ * GlobalChatStore via pure reducer helpers here so connection logic stays in
+ * the store while message handling remains testable.
+ */
+
+import { visibleToolArgs } from "./toolCallFields";
+
+// NOTE: There is deliberately no content-based chunk deduplication here.
+// The old cache keyed a chunk by (content, message-length-before-append) with a
+// 100ms TTL. That collided on genuinely-repeated consecutive tokens — two "\n"
+// deltas, repeated spaces, a "- " list bullet — silently dropping the second and
+// corrupting the streamed text. The Chunk protocol type carries no id/sequence
+// to distinguish a real repeat from an accidental double-delivery, so no
+// content heuristic can tell them apart without false positives.
+// True double-delivery is already prevented upstream: GlobalWebSocketManager
+// routes each message to every handler at most once (see its `calledHandlers`
+// set), and the store keeps exactly one subscription per thread, so a chunk can
+// never reach applyChunk twice. Appending every chunk verbatim is therefore
+// correct.
+
+import {
+  Chunk,
+  EdgeUpdate,
+  ErrorMessage,
+  JobUpdate,
+  Message,
+  MessageContent,
+  MessageTextContent,
+  NodeProgress,
+  NodeUpdate,
+  OutputUpdate,
+  LogUpdate,
+  PlanningUpdate,
+  Prediction,
+  StepResult,
+  TaskUpdate,
+  TodoUpdate,
+  ToolCallUpdate
+} from "../../stores/ApiTypes";
+import { FrontendToolRegistry } from "../../lib/tools/frontendTools";
+import { getFrontendToolRuntimeState } from "../../lib/tools/frontendToolRuntimeState";
+import type {
+  GlobalChatState,
+  ProposedPlan,
+  StepToolCall
+} from "../../stores/GlobalChatStore";
+import { globalWebSocketManager, type WebSocketMessage } from "../../lib/websocket/GlobalWebSocketManager";
+import useResultsStore from "../../stores/ResultsStore";
+import useStatusStore from "../../stores/StatusStore";
+import type { Graph } from "../../stores/ApiTypes";
+import {
+  getThreadRuntime,
+  threadRuntimeUpdate,
+  type ThreadRuntime
+} from "./threadRuntime";
+
+export interface WorkflowCreatedUpdate {
+  type: "workflow_created";
+  workflow_id: string;
+  graph: Graph;
+}
+
+export interface WorkflowUpdatedUpdate {
+  type: "workflow_updated";
+  workflow_id: string;
+  graph: Graph;
+}
+
+export interface GenerationStoppedUpdate {
+  type: "generation_stopped";
+  message: string;
+}
+
+/**
+ * Server → client request to approve a gated tool call. Routed to the
+ * GlobalChatStore as a pending approval; the user resolves it via the inline
+ * ToolApprovalCard, which sends a `tool_approval_response` back.
+ */
+export interface ToolApprovalRequestMessage {
+  type: "tool_approval_request";
+  thread_id: string;
+  approval_id: string;
+  tool_name: string;
+  category: "write" | "execute" | "external";
+  message: string;
+  args: Record<string, unknown>;
+}
+
+/**
+ * Server → client request to approve a proposed agent plan. Routed to the
+ * GlobalChatStore as a pending plan approval; the user resolves it via the
+ * inline PlanApprovalCard, which sends a `plan_approval_response` back.
+ */
+export interface PlanApprovalRequestMessage {
+  type: "plan_approval_request";
+  thread_id: string | null;
+  approval_id: string;
+  plan: ProposedPlan;
+}
+
+export interface ToolCallMessage {
+  type: "tool_call";
+  tool_call_id: string;
+  name: string;
+  args: Record<string, unknown>;
+  thread_id: string;
+}
+
+/**
+ * Reply to a `resume_chat` command, sent before any replayed frames. See
+ * `chatResumedMessageOutSchema` in @nodetool-ai/protocol for the contract.
+ */
+export interface ChatResumedUpdate {
+  type: "chat_resumed";
+  thread_id: string;
+  status: "running" | "finished" | "unknown";
+  last_seq: number;
+  replay_count: number;
+  replay_incomplete: boolean;
+}
+
+/**
+ * Reply to a `list_chat_turns` command: this thread's agent turn is still
+ * running on the server. Sent once per running turn so a client that starts
+ * with no local state (a page reload) can reattach with `resume_chat`.
+ */
+export interface ChatTurnActiveUpdate {
+  type: "chat_turn_active";
+  thread_id: string;
+  status: "running";
+  last_seq: number;
+}
+
+export type MsgpackData =
+  | JobUpdate
+  | Chunk
+  | Prediction
+  | NodeProgress
+  | NodeUpdate
+  | EdgeUpdate
+  | Message
+  | ToolCallUpdate
+  | TaskUpdate
+  | TodoUpdate
+  | PlanningUpdate
+  | LogUpdate
+  | OutputUpdate
+  | StepResult
+  | WorkflowCreatedUpdate
+  | WorkflowUpdatedUpdate
+  | GenerationStoppedUpdate
+  | ToolCallMessage
+  | ToolResultMessage
+  | ToolApprovalRequestMessage
+  | PlanApprovalRequestMessage
+  | ChatResumedUpdate
+  | ChatTurnActiveUpdate
+  | ErrorMessage;
+
+export interface ToolResultMessage {
+  type: "tool_result";
+  tool_call_id: string;
+  result: unknown;
+  ok: boolean;
+}
+
+const makeMessageContent = (type: string, data: Uint8Array): MessageContent => {
+  // Hand the raw bytes to the renderer rather than minting an object URL here.
+  // MessageContentRenderer (via ImageView / AudioPlayer, and its own <video>
+  // blob) creates AND revokes its own object URL, tied to component lifecycle.
+  // A URL created in this reducer could never be revoked — nothing tracks it —
+  // so it would leak for every streamed image/audio/video output. An empty
+  // `uri` makes the renderer take its `data` path.
+  if (type === "image") {
+    return {
+      type: "image_url" as const,
+      image: { type: "image" as const, uri: "", data }
+    };
+  } else if (type === "audio") {
+    return {
+      type: "audio" as const,
+      audio: { type: "audio" as const, uri: "", data }
+    };
+  } else if (type === "video") {
+    return {
+      type: "video" as const,
+      video: { type: "video" as const, uri: "", data }
+    };
+  }
+  throw new Error(`Unknown message content type: ${type}`);
+};
+
+type ChatStateSetter = (
+  state:
+    | Partial<GlobalChatState>
+    | ((state: GlobalChatState) => Partial<GlobalChatState>)
+) => void;
+
+type ChatStateGetter = () => GlobalChatState;
+
+type ReducerResult = {
+  update: Partial<GlobalChatState>;
+  postAction?: (get: ChatStateGetter) => void;
+};
+
+const noopUpdate: ReducerResult = { update: {} };
+
+const updateThreadTimestamp = (
+  threadId: string,
+  threads: GlobalChatState["threads"]
+) => ({
+  ...threads,
+  [threadId]: {
+    ...threads[threadId],
+    updated_at: new Date().toISOString()
+  }
+});
+
+const generateTitleFromFirstUserMessage = (
+  threadId: string,
+  state: GlobalChatState
+): string | null => {
+  const thread = state.threads[threadId];
+  if (!thread) {
+    return null;
+  }
+  if (thread.title) {
+    return null;
+  }
+
+  const messages = state.messageCache[threadId] || [];
+  const firstUserMessage = messages.find((msg) => msg.role === "user");
+  if (!firstUserMessage) {
+    return null;
+  }
+
+  let contentText = "";
+  if (typeof firstUserMessage.content === "string") {
+    contentText = firstUserMessage.content;
+  } else if (Array.isArray(firstUserMessage.content)) {
+    const firstText = firstUserMessage.content.find(
+      (c): c is MessageTextContent => c?.type === "text" && typeof c.text === "string"
+    );
+    contentText = firstText?.text || "";
+  }
+
+  const titleBase = contentText || "New conversation";
+  return titleBase.substring(0, 50) + (titleBase.length > 50 ? "..." : "");
+};
+
+const applyJobUpdate = (
+  state: GlobalChatState,
+  update: JobUpdate,
+  threadId: string | null
+): ReducerResult => {
+  if (!threadId) {
+    return noopUpdate;
+  }
+  if (update.status === "completed") {
+    return {
+      update: threadRuntimeUpdate(state, threadId, {
+        status: "idle",
+        progress: { current: 0, total: 0 },
+        statusMessage: null
+      })
+    };
+  }
+  if (update.status === "failed" || update.status === "error") {
+    return {
+      update: threadRuntimeUpdate(state, threadId, {
+        status: "error",
+        error: update.error ?? null,
+        progress: { current: 0, total: 0 },
+        statusMessage: update.error || null
+      })
+    };
+  }
+  return noopUpdate;
+};
+
+const applyEdgeUpdate = (
+  state: GlobalChatState,
+  update: EdgeUpdate,
+  threadId: string | null
+): ReducerResult => {
+  const workflowId = update.workflow_id ?? undefined;
+  const effectiveWorkflowId =
+    workflowId ?? state.threadWorkflowId[threadId ?? ""];
+  // Edges are scoped by the producing run's job_id so concurrent same-workflow
+  // runs stay isolated. Skip the write if job_id is absent.
+  const jobId = (update as { job_id?: string | null }).job_id ?? undefined;
+  if (effectiveWorkflowId && jobId) {
+    useResultsStore
+      .getState()
+      .setEdge(
+        effectiveWorkflowId,
+        jobId,
+        update.edge_id,
+        update.status,
+        update.counter ?? undefined
+      );
+  }
+  return noopUpdate;
+};
+
+const applyNodeUpdate = (
+  state: GlobalChatState,
+  update: NodeUpdate,
+  threadId: string | null
+): ReducerResult => {
+  const workflowId = update.workflow_id ?? undefined;
+  const effectiveWorkflowId =
+    workflowId ?? state.threadWorkflowId[threadId ?? ""];
+
+  if (effectiveWorkflowId) {
+    // Sync status, scoped by the producing run's job_id so concurrent
+    // same-workflow runs stay isolated. Skip the write if job_id is absent.
+    const jobId = (update as { job_id?: string | null }).job_id ?? undefined;
+    if (jobId) {
+      useStatusStore
+        .getState()
+        .setStatus(effectiveWorkflowId, jobId, update.node_id, update.status);
+    }
+  }
+
+  if (!threadId) {
+    return noopUpdate;
+  }
+  if (update.status === "completed") {
+    return {
+      update: threadRuntimeUpdate(state, threadId, {
+        status: "idle",
+        progress: { current: 0, total: 0 },
+        statusMessage: null
+      })
+    };
+  }
+  return {
+    update: threadRuntimeUpdate(state, threadId, {
+      statusMessage: update.node_name ?? null
+    })
+  };
+};
+
+const applyChunk = (
+  state: GlobalChatState,
+  chunk: Chunk,
+  routedThreadId: string | null
+): ReducerResult => {
+  const threadId = chunk.thread_id ?? routedThreadId ?? state.currentThreadId;
+  if (!threadId) {
+    console.warn("applyChunk: No thread_id or currentThreadId, dropping chunk");
+    return noopUpdate;
+  }
+
+  const thread = state.threads[threadId];
+  if (!thread) {
+    console.warn(`applyChunk: Thread ${threadId} not found, dropping chunk`);
+    return noopUpdate;
+  }
+
+  const messages = state.messageCache[threadId] || [];
+  const lastMessage = messages[messages.length - 1];
+
+  // Audio chunks carry binary payloads (native Float32Array or base64);
+  // only text contributes to the assistant message stream.
+  const chunkText = typeof chunk.content === "string" ? chunk.content : "";
+
+  let updatedMessages: Message[];
+
+  if (lastMessage && lastMessage.role === "assistant") {
+    const newContent = (lastMessage.content || "") + chunkText;
+    const updatedMessage: Message = {
+      ...lastMessage,
+      content: newContent
+    };
+    updatedMessages = [...messages.slice(0, -1), updatedMessage];
+  } else {
+    const localStreamId = `local-stream-${Date.now()}-${Math.random()
+      .toString(16)
+      .slice(2)}`;
+    const message: Message = {
+      id: localStreamId,
+      role: "assistant",
+      type: "message",
+      content: chunkText
+    };
+    updatedMessages = [...messages, message];
+  }
+
+  // Preserve statusMessage during media generation (it's set from
+  // content_metadata.media_generation in the chunk handler above).
+  // Only clear it when the stream finishes (done=true) or when the
+  // chunk carries actual text content (regular LLM streaming).
+  const runtime = getThreadRuntime(state, threadId);
+  const keepStatusMessage =
+    !chunk.done && !chunk.content && runtime.statusMessage;
+
+  const runtimePatch: Partial<ThreadRuntime> = {
+    status: chunk.done ? "idle" : "streaming",
+    statusMessage: keepStatusMessage ? runtime.statusMessage : null
+  };
+  if (chunk.done) {
+    runtimePatch.planningUpdate = null;
+    runtimePatch.taskUpdate = null;
+    runtimePatch.logUpdate = null;
+  }
+
+  const baseUpdate: Partial<GlobalChatState> = {
+    ...threadRuntimeUpdate(state, threadId, runtimePatch),
+    messageCache: {
+      ...state.messageCache,
+      [threadId]: updatedMessages
+    },
+    threads: updateThreadTimestamp(threadId, state.threads)
+  };
+
+  if (!chunk.done) {
+    return { update: baseUpdate };
+  }
+
+  const postAction = (get: ChatStateGetter) => {
+    const { selectedModel, summarizeThread, updateThreadTitle } = get();
+    const messagesAfterUpdate = get().messageCache[threadId] || [];
+    if (messagesAfterUpdate.length === 2) {
+      console.debug("Triggering thread summarization for thread:", threadId);
+    }
+
+    const assistantMessages = messagesAfterUpdate.filter(
+      (msg) => msg.role === "assistant"
+    );
+    if (assistantMessages.length === 1 && !get().threads[threadId]?.title) {
+      const newTitle = generateTitleFromFirstUserMessage(threadId, get());
+      if (newTitle) {
+        updateThreadTitle(threadId, newTitle);
+      }
+    }
+
+    if (selectedModel.provider && selectedModel.id) {
+      summarizeThread(
+        threadId,
+        selectedModel.provider,
+        selectedModel.id,
+        JSON.stringify(messagesAfterUpdate)
+      );
+    }
+  };
+
+  return {
+    update: baseUpdate,
+    postAction
+  };
+};
+
+const applyOutputUpdate = (
+  state: GlobalChatState,
+  update: OutputUpdate,
+  routedThreadId: string | null
+): ReducerResult => {
+  const threadId = routedThreadId ?? state.currentThreadId;
+  if (!threadId) {
+    return noopUpdate;
+  }
+
+  const thread = state.threads[threadId];
+  if (!thread) {
+    return noopUpdate;
+  }
+
+  const workflowId = update.workflow_id ?? undefined;
+  const effectiveWorkflowId = workflowId ?? state.threadWorkflowId[threadId];
+  // Output results are scoped by the producing run's job_id so concurrent
+  // same-workflow runs stay isolated. Skip the write if job_id is absent.
+  const jobId = (update as { job_id?: string | null }).job_id ?? undefined;
+  if (effectiveWorkflowId && jobId) {
+    useResultsStore
+      .getState()
+      .setOutputResult(
+        effectiveWorkflowId,
+        jobId,
+        update.node_id,
+        update.value,
+        true // append
+      );
+  }
+
+  if (update.output_type === "string" && typeof update.value === "string") {
+    const messages = state.messageCache[threadId] || [];
+    const lastMessage = messages[messages.length - 1];
+
+    if (lastMessage && lastMessage.role === "assistant") {
+      if (update.value === "<nodetool_end_of_stream>") {
+        return noopUpdate;
+      }
+      // When the assistant's last message already holds array content (an
+      // image/audio/video block from the media branch below), a string output
+      // must be appended as a text block: `array + string` coerces the array to
+      // "[object Object],…". Merge into a trailing text block when one exists;
+      // otherwise keep the original string-concat behavior.
+      const existingContent = lastMessage.content;
+      let nextContent: Message["content"];
+      if (Array.isArray(existingContent)) {
+        const lastBlock = existingContent[existingContent.length - 1];
+        nextContent =
+          lastBlock && lastBlock.type === "text"
+            ? [
+                ...existingContent.slice(0, -1),
+                { type: "text", text: lastBlock.text + update.value }
+              ]
+            : [...existingContent, { type: "text", text: update.value }];
+      } else if (typeof existingContent === "string" || existingContent == null) {
+        nextContent = (existingContent ?? "") + update.value;
+      } else {
+        // Record-shaped content shouldn't occur for a streaming assistant text
+        // message; leave it untouched rather than coerce it into a string.
+        nextContent = existingContent;
+      }
+      const updatedMessage: Message = {
+        ...lastMessage,
+        content: nextContent
+      };
+      return {
+        update: {
+          ...threadRuntimeUpdate(state, threadId, {
+            status: "streaming",
+            statusMessage: null
+          }),
+          messageCache: {
+            ...state.messageCache,
+            [threadId]: [...messages.slice(0, -1), updatedMessage]
+          },
+          threads: updateThreadTimestamp(threadId, state.threads)
+        }
+      };
+    }
+
+    const message: Message = {
+      role: "assistant",
+      type: "message",
+      content: update.value
+    };
+    return {
+      update: {
+        ...threadRuntimeUpdate(state, threadId, { status: "streaming" }),
+        messageCache: {
+          ...state.messageCache,
+          [threadId]: [...messages, message]
+        },
+        threads: updateThreadTimestamp(threadId, state.threads)
+      }
+    };
+  }
+
+  if (["image", "audio", "video"].includes(update.output_type)) {
+    const message: Message = {
+      role: "assistant",
+      type: "message",
+      content: [
+        makeMessageContent(
+          update.output_type,
+          (update.value as { data: Uint8Array }).data
+        )
+      ],
+      name: "assistant"
+    } as Message;
+    const messages = state.messageCache[threadId] || [];
+    return {
+      update: {
+        ...threadRuntimeUpdate(state, threadId, { statusMessage: null }),
+        messageCache: {
+          ...state.messageCache,
+          [threadId]: [...messages, message]
+        },
+        threads: updateThreadTimestamp(threadId, state.threads)
+      }
+    };
+  }
+
+  return noopUpdate;
+};
+
+const applyToolCallUpdate = (
+  state: GlobalChatState,
+  update: ToolCallUpdate,
+  threadId: string | null
+): ReducerResult => {
+  const toolCallId =
+    update.tool_call_id != null
+      ? String(update.tool_call_id)
+      : null;
+  const agentExecutionId = update.agent_execution_id ?? null;
+  const stepId = update.step_id ?? null;
+
+  // The LLM-authored status lives in args._message and is mirrored onto
+  // `update.message`. Strip it from the args we display so the user doesn't
+  // see the status field duplicated under "Arguments".
+  const displayArgs = visibleToolArgs(update.args);
+
+  let agentExecutionToolCalls:
+    | GlobalChatState["agentExecutionToolCalls"]
+    | undefined;
+
+  if (toolCallId && agentExecutionId && stepId) {
+    const existingExecution =
+      state.agentExecutionToolCalls[agentExecutionId] || {};
+    const existingCalls = existingExecution[stepId] || [];
+    const existingIndex = existingCalls.findIndex(
+      (call) => call.id === toolCallId
+    );
+    const nextCall: StepToolCall = {
+      id: toolCallId,
+      name: update.name || "Tool",
+      args: displayArgs ?? null,
+      message: update.message ?? null,
+      startedAt:
+        existingIndex >= 0 ? existingCalls[existingIndex].startedAt : Date.now()
+    };
+    const nextCalls =
+      existingIndex >= 0
+        ? existingCalls.map((call, index) =>
+            index === existingIndex ? { ...call, ...nextCall } : call
+          )
+        : [...existingCalls, nextCall];
+
+    agentExecutionToolCalls = {
+      ...state.agentExecutionToolCalls,
+      [agentExecutionId]: {
+        ...existingExecution,
+        [stepId]: nextCalls
+      }
+    };
+  }
+
+  return {
+    update: {
+      ...(threadId
+        ? threadRuntimeUpdate(state, threadId, {
+            statusMessage: update.message ?? null,
+            runningToolCallId: toolCallId || null,
+            toolMessage: update.message || null
+          })
+        : {}),
+      ...(agentExecutionToolCalls ? { agentExecutionToolCalls } : {})
+    }
+  };
+};
+
+interface AgentExecutionMessage extends Message {
+  execution_event_type?: string;
+}
+
+function isAgentExecutionMessage(msg: Message): msg is AgentExecutionMessage {
+  return msg.role === "agent_execution";
+}
+
+function isPlanningUpdateContent(content: unknown): content is PlanningUpdate {
+  return (
+    typeof content === "object" &&
+    content !== null &&
+    !Array.isArray(content) &&
+    "type" in content &&
+    content.type === "planning_update"
+  );
+}
+
+function isTaskUpdateContent(content: unknown): content is TaskUpdate {
+  return (
+    typeof content === "object" &&
+    content !== null &&
+    !Array.isArray(content) &&
+    "type" in content &&
+    content.type === "task_update"
+  );
+}
+
+function isLogUpdateContent(content: unknown): content is LogUpdate {
+  return (
+    typeof content === "object" &&
+    content !== null &&
+    !Array.isArray(content) &&
+    "type" in content &&
+    content.type === "log_update"
+  );
+}
+
+const applyAgentExecutionMessage = (
+  state: GlobalChatState,
+  threadId: string,
+  messages: Message[],
+  msg: AgentExecutionMessage
+): ReducerResult => {
+  const update: Partial<GlobalChatState> = {
+    messageCache: {
+      ...state.messageCache,
+      [threadId]: [...messages, msg]
+    },
+    threads: state.threads[threadId]
+      ? updateThreadTimestamp(threadId, state.threads)
+      : state.threads
+  };
+
+  console.debug("applyAgentExecutionMessage:", {
+    execution_event_type: msg.execution_event_type,
+    content_type: typeof msg.content,
+    content_is_array: Array.isArray(msg.content),
+    has_content: !!msg.content
+  });
+
+  const content = msg.content;
+
+  if (msg.execution_event_type === "planning_update") {
+    console.debug("PlanningUpdate content:", content);
+    if (isPlanningUpdateContent(content)) {
+      Object.assign(
+        update,
+        threadRuntimeUpdate(state, threadId, { planningUpdate: content })
+      );
+    } else {
+      console.warn("PlanningUpdate content is invalid:", content);
+    }
+  } else if (msg.execution_event_type === "task_update") {
+    if (isTaskUpdateContent(content)) {
+      Object.assign(
+        update,
+        threadRuntimeUpdate(state, threadId, { taskUpdate: content })
+      );
+      update.lastTaskUpdatesByThread = {
+        ...state.lastTaskUpdatesByThread,
+        [threadId]: content
+      };
+    }
+  } else if (msg.execution_event_type === "log_update") {
+    if (isLogUpdateContent(content)) {
+      Object.assign(
+        update,
+        threadRuntimeUpdate(state, threadId, { logUpdate: content })
+      );
+    }
+  }
+
+  return { update };
+};
+
+const normalizeTextForComparison = (text: string) =>
+  text.replace(/\r\n/g, "\n").replace(/\s+$/g, "");
+
+const extractTextContent = (message: Message): string => {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+  if (Array.isArray(message.content)) {
+    return message.content
+      .map((c) => (c.type === "text" ? c.text : ""))
+      .join("");
+  }
+  return "";
+};
+
+/**
+ * Locate the trailing local streaming placeholder (the `local-stream-*`
+ * assistant message that applyChunk builds from streamed text) that an incoming
+ * server-authored assistant message should replace rather than sit beside.
+ *
+ * The server re-sends the streamed text as a finalized assistant message — both
+ * when it completes a plain reply and when it attaches tool_calls. Without this
+ * reconciliation the placeholder and the finalized message both render, so the
+ * same text appears twice. Returns -1 when the incoming message is genuinely new.
+ *
+ * Matching is anchored to the most-recently-appended local-stream-* placeholder.
+ * We never scan past it: in multi-tool turns there can be several un-finalized
+ * placeholders, and a short finalized message must not overwrite an older longer
+ * one by matching via the reverse startsWith direction.
+ */
+const findStreamPlaceholderIndex = (
+  messages: Message[],
+  msg: Message,
+  status: GlobalChatState["status"]
+): number => {
+  const incomingText = extractTextContent(msg);
+  const incomingNormalized = normalizeTextForComparison(incomingText);
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const candidate = messages[i];
+    if (candidate?.role !== "assistant") {
+      continue;
+    }
+    if (candidate.type !== "message") {
+      continue;
+    }
+
+    const candidateId = candidate.id ?? null;
+    const isLocalStream =
+      typeof candidateId === "string" &&
+      candidateId.startsWith("local-stream-");
+    const isServerAuthored =
+      !!candidate.created_at || (!!candidateId && !isLocalStream);
+
+    if (isServerAuthored) {
+      continue;
+    }
+
+    // This is the most-recently-appended local-stream-* placeholder.
+    // Evaluate it and stop — never scan past it to older placeholders.
+    const candidateText = extractTextContent(candidate);
+    const candidateNormalized = normalizeTextForComparison(candidateText);
+    if (!candidateNormalized || !incomingNormalized) {
+      return -1;
+    }
+
+    if (
+      candidateNormalized === incomingNormalized ||
+      incomingNormalized.startsWith(candidateNormalized)
+    ) {
+      return i;
+    }
+
+    // Prefer replacing the trailing local placeholder even if trailing
+    // whitespace differs (streaming may not have flushed the final space).
+    if (
+      (status === "streaming" || isLocalStream) &&
+      candidateText &&
+      incomingText
+    ) {
+      const candidateTrimmed = candidateText.trimEnd();
+      const incomingTrimmed = incomingText.trimEnd();
+      if (
+        candidateTrimmed === incomingTrimmed ||
+        incomingTrimmed.startsWith(candidateTrimmed)
+      ) {
+        return i;
+      }
+    }
+
+    // No match at the trailing placeholder — the incoming is a new message.
+    return -1;
+  }
+  return -1;
+};
+
+/**
+ * Replace the message at `index` with the incoming server message (merging so
+ * server fields like id/created_at/tool_calls win while keeping content when the
+ * server omits it), or append when no placeholder matched.
+ */
+const replaceStreamPlaceholderOrAppend = (
+  messages: Message[],
+  index: number,
+  msg: Message
+): Message[] => {
+  if (index < 0) {
+    return [...messages, msg];
+  }
+  const existing = messages[index];
+  // Keep the accumulated content when the server omits it (null/undefined) or
+  // sends an empty string — an empty content frame must not wipe streamed text.
+  const incomingContent =
+    msg.content === null ||
+    msg.content === undefined ||
+    msg.content === ""
+      ? existing.content
+      : msg.content;
+  const replacement: Message = {
+    ...existing,
+    ...msg,
+    content: incomingContent
+  };
+  return [
+    ...messages.slice(0, index),
+    replacement,
+    ...messages.slice(index + 1)
+  ];
+};
+
+const applyToolMessage = (
+  state: GlobalChatState,
+  threadId: string,
+  messages: Message[],
+  msg: Message
+) => {
+  // An assistant message carrying tool_calls finalizes the text the server just
+  // streamed, so replace the streaming placeholder instead of appending a second
+  // copy. Plain tool-result messages (role === "tool") never have a placeholder
+  // and are always appended.
+  const placeholderIndex =
+    msg.role === "assistant"
+      ? findStreamPlaceholderIndex(messages, msg, state.status)
+      : -1;
+  const updatedMessages = replaceStreamPlaceholderOrAppend(
+    messages,
+    placeholderIndex,
+    msg
+  );
+  return {
+    update: {
+      messageCache: {
+        ...state.messageCache,
+        [threadId]: updatedMessages
+      },
+      threads: state.threads[threadId]
+        ? updateThreadTimestamp(threadId, state.threads)
+        : state.threads,
+      ...(msg.role === "tool"
+        ? threadRuntimeUpdate(state, threadId, {
+            runningToolCallId: null,
+            toolMessage: null,
+            statusMessage: null
+          })
+        : {})
+    }
+  };
+};
+
+const applyAssistantMessage = (
+  state: GlobalChatState,
+  threadId: string,
+  messages: Message[],
+  msg: Message
+) => {
+  const runtimeStatus = getThreadRuntime(state, threadId).status;
+  const shouldResetStatusOnAssistantMessage =
+    runtimeStatus === "loading" ||
+    runtimeStatus === "streaming" ||
+    runtimeStatus === "stopping";
+
+  const incomingNormalized = normalizeTextForComparison(
+    extractTextContent(msg)
+  );
+
+  const streamPlaceholderIndex = findStreamPlaceholderIndex(
+    messages,
+    msg,
+    state.status
+  );
+
+  const isNewAssistantMessage =
+    streamPlaceholderIndex < 0 &&
+    (messages.length === 0 ||
+      messages[messages.length - 1]?.role !== "assistant");
+
+  const updatedMessages = (() => {
+    if (streamPlaceholderIndex >= 0) {
+      return replaceStreamPlaceholderOrAppend(
+        messages,
+        streamPlaceholderIndex,
+        msg
+      );
+    }
+
+    const currentLast = messages[messages.length - 1];
+    if (currentLast?.role === "assistant") {
+      const currentLastNormalized = normalizeTextForComparison(
+        extractTextContent(currentLast)
+      );
+      if (
+        currentLastNormalized &&
+        currentLastNormalized === incomingNormalized
+      ) {
+        return messages;
+      }
+    }
+
+    return [...messages, msg];
+  })();
+
+  const postAction = isNewAssistantMessage
+    ? (get: ChatStateGetter) => {
+        const { updateThreadTitle } = get();
+        if (!get().threads[threadId]?.title) {
+          const newTitle = generateTitleFromFirstUserMessage(threadId, get());
+          if (newTitle) {
+            updateThreadTitle(threadId, newTitle);
+          }
+        }
+      }
+    : undefined;
+
+  return {
+    update: {
+      messageCache: {
+        ...state.messageCache,
+        [threadId]: updatedMessages
+      },
+      threads: state.threads[threadId]
+        ? updateThreadTimestamp(threadId, state.threads)
+        : state.threads,
+      ...(shouldResetStatusOnAssistantMessage
+        ? threadRuntimeUpdate(state, threadId, {
+            status: "idle",
+            progress: { current: 0, total: 0 },
+            statusMessage: null,
+            planningUpdate: null,
+            taskUpdate: null,
+            logUpdate: null
+          })
+        : {})
+    },
+    postAction
+  };
+};
+
+const applyMessage = (
+  state: GlobalChatState,
+  msg: Message,
+  routedThreadId: string | null
+): ReducerResult => {
+  const threadId = msg.thread_id ?? routedThreadId ?? state.currentThreadId;
+  if (!threadId) {
+    return noopUpdate;
+  }
+  const messages = state.messageCache[threadId] || [];
+
+  if (isAgentExecutionMessage(msg)) {
+    return applyAgentExecutionMessage(state, threadId, messages, msg);
+  }
+
+  const isAssistantToolCall =
+    msg.role === "assistant" &&
+    Array.isArray(msg.tool_calls) &&
+    msg.tool_calls.length > 0;
+  if (msg.role === "tool" || isAssistantToolCall) {
+    return applyToolMessage(state, threadId, messages, msg);
+  }
+
+  if (msg.role === "assistant") {
+    return applyAssistantMessage(state, threadId, messages, msg);
+  }
+
+  return {
+    update: {
+      messageCache: {
+        ...state.messageCache,
+        [threadId]: [...messages, msg]
+      },
+      threads: updateThreadTimestamp(threadId, state.threads)
+    }
+  };
+};
+
+const applyNodeProgress = (
+  state: GlobalChatState,
+  progress: NodeProgress,
+  threadId: string | null
+): ReducerResult => {
+  const workflowId = progress.workflow_id ?? undefined;
+  const effectiveWorkflowId =
+    workflowId ?? state.threadWorkflowId[threadId ?? ""];
+  // Progress is scoped by the producing run's job_id so concurrent same-workflow
+  // runs stay isolated. Skip the write if job_id is absent.
+  const jobId = (progress as { job_id?: string | null }).job_id ?? undefined;
+  if (effectiveWorkflowId && jobId) {
+    useResultsStore
+      .getState()
+      .setProgress(
+        effectiveWorkflowId,
+        jobId,
+        progress.node_id,
+        progress.progress,
+        progress.total
+      );
+  }
+
+  if (!threadId) {
+    return noopUpdate;
+  }
+  // Keep the existing statusMessage for heartbeat ticks (empty chunk, total=0)
+  // so the "Generating image…" label set from the chunk metadata stays visible.
+  const statusMessage = progress.chunk
+    ? progress.chunk
+    : getThreadRuntime(state, threadId).statusMessage;
+  return {
+    update: threadRuntimeUpdate(state, threadId, {
+      status: "loading",
+      progress: { current: progress.progress, total: progress.total },
+      statusMessage
+    })
+  };
+};
+
+const applyGenerationStopped = (
+  state: GlobalChatState,
+  threadId: string | null
+): ReducerResult => {
+  if (!threadId) {
+    return noopUpdate;
+  }
+  return {
+    update: threadRuntimeUpdate(state, threadId, {
+      status: "idle",
+      progress: { current: 0, total: 0 },
+      statusMessage: null,
+      planningUpdate: null,
+      taskUpdate: null,
+      logUpdate: null
+    })
+  };
+};
+
+const applyError = (
+  state: GlobalChatState,
+  message: string,
+  threadId: string | null
+): ReducerResult => ({
+  update: {
+    // The top-level error banner also covers thread-less protocol errors.
+    error: message || "An error occurred",
+    ...(threadId
+      ? threadRuntimeUpdate(state, threadId, {
+          error: message || "An error occurred",
+          status: "error",
+          statusMessage: message
+        })
+      : { status: "error" as const, statusMessage: message })
+  }
+});
+
+async function executeToolCall(
+  toolCallData: ToolCallMessage,
+  get: ChatStateGetter,
+  set: ChatStateSetter,
+  wsManager: typeof globalWebSocketManager
+): Promise<void> {
+  const { tool_call_id, name, args, thread_id } = toolCallData;
+
+  // Update UI immediately
+  set((state) =>
+    threadRuntimeUpdate(state, thread_id, {
+      runningToolCallId: tool_call_id,
+      toolMessage: `Executing ${name}`,
+      statusMessage: `Executing ${name}`
+    })
+  );
+
+  if (!FrontendToolRegistry.has(name)) {
+    console.warn(`Unknown tool: ${name}`);
+    try {
+      await wsManager.send({
+        type: "tool_result",
+        tool_call_id,
+        thread_id,
+        ok: false,
+        error: `Unsupported tool: ${name}`,
+        result: { error: `Unsupported tool: ${name}` }
+      });
+    } catch (error) {
+      console.error("Failed to send tool_result for unknown tool:", error);
+    }
+    return;
+  }
+
+  const startTime = Date.now();
+  try {
+    // Resolve the canonical frontend-tool runtime state lazily — the same
+    // source the agent (`/ws/agent`) bridge uses, so `ui_*` tools behave
+    // identically in every chat mode. It is wired by the workflow editor
+    // (PanelRight); when no editor is mounted (e.g. the global /chat route
+    // with no open workflow) accessing it throws, which surfaces as a tool
+    // error instead of silently mutating a stub.
+    const threadWorkflowId =
+      get().threadWorkflowId?.[thread_id] ?? get().workflowId ?? null;
+    if (threadWorkflowId) {
+      try {
+        await getFrontendToolRuntimeState().fetchWorkflow(threadWorkflowId);
+      } catch (e) {
+        console.warn("Failed to fetch workflow for tool call:", e);
+      }
+    }
+
+    const effectiveArgs =
+      threadWorkflowId === null || threadWorkflowId === undefined
+        ? args
+        : {
+            ...(args ?? {}),
+            workflow_id: threadWorkflowId,
+            w: threadWorkflowId
+          };
+
+    const result = await FrontendToolRegistry.call(
+      name,
+      effectiveArgs,
+      tool_call_id,
+      {
+        getState: () => {
+          const runtimeState = getFrontendToolRuntimeState();
+          return {
+            ...runtimeState,
+            currentWorkflowId:
+              threadWorkflowId ?? runtimeState.currentWorkflowId
+          };
+        }
+      }
+    );
+
+    const elapsedMs = Date.now() - startTime;
+    try {
+      await wsManager.send({
+        type: "tool_result",
+        tool_call_id,
+        thread_id,
+        ok: true,
+        result,
+        elapsed_ms: elapsedMs
+      });
+    } catch (error) {
+      console.error("Failed to send tool_result:", error);
+    }
+  } catch (error) {
+    const elapsedMs = Date.now() - startTime;
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error(`Tool execution failed for ${name}:`, error);
+    try {
+      await wsManager.send({
+        type: "tool_result",
+        tool_call_id,
+        thread_id,
+        ok: false,
+        error: message,
+        result: { error: message },
+        elapsed_ms: elapsedMs
+      });
+    } catch (sendError) {
+      console.error("Failed to send tool_result after error:", sendError);
+    }
+  }
+}
+
+/**
+ * Send the user's decision on a gated tool call back to the server, resuming
+ * (or denying) the paused tool execution. Reuses the shared WebSocket
+ * connection — never opens a new socket.
+ */
+export async function sendToolApprovalResponse(
+  approvalId: string,
+  decision: "allow" | "allow_for_chat" | "deny"
+): Promise<void> {
+  try {
+    await globalWebSocketManager.send({
+      type: "tool_approval_response",
+      approval_id: approvalId,
+      decision
+    });
+  } catch (error) {
+    console.error("Failed to send tool_approval_response:", error);
+  }
+}
+
+/**
+ * Send the user's decision on a proposed agent plan back to the server,
+ * resuming the paused agent. An approve starts execution; a reject with
+ * feedback triggers a replan; a plain reject aborts the run.
+ */
+export async function sendPlanApprovalResponse(
+  approvalId: string,
+  decision: "approve" | "reject",
+  feedback?: string
+): Promise<void> {
+  try {
+    await globalWebSocketManager.send({
+      type: "plan_approval_response",
+      approval_id: approvalId,
+      decision,
+      ...(feedback ? { feedback } : {})
+    });
+  } catch (error) {
+    console.error("Failed to send plan_approval_response:", error);
+  }
+}
+
+export async function handleChatWebSocketMessage(
+  msg: WebSocketMessage,
+  set: ChatStateSetter,
+  get: ChatStateGetter,
+  routedThreadId: string | null = null
+) {
+  const data = msg as MsgpackData;
+  const currentState = get();
+
+  // The thread this message belongs to: an explicit thread_id on the payload
+  // wins, else the subscription key it was routed under (every chat handler
+  // is registered per thread), else the current thread.
+  const tid: string | null =
+    msg.thread_id ??
+    routedThreadId ??
+    currentState.currentThreadId ??
+    null;
+
+  // Frames from a resilient chat turn are stamped with a monotonically
+  // increasing `chat_seq`. Track the high-water mark per thread so a
+  // reconnect can ask the server to replay only what was missed.
+  const chatSeq = (msg as Record<string, unknown>).chat_seq;
+  if (tid && typeof chatSeq === "number") {
+    set((state) => ({
+      chatReplayCursors: { ...state.chatReplayCursors, [tid]: chatSeq }
+    }));
+  }
+
+  // Swallow stragglers for a thread the user is stopping. The top-level
+  // status check covers the pi transport, which drives the mirror directly.
+  const isStopping =
+    getThreadRuntime(currentState, tid).status === "stopping" ||
+    (currentState.status === "stopping" &&
+      (tid === null || tid === currentState.currentThreadId));
+  if (isStopping) {
+    if (!["generation_stopped", "error", "job_update"].includes(data.type ?? "")) {
+      return;
+    }
+  }
+
+  // Clear the owning thread's safety timeout (generation produced a signal).
+  const clearSendTimeout = () => {
+    if (!tid) {
+      return;
+    }
+    const timeoutId = getThreadRuntime(get(), tid).sendMessageTimeoutId;
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      set((state) =>
+        threadRuntimeUpdate(state, tid, { sendMessageTimeoutId: null })
+      );
+    }
+  };
+
+  const applyReducer = <T>(
+    fn: (
+      state: GlobalChatState,
+      payload: T,
+      threadId: string | null
+    ) => ReducerResult,
+    payload: T
+  ) => {
+    let postAction: ReducerResult["postAction"];
+    set((state) => {
+      const result = fn(state, payload, tid);
+      postAction = result.postAction;
+      return result.update;
+    });
+    if (postAction) {
+      postAction(get);
+    }
+  };
+
+  if (data.type === "job_update") {
+    // Clear timeout on terminal job states
+    if (
+      data.status === "completed" ||
+      data.status === "failed" ||
+      data.status === "cancelled"
+    ) {
+      clearSendTimeout();
+    }
+    applyReducer(applyJobUpdate, data);
+  } else if (data.type === "node_update") {
+    applyReducer(applyNodeUpdate, data);
+  } else if (data.type === "edge_update") {
+    applyReducer(applyEdgeUpdate, data);
+  } else if (data.type === "chunk") {
+    if (data.done) {
+      console.info("Received final chunk (done=true), clearing timeout");
+      // Clear the safety timeout when generation completes
+      clearSendTimeout();
+    }
+    // Surface a progress message for media generation chunks so the UI shows
+    // "Conjuring image…" / "Conjuring video…" instead of "Thinking…". The
+    // "Conjuring" verb doubles as the signal ChatThreadView keys off of to
+    // swap in the spellcasting indicator — keep them in sync.
+    const mediaMeta = data.content_metadata?.media_generation as
+      | Record<string, unknown>
+      | undefined;
+    if (mediaMeta && !data.done && tid) {
+      const mode = String(mediaMeta.mode ?? "");
+      const model = mediaMeta.model ? String(mediaMeta.model) : "";
+      const label =
+        mode === "image" || mode === "image_edit"
+          ? "Conjuring image"
+          : mode === "video" || mode === "image_to_video"
+            ? "Conjuring video"
+            : mode === "audio"
+              ? "Conjuring sound"
+              : "Conjuring";
+      set((state) =>
+        threadRuntimeUpdate(state, tid, {
+          statusMessage: model ? `${label} with ${model}…` : `${label}…`
+        })
+      );
+    }
+    applyReducer(applyChunk, data);
+  } else if (data.type === "output_update") {
+    applyReducer(applyOutputUpdate, data);
+  } else if (data.type === "tool_call_update") {
+    applyReducer(applyToolCallUpdate, data);
+  } else if (data.type === "planning_update") {
+    // Server-side planners (plan_workflow_graph, plan_orchestration_script)
+    // forward their progress as bare events rather than agent_execution
+    // messages, so drive the thread runtime directly.
+    if (tid) {
+      set((state) => threadRuntimeUpdate(state, tid, { planningUpdate: data }));
+    }
+  } else if (data.type === "task_update") {
+    if (tid) {
+      const taskUpdate = data;
+      set((state) => ({
+        ...threadRuntimeUpdate(state, tid, { taskUpdate }),
+        lastTaskUpdatesByThread: {
+          ...state.lastTaskUpdatesByThread,
+          [tid]: taskUpdate
+        }
+      }));
+    }
+  } else if (data.type === "log_update") {
+    if (tid) {
+      set((state) => threadRuntimeUpdate(state, tid, { logUpdate: data }));
+    }
+  } else if (data.type === "todo_update") {
+    if (tid) {
+      set((state) => ({
+        todosByThread: {
+          ...state.todosByThread,
+          [tid]: data.todos ?? []
+        }
+      }));
+    }
+  } else if (data.type === "message") {
+    if (data.role === "assistant") {
+      clearSendTimeout();
+    }
+    applyReducer(applyMessage, data);
+  } else if (data.type === "node_progress") {
+    applyReducer(applyNodeProgress, data);
+  } else if (data.type === "tool_call") {
+    void executeToolCall(data, get, set, globalWebSocketManager);
+  } else if (data.type === "tool_approval_request") {
+    get().addPendingApproval(data);
+  } else if (data.type === "plan_approval_request") {
+    get().addPendingPlanApproval(data);
+  } else if (data.type === "generation_stopped") {
+    // Clear the safety timeout when generation is stopped
+    clearSendTimeout();
+    applyReducer((state) => applyGenerationStopped(state, tid), data);
+    console.info("Generation stopped:", data.message);
+  } else if (data.type === "workflow_created" || data.type === "workflow_updated") {
+    if (tid && data.workflow_id) {
+      set((state) => ({
+        threadWorkflowId: {
+          ...state.threadWorkflowId,
+          [tid]: data.workflow_id
+        }
+      }));
+    }
+    console.debug(`${data.type}:`, data.workflow_id);
+  } else if (data.type === "chat_turn_active") {
+    // Reply to our list_chat_turns: this thread's turn is still running on
+    // the server. If the runtime already tracks it (same-page reconnect,
+    // resume already sent with a real cursor) there is nothing to do; a
+    // fresh page has no runtime state, so mark the thread busy and reattach
+    // from scratch — the chat_resumed reply then reconciles history.
+    if (tid) {
+      const runtimeStatus = getThreadRuntime(get(), tid).status;
+      if (
+        runtimeStatus !== "loading" &&
+        runtimeStatus !== "streaming" &&
+        runtimeStatus !== "stopping"
+      ) {
+        set((state) => threadRuntimeUpdate(state, tid, { status: "loading" }));
+        void globalWebSocketManager
+          .send({
+            command: "resume_chat",
+            data: {
+              thread_id: tid,
+              last_seq: get().chatReplayCursors[tid] ?? 0
+            }
+          })
+          .catch((err) =>
+            console.error("Failed to send resume_chat:", tid, err)
+          );
+      }
+    }
+  } else if (data.type === "chat_resumed") {
+    // Reply to our resume_chat after a reconnect. "running"/"finished" are
+    // followed by the replayed frames, which drive the runtime as usual. If
+    // the server has nothing to replay ("unknown": no turn survived, or the
+    // retention window elapsed) or the replay doesn't reach back to what we
+    // last saw (replay_incomplete — the buffer lost our tail, or we are a
+    // fresh page with no frame state at all), reconcile from persisted
+    // history: reload the thread's messages over REST. The runtime stays
+    // busy while the turn is still running so the UI keeps showing the
+    // agent at work; otherwise it resets to idle.
+    if (tid && (data.status === "unknown" || data.replay_incomplete)) {
+      clearSendTimeout();
+      const stillRunning = data.status === "running";
+      set((state) =>
+        threadRuntimeUpdate(state, tid, {
+          status: stillRunning ? "loading" : "idle",
+          statusMessage: null,
+          progress: { current: 0, total: 0 }
+        })
+      );
+      void get()
+        .loadMessages(tid)
+        .catch((err) =>
+          console.error("Failed to reload messages after chat resume:", err)
+        );
+    }
+  } else if (data.type === "error") {
+    // Clear the safety timeout on error
+    clearSendTimeout();
+    applyReducer((state) => applyError(state, data.message, tid), data);
+  }
+}

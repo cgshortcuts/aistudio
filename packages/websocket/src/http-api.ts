@@ -1,0 +1,2867 @@
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse
+} from "node:http";
+import { gzipSync } from "node:zlib";
+import { once } from "node:events";
+import {
+  readFileSync,
+  readdirSync,
+  existsSync,
+  promises as fsp
+} from "node:fs";
+import nodePath from "node:path";
+import os from "node:os";
+import { GZIP_THRESHOLD } from "./lib/compression.js";
+import { withCacheBuster } from "./lib/example-thumbnail.js";
+import {
+  loadExampleGraph,
+  defaultExamplePackageName,
+  deriveExampleAssetsDir
+} from "./example-workflows.js";
+import {
+  createLogger,
+  loadAssetStorageConfig,
+  isGoogleWorkspaceEnabled,
+  GOOGLE_WORKSPACE_NAMESPACE,
+  type StorageConfig
+} from "@nodetool-ai/config";
+import { createAssetUrlBuilder } from "@nodetool-ai/storage";
+import { workflowToDsl } from "@nodetool-ai/dsl";
+import {
+  Workflow,
+  WorkflowVersion,
+  WorkflowCollaborator,
+  Job,
+  Asset
+} from "@nodetool-ai/models";
+import {
+  loadPythonPackageMetadata,
+  type NodeMetadata,
+  NodeRegistry
+} from "@nodetool-ai/node-sdk";
+import {
+  sdkWorkflowSummariesInput,
+  sdkWorkflowSummariesOutput,
+  workflowInterfaceV1,
+  workflowInterfacesInput,
+  workflowInterfacesOutput
+} from "@nodetool-ai/protocol/api-schemas/workflows.js";
+import { sdkNodeTypeInventoryInput } from "@nodetool-ai/protocol/api-schemas/nodes.js";
+import { bootstrapNodeRegistry } from "./node-registry-setup.js";
+import {
+  PythonNodeExecutor,
+  createPythonBridge,
+  logPythonWorkerStderr,
+  safeFetch,
+  type NodeExecutor,
+  type ProcessingContext,
+  type PythonBridge
+} from "@nodetool-ai/runtime";
+import { createAssetModelInterface } from "./lib/asset-model-interface.js";
+import { verdictSchema } from "@nodetool-ai/protocol";
+import {
+  cancelDebugSession,
+  debugSessions,
+  peekDebugSession,
+  runWorkflow,
+  submitEscalationVerdict,
+  type RunWorkflowOutcome
+} from "@nodetool-ai/execution/service";
+import { resolveWorkflowWorkspace } from "./lib/workflow-workspace.js";
+import { handleOpenAIRequest, type OpenAIApiOptions } from "./openai-api.js";
+import { handleOAuthRequest } from "./oauth-api.js";
+import {
+  createStorageHandler,
+  type StorageHandlerOptions
+} from "./storage-api.js";
+import { handleFileRequest } from "./file-api.js";
+import { storeAssetWithThumbnail, thumbnailKey } from "./lib/thumbnail.js";
+import { getAssetAdapter } from "./lib/storage.js";
+import {
+  probeHasAudio,
+  extractAudio,
+  MediaToolingMissingError
+} from "./lib/media.js";
+import {
+  packWorkflowsBundle,
+  importWorkflowBundle,
+  type BundledWorkflow
+} from "./lib/workflow-bundle.js";
+import {
+  getWorkflowInterfaceV1,
+  getWorkflowInterfacesV1,
+  listWorkflowSummariesV1,
+  WorkflowInterfaceServiceError
+} from "./workflow-interface-service.js";
+import { syncRegistrations } from "./triggers/registration-sync.js";
+import {
+  getSdkNodeTypeInventory,
+  SdkNodeTypeInventoryServiceError
+} from "./sdk/sdk-node-type-inventory-service.js";
+import { isSdkWorkflowInterfaceV1Enabled } from "./sdk/sdk-feature-flags.js";
+import type { SdkV1Capabilities } from "@nodetool-ai/protocol/api-schemas/sdk-lifecycle-v1.js";
+import { handleSdkV1Capabilities } from "./sdk/sdk-capabilities-http-handler.js";
+import {
+  handleSdkV1Preflight,
+  type SdkV1PreflightHttpService
+} from "./sdk/sdk-preflight-http-handler.js";
+import {
+  handleSdkV1ModelCatalog,
+  type SdkV1ModelCatalogHttpService
+} from "./sdk/sdk-model-catalog-http-handler.js";
+import {
+  handleSdkV1ModelDownloadCancel,
+  handleSdkV1ModelDownloads,
+  handleSdkV1ModelDownloadStart
+} from "./sdk/sdk-model-download-http-handler.js";
+import type { SdkV1ModelDownloadService } from "./sdk/sdk-model-download-service.js";
+
+const log = createLogger("nodetool.websocket.http");
+
+// ── Content type to file extension mapping ─────────────────────────
+// Asset filename + storage-path helpers live in `./lib/asset-paths.ts` so the
+// tRPC router can import them without dragging in the full http-api module
+// graph. Re-exported here for any remaining REST callers.
+import {
+  getAssetFileName,
+  getAssetStoragePath,
+  retrieveAssetBytes
+} from "./lib/asset-paths.js";
+import { assetObjectKey } from "@nodetool-ai/storage";
+export { getAssetFileName, getAssetStoragePath };
+
+type JsonObject = Record<string, unknown>;
+
+export interface HttpApiOptions {
+  metadataRoots?: string[];
+  metadataMaxDepth?: number;
+  userIdHeader?: string;
+  baseUrl?: string;
+  openai?: OpenAIApiOptions;
+  storage?: StorageHandlerOptions;
+  /** NodeRegistry to use for unified metadata. If not provided, Python metadata is used. */
+  registry?: NodeRegistry;
+  /** Current Python bridge readiness for SDK discovery diagnostics. */
+  getPythonBridgeReady?: () => boolean;
+  /** Live SDK lifecycle capability snapshot. Route remains feature-flagged. */
+  getSdkCapabilities?: () => Promise<SdkV1Capabilities> | SdkV1Capabilities;
+  /** Side-effect-free SDK workflow preflight service. Route remains feature-flagged. */
+  sdkPreflightService?: SdkV1PreflightHttpService;
+  /** Additive, read-only SDK model catalog over NodeTool's model services. */
+  sdkModelCatalogService?: SdkV1ModelCatalogHttpService;
+  /** Additive SDK lifecycle over NodeTool's existing model downloaders. */
+  sdkModelDownloadService?: SdkV1ModelDownloadService;
+  /**
+   * Path to a directory of example workflow JSON files (e.g.
+   * `packages/base-nodes/nodetool/examples/nodetool-base`).
+   * When set, `handleWorkflowExamples` reads these files directly instead of
+   * relying on Python package metadata, so no Python installation is needed.
+   *
+   * The sibling `assets` directory is automatically derived from this path to
+   * serve thumbnail images at both:
+   *   - `/api/workflows/examples/thumbnails/<name>.jpg` (used by WorkflowTile)
+   *   - `/api/assets/packages/<package-name>/<name>.jpg` (used by WorkflowCard)
+   *
+   * When examples are overridden (e.g. a Docker volume) but thumbnails remain
+   * bundled with the server, set `examplesAssetsFallbackDir` to that assets path.
+   */
+  examplesDir?: string;
+  examplesAssetsFallbackDir?: string;
+  /**
+   * Path to the directory of shipped example app bundles (e.g.
+   * `packages/base-nodes/nodetool/examples/apps`). Defaults to the `apps`
+   * sibling of {@link examplesDir}, which is where both the monorepo and the
+   * packaged backend put them.
+   */
+  exampleAppsDir?: string;
+  /**
+   * Root directories that hold per-package constant assets, laid out as
+   * `<root>/<package-name>/<file>`. Served (read-only, public) at
+   * `/api/assets/packages/<package-name>/<file>` and referenced from workflows
+   * via the `package://<package-name>/<file>` scheme.
+   *
+   * These ship with the Electron build (bundled next to `server.mjs`) so the
+   * route resolves without a Python installation. When set, the route checks
+   * these roots before falling back to Python package metadata.
+   */
+  packageAssetsRoots?: string[];
+}
+
+export async function handleSdkCapabilities(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  return handleSdkV1Capabilities(request, {
+    environment: process.env,
+    getCapabilities:
+      options.getSdkCapabilities ??
+      (() => {
+        throw new Error("SDK capability provider is unavailable");
+      }),
+    onInternalError: (error) => {
+      log.error(
+        "SDK capability provider failed",
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  });
+}
+
+export async function handleSdkPreflight(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  return handleSdkV1Preflight(request, {
+    environment: process.env,
+    service:
+      options.sdkPreflightService ??
+      ({
+        preflight: () => {
+          throw new Error("SDK preflight service is unavailable");
+        }
+      } satisfies SdkV1PreflightHttpService),
+    getPrincipal: (authenticatedRequest) => {
+      const userId = authenticatedRequest.headers.get(
+        options.userIdHeader ?? "x-user-id"
+      );
+      return userId ? { userId } : null;
+    },
+    onInternalError: (error) => {
+      log.error(
+        "SDK preflight failed",
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  });
+}
+
+export async function handleSdkModelCatalog(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  return handleSdkV1ModelCatalog(request, {
+    service:
+      options.sdkModelCatalogService ??
+      ({
+        list: () => {
+          throw new Error("SDK model catalog service is unavailable");
+        }
+      } satisfies SdkV1ModelCatalogHttpService),
+    getUserId: (authenticatedRequest) =>
+      getUserId(
+        authenticatedRequest,
+        options.userIdHeader ?? "x-user-id"
+      ),
+    onInternalError: (error) => {
+      log.error(
+        "SDK model catalog failed",
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  });
+}
+
+function sdkModelDownloadHandlerOptions(options: HttpApiOptions) {
+  return {
+    service:
+      options.sdkModelDownloadService ??
+      ({
+        start: () => {
+          throw new Error("SDK model download service is unavailable");
+        },
+        list: () => {
+          throw new Error("SDK model download service is unavailable");
+        },
+        cancel: () => {
+          throw new Error("SDK model download service is unavailable");
+        }
+      } satisfies SdkV1ModelDownloadService),
+    getUserId: (request: Request) =>
+      getUserId(request, options.userIdHeader ?? "x-user-id"),
+    onInternalError: (error: unknown) => {
+      log.error(
+        "SDK model download failed",
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
+  };
+}
+
+export async function handleSdkModelDownloadStart(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  return handleSdkV1ModelDownloadStart(
+    request,
+    sdkModelDownloadHandlerOptions(options)
+  );
+}
+
+export async function handleSdkModelDownloads(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  return handleSdkV1ModelDownloads(
+    request,
+    sdkModelDownloadHandlerOptions(options)
+  );
+}
+
+export async function handleSdkModelDownloadCancel(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  return handleSdkV1ModelDownloadCancel(
+    request,
+    sdkModelDownloadHandlerOptions(options)
+  );
+}
+
+// Lazily created storage handler — recreated if options change
+let _storageHandler: ((request: Request) => Promise<Response>) | null = null;
+let _storageOpts: StorageHandlerOptions | undefined;
+let workflowRuntimePromise: Promise<WorkflowRuntimeEnvironment> | null = null;
+
+function getStorageHandler(
+  opts?: StorageHandlerOptions
+): (request: Request) => Promise<Response> {
+  if (!_storageHandler || _storageOpts !== opts) {
+    _storageHandler = createStorageHandler(opts);
+    _storageOpts = opts;
+  }
+  return _storageHandler;
+}
+
+type WorkflowRuntimeEnvironment = {
+  registry: NodeRegistry;
+  pythonBridge: PythonBridge;
+  ensurePythonBridge: () => Promise<void>;
+  resolveExecutor: (node: {
+    id: string;
+    type: string;
+    [key: string]: unknown;
+  }) => NodeExecutor;
+  configureContext: (context: ProcessingContext) => void;
+};
+
+export async function getWorkflowRuntimeEnvironment(
+  options: HttpApiOptions = {}
+): Promise<WorkflowRuntimeEnvironment> {
+  if (!workflowRuntimePromise) {
+    workflowRuntimePromise = (async () => {
+      const registry =
+        options.registry ??
+        (await bootstrapNodeRegistry({
+          ...(options.metadataRoots
+            ? { metadataRoots: options.metadataRoots }
+            : {}),
+          metadataMaxDepth: options.metadataMaxDepth ?? 8,
+          log
+        }));
+
+      const pythonBridge = createPythonBridge({
+        workerArgs: process.env["NODETOOL_WORKER_NAMESPACES"]
+          ? ["--namespaces", process.env["NODETOOL_WORKER_NAMESPACES"]]
+          : []
+      });
+
+      const logPythonBridgeDiagnostics = (context: string): void => {
+        const loadErrors =
+          (
+            pythonBridge as {
+              getLoadErrors?: () => Array<{
+                module: string;
+                phase: string;
+                error: string;
+              }>;
+            }
+          ).getLoadErrors?.() ?? [];
+        if (loadErrors.length === 0) return;
+        log.warn(
+          `HTTP API Python bridge ${context} with ${loadErrors.length} load error(s)`
+        );
+        for (const entry of loadErrors.slice(0, 10)) {
+          log.warn(
+            `[python-worker][load-error] ${entry.module} (${entry.phase}): ${entry.error}`
+          );
+        }
+      };
+
+      let pythonBridgeReady = false;
+      pythonBridge.on("stderr", (msg: string) => {
+        for (const line of msg.split("\n")) {
+          logPythonWorkerStderr(line, log);
+        }
+      });
+      pythonBridge.on("error", (err: Error) => {
+        log.error(`HTTP API Python bridge protocol error: ${err.message}`);
+        pythonBridgeReady = false;
+      });
+      pythonBridge.on("exit", (code: number) => {
+        log.warn(`HTTP API Python worker exited with code ${code}`);
+        pythonBridgeReady = false;
+      });
+
+      const ensurePythonBridge = async (): Promise<void> => {
+        log.info("HTTP API lazily starting Python bridge");
+        try {
+          await pythonBridge.ensureConnected();
+        } catch (err) {
+          log.warn(
+            "HTTP API Python bridge lazy start failed",
+            err instanceof Error ? err : new Error(String(err))
+          );
+          throw err;
+        }
+        pythonBridgeReady = true;
+        log.info("HTTP API Python bridge lazy start completed");
+        const meta = pythonBridge.getNodeMetadata();
+        log.info(
+          `HTTP API Python bridge connected — ${meta.length} Python nodes`
+        );
+        (
+          pythonBridge as {
+            getWorkerStatus?: () => Promise<{
+              protocol_version: number;
+              node_count: number;
+              provider_count: number;
+              namespaces: string[];
+              transport: string;
+              max_frame_size: number;
+              load_errors: Array<unknown>;
+            }>;
+          }
+        )
+          .getWorkerStatus?.()
+          ?.then((status) => {
+            log.info("HTTP API Python bridge status", {
+              protocol_version: status.protocol_version,
+              node_count: status.node_count,
+              provider_count: status.provider_count,
+              namespaces: status.namespaces,
+              transport: status.transport,
+              max_frame_size: status.max_frame_size,
+              load_error_count: status.load_errors.length
+            });
+          })
+          .catch((err: unknown) => {
+            log.warn(
+              "HTTP API failed to fetch Python bridge status",
+              err instanceof Error ? err : new Error(String(err))
+            );
+          });
+        logPythonBridgeDiagnostics("connected");
+      };
+
+      const resolveExecutor = (node: {
+        id: string;
+        type: string;
+        [key: string]: unknown;
+      }): NodeExecutor => {
+        if (registry.has(node.type)) {
+          return registry.resolve(node);
+        }
+        if (pythonBridgeReady && pythonBridge.hasNodeType(node.type)) {
+          const meta = pythonBridge
+            .getNodeMetadata()
+            .find((n) => n.node_type === node.type);
+          const props = (node.properties ?? node.data ?? {}) as Record<
+            string,
+            unknown
+          >;
+          return new PythonNodeExecutor(
+            pythonBridge,
+            node.type,
+            props,
+            Object.fromEntries(
+              (meta?.outputs ?? []).map((o) => [o.name, o.type.type])
+            ),
+            meta?.required_settings ?? [],
+            node.id
+          );
+        }
+        if (registry.getMetadata(node.type) && !registry.has(node.type)) {
+          const stderrSummary =
+            (
+              pythonBridge as { getRecentStderrSummary?: () => string | null }
+            ).getRecentStderrSummary?.() ?? null;
+          const loadErrors =
+            (
+              pythonBridge as {
+                getLoadErrors?: () => Array<{ module: string; error: string }>;
+              }
+            ).getLoadErrors?.() ?? [];
+          const matchingLoadError = loadErrors.find(
+            (entry) =>
+              entry.module.includes(node.type) ||
+              node.type.startsWith(entry.module.split(".").slice(2).join("."))
+          );
+          throw new Error(
+            pythonBridgeReady
+              ? `Python node "${node.type}" cannot execute: it is declared in metadata but was not loaded by the Python worker.${matchingLoadError ? ` Load error: ${matchingLoadError.module}: ${matchingLoadError.error}.` : stderrSummary ? ` Recent Python worker stderr: ${stderrSummary}` : " Check Python worker status/load errors for import failures."}`
+              : `Python node "${node.type}" cannot execute: Python worker is not connected.${stderrSummary ? ` Recent Python worker stderr: ${stderrSummary}` : ""}`
+          );
+        }
+        return registry.resolve(node);
+      };
+
+      return {
+        registry,
+        pythonBridge,
+        ensurePythonBridge,
+        resolveExecutor,
+        // Asset persistence for the run's ProcessingContext — an Output node
+        // that stores an image needs it on every host, not just chat turns.
+        configureContext: (context: ProcessingContext) => {
+          context.setModelInterfaces({
+            createAsset: createAssetModelInterface
+          });
+        }
+      };
+    })();
+  }
+
+  return workflowRuntimePromise;
+}
+
+export interface WorkflowRequestBody {
+  name: string;
+  tool_name?: string | null;
+  package_name?: string | null;
+  path?: string | null;
+  tags?: string[] | null;
+  description?: string | null;
+  thumbnail?: string | null;
+  thumbnail_url?: string | null;
+  access: string;
+  graph?: {
+    nodes: Record<string, unknown>[];
+    edges: Record<string, unknown>[];
+  } | null;
+  settings?: Record<string, unknown> | null;
+  run_mode?: string | null;
+  workspace_id?: string | null;
+  html_app?: string | null;
+  app_doc?: Record<string, unknown> | null;
+  expected_updated_at?: string;
+}
+
+const WORKFLOW_CONFLICT_MESSAGE =
+  "Workflow was modified since last read (optimistic concurrency conflict)";
+
+// Rate-limit tracking for autosave: maps workflow_id -> last autosave timestamp (ms)
+const lastAutosaveTime = new Map<string, number>();
+const AUTOSAVE_RATE_LIMIT_MS = 30_000;
+
+function normalizePath(pathname: string): string {
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    return pathname.slice(0, -1);
+  }
+  return pathname;
+}
+
+function jsonResponse(data: unknown, init?: ResponseInit): Response {
+  return new Response(JSON.stringify(data), {
+    status: init?.status ?? 200,
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {})
+    }
+  });
+}
+
+function sdkErrorResponse(
+  status: number,
+  code: string,
+  message: string,
+  retryable = false
+): Response {
+  return jsonResponse(
+    {
+      code,
+      message,
+      retryable,
+      // Retained additively while current SDK clients migrate to `message`.
+      detail: message
+    },
+    { status }
+  );
+}
+
+function internalSdkErrorResponse(error: unknown): Response {
+  log.error("SDK discovery request failed", error);
+  return sdkErrorResponse(500, "INTERNAL_ERROR", "Internal server error", true);
+}
+
+function errorResponse(status: number, detail: string): Response {
+  return jsonResponse({ detail }, { status });
+}
+
+export function getUserId(request: Request, headerName: string): string {
+  return (
+    request.headers.get(headerName) ?? request.headers.get("x-user-id") ?? "1"
+  );
+}
+
+async function parseJsonBody<T>(request: Request): Promise<T | null> {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("application/json")) {
+    return null;
+  }
+  try {
+    return (await request.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function toWorkflowResponse(workflow: Workflow): JsonObject {
+  return {
+    id: workflow.id,
+    access: workflow.access,
+    created_at: workflow.created_at,
+    updated_at: workflow.updated_at,
+    name: workflow.name,
+    tool_name: workflow.tool_name,
+    description: workflow.description,
+    tags: workflow.tags,
+    thumbnail: workflow.thumbnail,
+    thumbnail_url: workflow.thumbnail_url,
+    graph: workflow.graph,
+    input_schema: null,
+    output_schema: null,
+    settings: workflow.settings,
+    package_name: workflow.package_name,
+    path: workflow.path,
+    run_mode: workflow.run_mode,
+    workspace_id: workflow.workspace_id,
+    required_providers: null,
+    required_models: null,
+    html_app: workflow.html_app,
+    app_doc: workflow.app_doc ?? null,
+    etag: workflow.getEtag()
+  };
+}
+
+export async function handleNodeMetadata(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+
+  const url = new URL(request.url);
+  const nodeType = url.searchParams.get("node_type");
+  const namespace = url.searchParams.get("namespace");
+  const queryParam = url.searchParams.get("query");
+  const fields = url.searchParams.get("fields") ?? "summary";
+
+  let nodes: NodeMetadata[];
+  if (options.registry) {
+    nodes = options.registry.listMetadata();
+  } else {
+    const loaded = loadPythonPackageMetadata({
+      roots: options.metadataRoots,
+      maxDepth: options.metadataMaxDepth
+    });
+    nodes = [...loaded.nodesByType.values()];
+  }
+  nodes.sort((a, b) => a.node_type.localeCompare(b.node_type));
+
+  // Google Workspace nodes authenticate with the token from the user's Google
+  // sign-in. A server with no login can never produce one, so they stay out of
+  // the palette there rather than failing at run time.
+  if (!isGoogleWorkspaceEnabled()) {
+    nodes = nodes.filter(
+      (n) => !n.node_type.startsWith(`${GOOGLE_WORKSPACE_NAMESPACE}.`)
+    );
+  }
+
+  // Exact node_type lookup returns the full metadata for that one node.
+  if (nodeType) {
+    const match = nodes.find((n) => n.node_type === nodeType);
+    if (!match) return errorResponse(404, `Node type not found: ${nodeType}`);
+    return jsonResponse(match);
+  }
+
+  if (namespace) {
+    nodes = nodes.filter((n) => n.namespace?.startsWith(namespace));
+  }
+
+  if (queryParam) {
+    const terms = queryParam
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter((t) => t.length > 0);
+    if (terms.length > 0) {
+      const scored = nodes.map((n) => {
+        const haystack =
+          `${n.title ?? ""} ${n.description ?? ""} ${n.node_type} ${n.namespace ?? ""}`.toLowerCase();
+        let score = 0;
+        for (const term of terms) if (haystack.includes(term)) score++;
+        return { node: n, score };
+      });
+      nodes = scored
+        .filter((s) => s.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .map((s) => s.node);
+    }
+  }
+
+  const limitRaw = url.searchParams.get("limit");
+  if (limitRaw) {
+    const parsed = Number.parseInt(limitRaw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      nodes = nodes.slice(0, parsed);
+    }
+  }
+
+  // Default to slim summary to keep response size bounded. Full metadata is
+  // opt-in via `fields=full` or a specific node_type lookup.
+  if (fields === "full") return jsonResponse(nodes);
+  return jsonResponse(
+    nodes.map((n) => ({
+      node_type: n.node_type,
+      title: n.title,
+      description: n.description,
+      namespace: n.namespace
+    }))
+  );
+}
+
+export function parseLimit(url: URL, defaultLimit = 100): number {
+  const raw = url.searchParams.get("limit");
+  if (!raw) return defaultLimit;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return defaultLimit;
+  return Math.min(parsed, 500);
+}
+
+async function createWorkflow(
+  body: WorkflowRequestBody,
+  userId: string
+): Promise<Workflow> {
+  if (!body || typeof body.name !== "string") {
+    throw new Error("Invalid workflow");
+  }
+  if (
+    !body.graph ||
+    !Array.isArray(body.graph.nodes) ||
+    !Array.isArray(body.graph.edges)
+  ) {
+    throw new Error("graph is required and must have nodes and edges arrays");
+  }
+  const graph = body.graph;
+
+  return (await Workflow.create({
+    user_id: userId,
+    name: body.name,
+    tool_name: body.tool_name ?? null,
+    package_name: body.package_name ?? null,
+    path: body.path ?? null,
+    tags: body.tags ?? [],
+    description: body.description ?? "",
+    thumbnail: body.thumbnail ?? null,
+    thumbnail_url: body.thumbnail_url ?? null,
+    access: body.access === "public" ? "public" : "private",
+    graph,
+    settings: body.settings ?? null,
+    run_mode: body.run_mode ?? "workflow",
+    workspace_id: body.workspace_id ?? null,
+    html_app: body.html_app ?? null,
+    app_doc: body.app_doc ?? null
+  })) as Workflow;
+}
+
+async function updateWorkflow(
+  id: string,
+  body: WorkflowRequestBody,
+  userId: string
+): Promise<Workflow> {
+  if (!body || typeof body.name !== "string") {
+    throw new Error("Invalid workflow");
+  }
+  if (
+    !body.graph ||
+    !Array.isArray(body.graph.nodes) ||
+    !Array.isArray(body.graph.edges)
+  ) {
+    throw new Error("graph is required and must have nodes and edges arrays");
+  }
+  const graph = body.graph;
+
+  const existing = (await Workflow.get(id)) as Workflow | null;
+
+  if (existing) {
+    const isOwner = existing.user_id === userId;
+    const collaborator = isOwner
+      ? null
+      : await WorkflowCollaborator.findFor(id, userId);
+    if (!isOwner && collaborator?.role !== "editor") {
+      throw new Error("Workflow not found");
+    }
+    const fields: Parameters<typeof Workflow.updateFieldsIfUnchanged>[2] = {
+      name: body.name,
+      tool_name: body.tool_name ?? null,
+      description: body.description ?? "",
+      tags: body.tags ?? [],
+      package_name: body.package_name ?? null,
+      graph
+    };
+    if (isOwner) {
+      fields.access = body.access === "public" ? "public" : "private";
+    }
+    if (body.thumbnail !== undefined) fields.thumbnail = body.thumbnail;
+    // Only touch optional columns when the caller sends them, so partial saves
+    // (e.g. graph autosave) don't wipe stored values. A deliberate clear still
+    // sends an explicit null.
+    if (body.settings !== undefined) fields.settings = body.settings ?? null;
+    if (body.run_mode !== undefined && body.run_mode !== null)
+      fields.run_mode = body.run_mode;
+    if (body.workspace_id !== undefined)
+      fields.workspace_id = body.workspace_id ?? null;
+    if (body.html_app !== undefined) fields.html_app = body.html_app ?? null;
+    if (body.app_doc !== undefined) fields.app_doc = body.app_doc;
+
+    const updated = await Workflow.updateFieldsIfUnchanged(
+      id,
+      body.expected_updated_at ?? existing.updated_at,
+      fields
+    );
+    if (!updated) throw new Error(WORKFLOW_CONFLICT_MESSAGE);
+    return updated;
+  }
+
+  if (body.expected_updated_at) {
+    throw new Error("Workflow not found");
+  }
+
+  // Upsert: create the workflow if it doesn't exist
+  return (await Workflow.create({
+    id,
+    user_id: userId,
+    name: body.name,
+    tool_name: body.tool_name ?? null,
+    package_name: body.package_name ?? null,
+    path: body.path ?? null,
+    tags: body.tags ?? [],
+    description: body.description ?? "",
+    thumbnail: body.thumbnail ?? null,
+    thumbnail_url: body.thumbnail_url ?? null,
+    access: body.access === "public" ? "public" : "private",
+    graph: body.graph,
+    settings: body.settings ?? null,
+    run_mode: body.run_mode ?? "workflow",
+    workspace_id: body.workspace_id ?? null,
+    html_app: body.html_app ?? null,
+    app_doc: body.app_doc ?? null
+  })) as Workflow;
+}
+
+export async function handleWorkflowRun(
+  request: Request,
+  workflowId: string,
+  options: HttpApiOptions = {},
+  /** Return the full debug report (summary + verdict) instead of the run row. */
+  debug = false
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(405, "Method not allowed");
+  }
+
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+  const body = await parseJsonBody<{
+    params?: Record<string, unknown>;
+    background?: boolean;
+    /**
+     * Bubble node failures up to the caller instead of resolving them
+     * server-side: the response returns as soon as a node invocation
+     * escalates, and the run stays parked until a verdict arrives on
+     * `POST /api/debug/sessions/:id/verdict`.
+     */
+    interactive?: boolean;
+    max_decisions?: number;
+    max_retries_per_node?: number;
+    decision_timeout_ms?: number;
+  }>(request);
+
+  const outcome = await runWorkflow({
+    workflowId,
+    userId,
+    debug,
+    // Lazy: a nonexistent workflow 404s before the runtime bootstraps — a
+    // cold-start bootstrap failure must not turn that into a 500.
+    environment: () => getWorkflowRuntimeEnvironment(options),
+    params: body?.params ?? {},
+    background: body?.background ?? false,
+    interactive: body?.interactive === true,
+    ...(typeof body?.max_decisions === "number"
+      ? { maxDecisions: body.max_decisions }
+      : {}),
+    ...(typeof body?.max_retries_per_node === "number"
+      ? { maxRetriesPerNode: body.max_retries_per_node }
+      : {}),
+    ...(typeof body?.decision_timeout_ms === "number"
+      ? { decisionTimeoutMs: body.decision_timeout_ms }
+      : {}),
+    // The server's own import site, so a test that mocks it still governs.
+    resolveWorkspace: resolveWorkflowWorkspace
+  });
+
+  if (outcome.kind === "error") {
+    return errorResponse(outcome.status, outcome.detail);
+  }
+  return jsonResponse(outcome.payload);
+}
+
+/**
+ * `/api/debug/sessions/:id[/verdict|/cancel]` — the caller's half of an
+ * interactive run. GET peeks at the session, `verdict` answers the parked
+ * escalation and waits for the next event, `cancel` cancels the run and
+ * returns the final report.
+ */
+export async function handleDebugSessionRequest(
+  request: Request,
+  sessionId: string,
+  subPath: string | null,
+  options: HttpApiOptions = {}
+): Promise<Response> {
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+
+  // Session existence (scoped to the caller) is checked before anything else —
+  // a malformed verdict against a foreign or expired session answers 404, not
+  // 400, exactly as it did when this handler owned the registry.
+  if (!debugSessions.get(sessionId, userId)) {
+    return errorResponse(404, "Debug session not found");
+  }
+
+  const answer = (outcome: RunWorkflowOutcome): Response =>
+    outcome.kind === "error"
+      ? errorResponse(outcome.status, outcome.detail)
+      : jsonResponse(outcome.payload);
+
+  if (subPath === null) {
+    if (request.method !== "GET") {
+      return errorResponse(405, "Method not allowed");
+    }
+    return answer(peekDebugSession(sessionId, userId));
+  }
+
+  if (subPath === "verdict") {
+    if (request.method !== "POST") {
+      return errorResponse(405, "Method not allowed");
+    }
+    const body = await parseJsonBody<{
+      escalation_id?: string;
+      verdict?: unknown;
+    }>(request);
+    if (!body || typeof body.escalation_id !== "string") {
+      return errorResponse(400, "Body must carry escalation_id and verdict");
+    }
+    const parsed = verdictSchema.safeParse(body.verdict);
+    if (!parsed.success) {
+      return errorResponse(
+        400,
+        `Invalid verdict: ${parsed.error.issues
+          .map((issue) => issue.message)
+          .join("; ")}`
+      );
+    }
+    return answer(
+      await submitEscalationVerdict(
+        sessionId,
+        userId,
+        body.escalation_id,
+        parsed.data
+      )
+    );
+  }
+
+  if (subPath === "cancel") {
+    if (request.method !== "POST") {
+      return errorResponse(405, "Method not allowed");
+    }
+    return answer(await cancelDebugSession(sessionId, userId));
+  }
+
+  return errorResponse(404, "Not found");
+}
+
+// ── Autosave ──────────────────────────────────────────────────────────
+
+interface AutosaveBody {
+  name?: string;
+  access?: string;
+  save_type?: string;
+  description?: string;
+  graph?: {
+    nodes: Record<string, unknown>[];
+    edges: Record<string, unknown>[];
+  };
+  client_id?: string;
+  force?: boolean;
+  max_versions?: number;
+}
+
+export async function handleWorkflowAutosave(
+  request: Request,
+  workflowId: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "POST" && request.method !== "PUT") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+
+  const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+  if (!workflow) return errorResponse(404, "Workflow not found");
+  if (workflow.user_id !== userId)
+    return errorResponse(404, "Workflow not found");
+
+  const body = await parseJsonBody<AutosaveBody>(request);
+  if (!body || !body.graph) {
+    return errorResponse(400, "Invalid body: graph is required");
+  }
+  const graph = body.graph;
+  const force = body?.force === true;
+  const maxVersions =
+    typeof body?.max_versions === "number" ? body.max_versions : 10;
+
+  // Rate-limit: skip if last autosave < 30s ago and force is false
+  if (!force) {
+    const last = lastAutosaveTime.get(workflowId);
+    if (last !== undefined && Date.now() - last < AUTOSAVE_RATE_LIMIT_MS) {
+      return jsonResponse({
+        version: null,
+        message: "Autosave skipped (rate limited)",
+        skipped: true
+      });
+    }
+  }
+
+  workflow.graph = graph;
+  if (body.name !== undefined) workflow.name = body.name;
+  if (body.description !== undefined) workflow.description = body.description;
+  if (body.access === "public" || body.access === "private")
+    workflow.access = body.access;
+  await workflow.save();
+  lastAutosaveTime.set(workflowId, Date.now());
+
+  // Create a version and prune old ones if WorkflowVersion table is available
+  let version: JsonObject | null = null;
+  try {
+    const nextVer = await WorkflowVersion.nextVersion(workflowId);
+    const wv = new WorkflowVersion({
+      workflow_id: workflowId,
+      user_id: userId,
+      graph,
+      version: nextVer,
+      save_type: "autosave",
+      name: workflow.name,
+      description: workflow.description
+    });
+    await wv.save();
+    version = {
+      id: wv.id,
+      version: wv.version,
+      workflow_id: wv.workflow_id,
+      save_type: wv.save_type,
+      created_at: wv.created_at
+    } as JsonObject;
+    await WorkflowVersion.pruneOldVersions(workflowId, maxVersions);
+  } catch {
+    // non-fatal — version table may not exist
+  }
+
+  return jsonResponse({
+    version,
+    message: "Autosaved successfully",
+    skipped: false
+  });
+}
+
+// ── Workflow tools ─────────────────────────────────────────────────────
+
+export async function handleWorkflowTools(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+  const url = new URL(request.url);
+  const limit = parseLimit(url, 100);
+  const [workflows] = await Workflow.paginateTools(userId, { limit });
+  return jsonResponse({
+    workflows: workflows.map((w) => ({
+      name: w.name,
+      tool_name: w.tool_name ?? null,
+      description: w.description ?? null
+    })),
+    next: null
+  });
+}
+
+// ── Workflow examples ──────────────────────────────────────────────────
+
+/** URL prefix for example workflow thumbnail images served by this API. */
+const EXAMPLES_THUMBNAILS_PREFIX = "/api/workflows/examples/thumbnails/";
+
+interface ExampleMetadata {
+  id?: string;
+  name: string;
+  description?: string;
+  tags?: string[];
+}
+
+/**
+ * Read example workflow metadata from a directory of JSON files.
+ * Returns lightweight objects (no graph data) suitable for the /examples list.
+ *
+ * When the sibling `assets` directory exists (e.g.
+ * `packages/base-nodes/nodetool/assets/nodetool-base`), a `thumbnail_url`
+ * pointing to `/api/workflows/examples/thumbnails/<name>` is set so the
+ * frontend can display the pre-generated JPG thumbnails.
+ */
+function buildExamplesFromDir(
+  examplesDir: string,
+  examplesAssetsFallbackDir?: string
+): unknown[] {
+  if (!existsSync(examplesDir)) return [];
+  const assetsDir = deriveExampleAssetsDir(
+    examplesDir,
+    examplesAssetsFallbackDir
+  );
+  const now = new Date().toISOString();
+  const workflows: unknown[] = [];
+  let files: string[];
+  try {
+    files = readdirSync(examplesDir)
+      .filter((f) => f.toLowerCase().endsWith(".json"))
+      .sort((a, b) => a.localeCompare(b));
+  } catch (err) {
+    log.warn(`Failed to read examples directory ${examplesDir}: ${err}`);
+    return [];
+  }
+  for (const file of files) {
+    try {
+      const raw = readFileSync(nodePath.join(examplesDir, file), "utf8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      const name =
+        typeof parsed.name === "string"
+          ? parsed.name
+          : file.replace(/\.json$/i, "");
+      // Point thumbnail_url to the served JPG when the file exists in
+      // assets. withCacheBuster() appends ?v=<md5-8> so the browser cache
+      // invalidates whenever the JPG is regenerated.
+      const jpgFile = `${name}.jpg`;
+      const jpgPath = nodePath.join(assetsDir, jpgFile);
+      const thumbnailUrl = existsSync(jpgPath)
+        ? withCacheBuster(
+            `${EXAMPLES_THUMBNAILS_PREFIX}${encodeURIComponent(jpgFile)}`,
+            jpgPath
+          )
+        : null;
+      workflows.push({
+        id: file,
+        access: "public",
+        created_at: now,
+        updated_at: now,
+        name,
+        tool_name: null,
+        description:
+          typeof parsed.description === "string" ? parsed.description : "",
+        tags: Array.isArray(parsed.tags)
+          ? parsed.tags.filter((t: unknown) => typeof t === "string")
+          : [],
+        thumbnail: thumbnailUrl ? jpgFile : null,
+        thumbnail_url: thumbnailUrl,
+        graph: { nodes: [], edges: [] },
+        input_schema: null,
+        output_schema: null,
+        settings: null,
+        package_name:
+          typeof parsed.package_name === "string" ? parsed.package_name : null,
+        path: null,
+        run_mode: null,
+        workspace_id: null,
+        required_providers: null,
+        required_models: null,
+        html_app: null,
+        app_doc:
+          parsed.app_doc && typeof parsed.app_doc === "object"
+            ? (parsed.app_doc as Record<string, unknown>)
+            : null,
+        etag: null
+      });
+    } catch (err) {
+      log.debug(`Skipping invalid example workflow file ${file}: ${err}`);
+    }
+  }
+  return workflows;
+}
+
+export function buildExampleWorkflows(
+  options: Pick<
+    HttpApiOptions,
+    | "examplesDir"
+    | "examplesAssetsFallbackDir"
+    | "metadataRoots"
+    | "metadataMaxDepth"
+  >
+): unknown[] {
+  // If a static examples directory is configured, use it directly — no Python needed.
+  if (options.examplesDir) {
+    return buildExamplesFromDir(
+      options.examplesDir,
+      options.examplesAssetsFallbackDir
+    );
+  }
+  const loaded = loadPythonPackageMetadata({
+    roots: options.metadataRoots,
+    maxDepth: options.metadataMaxDepth
+  });
+  const now = new Date().toISOString();
+  const workflows: unknown[] = [];
+  for (const pkg of loaded.packages) {
+    if (!pkg.examples || pkg.examples.length === 0) continue;
+    for (const ex of pkg.examples) {
+      const meta = ex as ExampleMetadata;
+      workflows.push({
+        id: meta.id ?? "",
+        access: "public",
+        created_at: now,
+        updated_at: now,
+        name: meta.name,
+        tool_name: null,
+        description: meta.description ?? "",
+        tags: meta.tags ?? [],
+        thumbnail: null,
+        thumbnail_url: null,
+        graph: { nodes: [], edges: [] },
+        input_schema: null,
+        output_schema: null,
+        settings: null,
+        package_name: pkg.name,
+        path: null,
+        run_mode: null,
+        workspace_id: null,
+        required_providers: null,
+        required_models: null,
+        html_app: null,
+        app_doc: null,
+        etag: null
+      });
+    }
+  }
+  return workflows;
+}
+
+export async function handleWorkflowExamples(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const workflows = buildExampleWorkflows(options);
+  return jsonResponse({ workflows, next: null });
+}
+
+/**
+ * GET /api/workflows/examples/:package/:name — one example workflow, graph
+ * included. The `get_example_workflow` agent tool and the `nodetool` object
+ * model (`nodetool.workflows.example`) call this to feed graphs into
+ * `copyFrom`; the create-from-example flow stays on POST /api/workflows.
+ */
+export async function handleWorkflowExampleByName(
+  request: Request,
+  packageName: string,
+  exampleName: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const example = loadExampleGraph(packageName, exampleName, {
+    examplesDir: options.examplesDir,
+    examplesAssetsFallbackDir: options.examplesAssetsFallbackDir,
+    metadataRoots: options.metadataRoots,
+    metadataMaxDepth: options.metadataMaxDepth
+  });
+  if (!example) {
+    return errorResponse(
+      404,
+      `Example '${exampleName}' not found in package '${packageName}'`
+    );
+  }
+  return jsonResponse(example);
+}
+
+export async function handleWorkflowExamplesSearch(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const url = new URL(request.url);
+  const query = (url.searchParams.get("query") ?? "").toLowerCase().trim();
+  const workflows = buildExampleWorkflows(options);
+  const filtered = query
+    ? workflows.filter((w) => {
+        const wf = w as Record<string, unknown>;
+        const name = String(wf.name ?? "").toLowerCase();
+        const desc = String(wf.description ?? "").toLowerCase();
+        const tags = (wf.tags as string[] | undefined) ?? [];
+        return (
+          name.includes(query) ||
+          desc.includes(query) ||
+          tags.some((t) => t.toLowerCase().includes(query))
+        );
+      })
+    : workflows;
+  return jsonResponse({ workflows: filtered, next: null });
+}
+
+/**
+ * Serve a thumbnail JPG from the examples assets directory.
+ * URL: /api/workflows/examples/thumbnails/<encoded-filename>
+ */
+export async function handleWorkflowExamplesThumbnail(
+  request: Request,
+  filename: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  if (!options.examplesDir) {
+    return errorResponse(404, "Examples not configured");
+  }
+  // Derive the assets directory from the examples directory.
+  const assetsDir = deriveExampleAssetsDir(
+    options.examplesDir,
+    options.examplesAssetsFallbackDir
+  );
+  // Prevent path traversal — only allow a plain filename (no slashes).
+  const safe = nodePath.basename(filename);
+  const safeLower = safe.toLowerCase();
+  if (!safeLower.endsWith(".jpg") && !safeLower.endsWith(".png")) {
+    return errorResponse(400, "Only .jpg and .png thumbnails are supported");
+  }
+  const filePath = nodePath.join(assetsDir, safe);
+  if (!existsSync(filePath)) {
+    return errorResponse(404, "Thumbnail not found");
+  }
+  const { createReadStream, statSync } = await import("node:fs");
+  let stat: { size: number };
+  try {
+    stat = statSync(filePath);
+  } catch {
+    return errorResponse(404, "Thumbnail not found");
+  }
+  const contentType = safeLower.endsWith(".png") ? "image/png" : "image/jpeg";
+  const stream = createReadStream(filePath);
+  const webStream = new ReadableStream({
+    start(controller) {
+      stream.on("data", (chunk) => controller.enqueue(chunk));
+      stream.on("end", () => controller.close());
+      stream.on("error", (err) => controller.error(err));
+    },
+    cancel() {
+      stream.destroy();
+    }
+  });
+  return new Response(webStream, {
+    status: 200,
+    headers: {
+      "content-type": contentType,
+      "content-length": String(stat.size),
+      "cache-control": "public, max-age=86400"
+    }
+  });
+}
+
+// ── Workflow app page ──────────────────────────────────────────────────
+
+export async function handleWorkflowApp(
+  request: Request,
+  workflowId: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const baseUrl = options.baseUrl ?? "http://127.0.0.1:7777";
+  const html = `<!DOCTYPE html><html><head><title>Workflow App</title>
+<script>window.WORKFLOW_ID=${JSON.stringify(workflowId)};window.API_URL=${JSON.stringify(baseUrl)};</script>
+</head><body><div id="app"></div></body></html>`;
+  return new Response(html, {
+    status: 200,
+    headers: { "content-type": "text/html" }
+  });
+}
+
+// ── Workflow generate-name ─────────────────────────────────────────────
+
+/**
+ * Generate a descriptive name for a workflow based on its node types.
+ * The Python backend uses an LLM for this; the TS standalone mode derives
+ * a name from the workflow graph's node types instead.
+ *
+ * Node types follow the pattern `<root>.<category>[.<subcategory>...]`,
+ * e.g. `nodetool.text.Generate`. We collect unique category segments
+ * (parts[1]) to form a human-readable label.
+ */
+function deriveWorkflowName(workflow: Workflow): string {
+  const graph = workflow.graph as { nodes?: Array<{ type?: unknown }> } | null;
+  const nodes: Array<{ type?: unknown }> = graph?.nodes ?? [];
+  if (nodes.length === 0) {
+    return workflow.name || "Untitled Workflow";
+  }
+  // Collect unique category segments from node types (second dotted segment).
+  const categories = new Set<string>();
+  for (const n of nodes) {
+    if (typeof n.type === "string") {
+      const parts = n.type.split(".");
+      // Require at least root.category format.
+      if (parts.length >= 2 && parts[1]) {
+        categories.add(parts[1]);
+      }
+    }
+  }
+  const segments = Array.from(categories).slice(0, 3);
+  if (segments.length === 0) {
+    return workflow.name || "Untitled Workflow";
+  }
+  const label = segments
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join(" + ");
+  return `${label} Workflow`;
+}
+
+export async function handleWorkflowGenerateName(
+  request: Request,
+  workflowId: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+  const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+  if (!workflow) return errorResponse(404, "Workflow not found");
+  if (workflow.user_id !== userId)
+    return errorResponse(404, "Workflow not found");
+  const name = deriveWorkflowName(workflow);
+  return jsonResponse({ name });
+}
+
+// ── Workflow DSL export (stub) ─────────────────────────────────────────
+
+export async function handleWorkflowDslExport(
+  request: Request,
+  workflowId: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+
+  const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+  if (!workflow) {
+    return errorResponse(404, "Workflow not found");
+  }
+  if (workflow.access !== "public" && workflow.user_id !== userId) {
+    return errorResponse(404, "Workflow not found");
+  }
+
+  if (!workflow.graph) {
+    return errorResponse(400, "Workflow has no graph to export");
+  }
+
+  try {
+    const source = workflowToDsl(workflow.graph, {
+      workflowName: workflow.name
+    });
+    return new Response(source, {
+      status: 200,
+      headers: { "content-type": "text/plain; charset=utf-8" }
+    });
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to export workflow as DSL";
+    return errorResponse(400, message);
+  }
+}
+
+// ── Workflow bundle export/import (.nodetool) ──────────────────────────
+
+/** Resolve asset bytes for a ref during export, via the asset storage adapter. */
+async function resolveAssetBytesForExport(
+  ref: string
+): Promise<Uint8Array | null> {
+  try {
+    if (ref.startsWith("asset://")) {
+      const rest = ref.slice("asset://".length).split("?")[0].split("#")[0];
+      const adapter = getAssetAdapter();
+      if (!nodePath.extname(rest)) {
+        const asset = (await Asset.get(rest)) as Asset | null;
+        if (!asset) return null;
+        return await retrieveAssetBytes(
+          adapter,
+          asset.user_id,
+          asset.id,
+          asset.content_type
+        );
+      }
+      // Already a key — owner-prefixed for anything written since the
+      // per-owner layout, flat for older `asset://` refs stored in graphs.
+      return await adapter.retrieve(adapter.uriForKey(rest));
+    }
+    if (ref.includes("/api/storage/")) {
+      const key = decodeURIComponent(
+        ref
+          .slice(ref.indexOf("/api/storage/") + "/api/storage/".length)
+          .split("?")[0]
+      );
+      const adapter = getAssetAdapter();
+      return await adapter.retrieve(adapter.uriForKey(key));
+    }
+    if (/^https?:\/\//.test(ref)) {
+      const res = await safeFetch(ref);
+      if (!res.ok) return null;
+      return new Uint8Array(await res.arrayBuffer());
+    }
+  } catch {
+    // Unresolved — the ref is left as-is in the bundle.
+  }
+  return null;
+}
+
+async function loadBundledWorkflow(
+  workflowId: string,
+  userId: string
+): Promise<BundledWorkflow | { error: Response }> {
+  const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+  if (!workflow) {
+    return { error: errorResponse(404, `Workflow not found: ${workflowId}`) };
+  }
+  if (workflow.access !== "public" && workflow.user_id !== userId) {
+    return { error: errorResponse(404, `Workflow not found: ${workflowId}`) };
+  }
+  if (!workflow.graph) {
+    return { error: errorResponse(400, "Workflow has no graph to export") };
+  }
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    description: workflow.description ?? "",
+    tags: workflow.tags ?? [],
+    run_mode: workflow.run_mode ?? null,
+    settings: workflow.settings ?? null,
+    graph: workflow.graph as unknown as BundledWorkflow["graph"]
+  };
+}
+
+function bundleResponse(bytes: Uint8Array, name: string): Response {
+  const safe = name.replace(/[^A-Za-z0-9._-]+/g, "_") || "workflows";
+  // Copy into an ArrayBuffer-backed view so it satisfies BodyInit.
+  const body = new Uint8Array(bytes);
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "application/zip",
+      "content-length": String(bytes.byteLength),
+      "content-disposition": `attachment; filename="${safe}.nodetool"`,
+      "cache-control": "no-store"
+    }
+  });
+}
+
+/** GET /api/workflows/:id/export-bundle — single workflow as a .nodetool zip. */
+export async function handleWorkflowExportBundle(
+  request: Request,
+  workflowId: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+  const loaded = await loadBundledWorkflow(workflowId, userId);
+  if ("error" in loaded) {
+    return loaded.error;
+  }
+  const { bytes } = await packWorkflowsBundle({
+    workflows: [loaded],
+    fetchAssetBytes: resolveAssetBytesForExport
+  });
+  return bundleResponse(bytes, loaded.name);
+}
+
+/** POST /api/workflows/export-bundle {workflow_ids} — multiple workflows. */
+export async function handleWorkflowsExportBundle(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+  const body = await parseJsonBody<{ workflow_ids?: unknown }>(request);
+  const ids = Array.isArray(body?.workflow_ids)
+    ? body.workflow_ids.filter((v): v is string => typeof v === "string")
+    : [];
+  if (ids.length === 0) {
+    return errorResponse(400, "workflow_ids (non-empty array) is required");
+  }
+  const workflows: BundledWorkflow[] = [];
+  for (const id of ids) {
+    const loaded = await loadBundledWorkflow(id, userId);
+    if ("error" in loaded) {
+      return loaded.error;
+    }
+    workflows.push(loaded);
+  }
+  const { bytes } = await packWorkflowsBundle({
+    workflows,
+    fetchAssetBytes: resolveAssetBytesForExport
+  });
+  const name =
+    workflows.length === 1
+      ? workflows[0].name
+      : `${workflows.length}-workflows`;
+  return bundleResponse(bytes, name);
+}
+
+/** POST /api/workflows/import-bundle — multipart .nodetool upload. */
+export async function handleWorkflowImportBundle(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+
+  let zipBytes: Uint8Array | null = null;
+  const contentType = request.headers.get("content-type") ?? "";
+  if (contentType.toLowerCase().includes("multipart/form-data")) {
+    try {
+      const fd = await request.formData();
+      const file = fd.get("file") as File | null;
+      if (file) {
+        zipBytes = new Uint8Array(await file.arrayBuffer());
+      }
+    } catch {
+      return errorResponse(400, "Invalid multipart form data");
+    }
+  } else {
+    const buf = await request.arrayBuffer();
+    if (buf.byteLength > 0) {
+      zipBytes = new Uint8Array(buf);
+    }
+  }
+  if (!zipBytes) {
+    return errorResponse(400, "A .nodetool bundle file is required");
+  }
+
+  let result: Awaited<ReturnType<typeof importWorkflowBundle>>;
+  try {
+    result = await importWorkflowBundle(zipBytes, {
+      storeAsset: async ({ bytes, fileName, contentType: assetType }) => {
+        const asset = (await Asset.create({
+          user_id: userId,
+          name: fileName,
+          content_type: assetType,
+          parent_id: userId,
+          size: bytes.byteLength
+        })) as Asset;
+        const storedName = getAssetFileName(asset.id, asset.content_type);
+        await storeAssetWithThumbnail(
+          asset.user_id,
+          asset.id,
+          storedName,
+          bytes,
+          asset.content_type
+        );
+        return { uri: `asset://${storedName}`, assetId: asset.id };
+      }
+    });
+  } catch (error) {
+    return errorResponse(
+      400,
+      `Invalid bundle: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  const created: JsonObject[] = [];
+  try {
+    for (const wf of result.workflows) {
+      const workflow = await createWorkflow(
+        {
+          name: wf.name,
+          description: wf.description ?? "",
+          tags: wf.tags ?? [],
+          access: "private",
+          graph: wf.graph as unknown as WorkflowRequestBody["graph"],
+          settings: wf.settings ?? null,
+          run_mode: wf.run_mode ?? "workflow"
+        },
+        userId
+      );
+      created.push(toWorkflowResponse(workflow));
+    }
+  } catch (error) {
+    // createWorkflow throws on a malformed graph (e.g. missing edges array),
+    // which unpackWorkflowBundle does not validate. Surface it as a 400 rather
+    // than an unhandled 500. (Earlier-created workflows in the loop remain —
+    // the import is not transactional; reported as a bad-bundle error.)
+    return errorResponse(
+      400,
+      `Invalid bundle: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  return jsonResponse({
+    workflows: created,
+    imported: result.imported.length,
+    missing: result.missing,
+    checksum_mismatches: result.checksumMismatches
+  });
+}
+
+// ── Workflow versions ──────────────────────────────────────────────────
+
+function toVersionResponse(v: WorkflowVersion): JsonObject {
+  return {
+    id: v.id,
+    workflow_id: v.workflow_id,
+    user_id: v.user_id,
+    name: v.name,
+    description: v.description,
+    graph: v.graph,
+    version: v.version,
+    save_type: v.save_type ?? "manual",
+    autosave_metadata: v.autosave_metadata ?? null,
+    created_at: v.created_at
+  };
+}
+
+interface VersionCreateBody {
+  name?: string;
+  description?: string;
+}
+
+export async function handleWorkflowVersions(
+  request: Request,
+  workflowId: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+
+  if (request.method === "POST") {
+    const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+    if (!workflow) return errorResponse(404, "Workflow not found");
+    if (workflow.user_id !== userId)
+      return errorResponse(404, "Workflow not found");
+
+    const body = await parseJsonBody<VersionCreateBody>(request);
+    const nextVer = await WorkflowVersion.nextVersion(workflowId);
+    const version = (await WorkflowVersion.create({
+      workflow_id: workflowId,
+      user_id: userId,
+      name: body?.name ?? null,
+      description: body?.description ?? null,
+      graph: workflow.graph,
+      version: nextVer
+    })) as WorkflowVersion;
+    return jsonResponse(toVersionResponse(version));
+  }
+
+  if (request.method === "GET") {
+    // Version history (and its full graphs) is private to the owner. Enforce
+    // ownership before listing, mirroring the POST branch — otherwise any
+    // authenticated user could read another user's workflows by id (IDOR).
+    const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+    if (!workflow) return errorResponse(404, "Workflow not found");
+    if (workflow.user_id !== userId && workflow.access !== "public")
+      return errorResponse(404, "Workflow not found");
+
+    const url = new URL(request.url);
+    const limit = parseLimit(url, 100);
+    const versions = await WorkflowVersion.listForWorkflow(workflowId, {
+      limit
+    });
+    return jsonResponse({ versions: versions.map(toVersionResponse) });
+  }
+
+  return errorResponse(405, "Method not allowed");
+}
+
+export async function handleWorkflowVersionByNumber(
+  request: Request,
+  workflowId: string,
+  versionNumber: number,
+  options: HttpApiOptions
+): Promise<Response> {
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+
+  if (request.method === "GET") {
+    const version = await WorkflowVersion.findByVersion(
+      workflowId,
+      versionNumber
+    );
+    if (!version) return errorResponse(404, "Version not found");
+    const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+    if (!workflow) return errorResponse(404, "Workflow not found");
+    if (workflow.user_id !== userId)
+      return errorResponse(404, "Workflow not found");
+    return jsonResponse(toVersionResponse(version));
+  }
+
+  if (request.method === "POST") {
+    // restore: copy version graph back to workflow
+    const version = await WorkflowVersion.findByVersion(
+      workflowId,
+      versionNumber
+    );
+    if (!version) return errorResponse(404, "Version not found");
+    const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+    if (!workflow) return errorResponse(404, "Workflow not found");
+    if (workflow.user_id !== userId)
+      return errorResponse(404, "Workflow not found");
+    workflow.graph = version.graph;
+    await workflow.save();
+    return jsonResponse(toWorkflowResponse(workflow));
+  }
+
+  return errorResponse(405, "Method not allowed");
+}
+
+export async function handleWorkflowVersionDeleteById(
+  request: Request,
+  _workflowId: string,
+  versionId: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "DELETE") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+  const version = (await WorkflowVersion.get(
+    versionId
+  )) as WorkflowVersion | null;
+  if (!version) return errorResponse(404, "Version not found");
+  if (version.user_id !== userId)
+    return errorResponse(404, "Version not found");
+  await version.delete();
+  return new Response(null, { status: 204 });
+}
+
+export async function handleWorkflowsRoot(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+  const url = new URL(request.url);
+
+  if (request.method === "GET") {
+    const limit = parseLimit(url, 100);
+    const runMode = url.searchParams.get("run_mode")?.trim() ?? undefined;
+    const startKey = url.searchParams.get("cursor")?.trim() || undefined;
+    // columns is Python-specific (column selection) and is ignored here.
+    const [workflows, cursor] = await Workflow.paginate(userId, {
+      limit,
+      runMode,
+      startKey
+    });
+    return jsonResponse({
+      workflows: workflows.map((w) => toWorkflowResponse(w)),
+      next: cursor || null
+    });
+  }
+
+  if (request.method === "POST") {
+    const body = await parseJsonBody<WorkflowRequestBody>(request);
+    if (!body) return errorResponse(400, "Invalid JSON body");
+    try {
+      const fromPkg =
+        url.searchParams.get("from_example_package")?.trim() ?? undefined;
+      const fromName =
+        url.searchParams.get("from_example_name")?.trim() ?? undefined;
+      if (fromName && (!body.graph || body.graph.nodes?.length === 0)) {
+        const packageName =
+          fromPkg ?? defaultExamplePackageName(options) ?? "nodetool-base";
+        const example = loadExampleGraph(packageName, fromName, options);
+        if (example?.graph) {
+          body.graph = example.graph as WorkflowRequestBody["graph"];
+        }
+      }
+      const workflow = await createWorkflow(body, userId);
+      return jsonResponse(toWorkflowResponse(workflow));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Invalid workflow";
+      return errorResponse(400, message);
+    }
+  }
+
+  return errorResponse(405, "Method not allowed");
+}
+
+export async function handleSdkNodeTypeInventory(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const url = new URL(request.url);
+  const parsed = sdkNodeTypeInventoryInput.safeParse({
+    ...(url.searchParams.has("cursor")
+      ? { cursor: Number(url.searchParams.get("cursor")) }
+      : {}),
+    ...(url.searchParams.has("limit")
+      ? { limit: Number(url.searchParams.get("limit")) }
+      : {})
+  });
+  if (!parsed.success) {
+    return sdkErrorResponse(
+      400,
+      "INVALID_INPUT",
+      "cursor must be >= 0 and limit 1..100"
+    );
+  }
+
+  try {
+    const registry =
+      options.registry ??
+      (await getWorkflowRuntimeEnvironment(options)).registry;
+    return jsonResponse(
+      getSdkNodeTypeInventory({
+        registry,
+        pythonBridgeReady: options.getPythonBridgeReady?.() ?? false,
+        input: parsed.data
+      })
+    );
+  } catch (error) {
+    if (error instanceof SdkNodeTypeInventoryServiceError) {
+      return sdkErrorResponse(
+        503,
+        "SDK_NODE_TYPE_INVENTORY_DISABLED",
+        error.message
+      );
+    }
+    return internalSdkErrorResponse(error);
+  }
+}
+
+function workflowInterfaceErrorResponse(error: unknown): Response {
+  if (!(error instanceof WorkflowInterfaceServiceError)) {
+    return internalSdkErrorResponse(error);
+  }
+  if (error.code === "feature_disabled") {
+    return sdkErrorResponse(
+      503,
+      "SDK_WORKFLOW_INTERFACE_DISABLED",
+      error.message
+    );
+  }
+  if (error.code === "workflow_not_found") {
+    return sdkErrorResponse(404, "WORKFLOW_NOT_FOUND", error.message);
+  }
+  return sdkErrorResponse(422, "INVALID_WORKFLOW_GRAPH", error.message);
+}
+
+export async function handleSdkWorkflowSummaries(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const url = new URL(request.url);
+  const parsed = sdkWorkflowSummariesInput.safeParse({
+    ...(url.searchParams.has("limit")
+      ? { limit: Number(url.searchParams.get("limit")) }
+      : {}),
+    ...(url.searchParams.get("cursor")
+      ? { cursor: url.searchParams.get("cursor") }
+      : {})
+  });
+  if (!parsed.success) {
+    return sdkErrorResponse(
+      400,
+      "INVALID_INPUT",
+      "Invalid workflow summary query"
+    );
+  }
+  try {
+    const result = await listWorkflowSummariesV1({
+      userId: getUserId(request, options.userIdHeader ?? "x-user-id"),
+      limit: parsed.data.limit,
+      ...(parsed.data.cursor ? { cursor: parsed.data.cursor } : {})
+    });
+    return jsonResponse(
+      sdkWorkflowSummariesOutput.parse({
+        workflows: result.workflows.map((workflow) => ({
+          id: workflow.id,
+          name: workflow.name,
+          description: workflow.description,
+          revision: workflow.updated_at,
+          registry_revision: Number.isSafeInteger(options.registry?.revision)
+            ? options.registry!.revision
+            : null,
+          run_mode: workflow.run_mode
+        })),
+        next: result.next
+      })
+    );
+  } catch (error) {
+    return workflowInterfaceErrorResponse(error);
+  }
+}
+
+export async function handleWorkflowInterface(
+  request: Request,
+  workflowId: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const url = new URL(request.url);
+  if (url.searchParams.get("version") !== "1") {
+    return sdkErrorResponse(
+      400,
+      "UNSUPPORTED_WORKFLOW_INTERFACE_VERSION",
+      "Workflow interface version 1 is required"
+    );
+  }
+  if (!isSdkWorkflowInterfaceV1Enabled()) {
+    return workflowInterfaceErrorResponse(
+      new WorkflowInterfaceServiceError(
+        "feature_disabled",
+        "SDK workflow interface v1 is disabled"
+      )
+    );
+  }
+  try {
+    const registry =
+      options.registry ??
+      (await getWorkflowRuntimeEnvironment(options)).registry;
+    const result = await getWorkflowInterfaceV1({
+      workflowId,
+      userId: getUserId(request, options.userIdHeader ?? "x-user-id"),
+      registry
+    });
+    return jsonResponse(workflowInterfaceV1.parse(result));
+  } catch (error) {
+    return workflowInterfaceErrorResponse(error);
+  }
+}
+
+export async function handleWorkflowInterfaces(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const body = await parseJsonBody<unknown>(request);
+  const parsed = workflowInterfacesInput.safeParse(body);
+  if (!parsed.success) {
+    return sdkErrorResponse(
+      400,
+      "INVALID_INPUT",
+      "Expected 1 to 100 unique workflow ids"
+    );
+  }
+  if (!isSdkWorkflowInterfaceV1Enabled()) {
+    return workflowInterfaceErrorResponse(
+      new WorkflowInterfaceServiceError(
+        "feature_disabled",
+        "SDK workflow interface v1 is disabled"
+      )
+    );
+  }
+  try {
+    const registry =
+      options.registry ??
+      (await getWorkflowRuntimeEnvironment(options)).registry;
+    const result = await getWorkflowInterfacesV1({
+      workflowIds: parsed.data.ids,
+      userId: getUserId(request, options.userIdHeader ?? "x-user-id"),
+      registry
+    });
+    return jsonResponse(workflowInterfacesOutput.parse(result));
+  } catch (error) {
+    return workflowInterfaceErrorResponse(error);
+  }
+}
+
+export async function handlePublicWorkflows(
+  request: Request
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const url = new URL(request.url);
+  const limit = parseLimit(url, 100);
+  const [workflows] = await Workflow.paginatePublic({ limit });
+  return jsonResponse({
+    workflows: workflows.map((w) => toWorkflowResponse(w)),
+    next: null
+  });
+}
+
+export async function handlePublicWorkflowById(
+  request: Request,
+  workflowId: string
+): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+  if (!workflow || workflow.access !== "public") {
+    return errorResponse(404, "Workflow not found");
+  }
+  return jsonResponse(toWorkflowResponse(workflow));
+}
+
+export async function handleWorkflowById(
+  request: Request,
+  workflowId: string,
+  options: HttpApiOptions
+): Promise<Response> {
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+
+  if (request.method === "GET") {
+    const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+    if (!workflow) return errorResponse(404, "Workflow not found");
+    const collaborator =
+      workflow.user_id === userId
+        ? null
+        : await WorkflowCollaborator.findFor(workflowId, userId);
+    if (
+      workflow.access !== "public" &&
+      workflow.user_id !== userId &&
+      !collaborator
+    ) {
+      return errorResponse(404, "Workflow not found");
+    }
+    return jsonResponse(toWorkflowResponse(workflow));
+  }
+
+  if (request.method === "PUT") {
+    const body = await parseJsonBody<WorkflowRequestBody>(request);
+    if (!body) return errorResponse(400, "Invalid JSON body");
+    try {
+      const workflow = await updateWorkflow(workflowId, body, userId);
+      try {
+        await syncRegistrations(workflow, {});
+      } catch (error) {
+        log.error("Trigger registration sync failed", {
+          workflowId,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+      return jsonResponse(toWorkflowResponse(workflow));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Invalid workflow";
+      if (message === "Workflow not found") return errorResponse(404, message);
+      if (message === WORKFLOW_CONFLICT_MESSAGE)
+        return errorResponse(409, message);
+      return errorResponse(400, message);
+    }
+  }
+
+  if (request.method === "DELETE") {
+    const workflow = (await Workflow.get(workflowId)) as Workflow | null;
+    if (!workflow) return errorResponse(404, "Workflow not found");
+    if (workflow.user_id !== userId)
+      return errorResponse(404, "Workflow not found");
+    await workflow.delete();
+    return new Response(null, { status: 204 });
+  }
+
+  return errorResponse(405, "Method not allowed");
+}
+
+// ── Job types & helpers ───────────────────────────────────────────
+
+/**
+ * Full job response — still exported here because `mcp-server.ts` consumes it
+ * when serving job metadata over MCP. Consider relocating if MCP also migrates.
+ */
+export function toJobResponse(job: Job): JsonObject {
+  return {
+    id: job.id,
+    user_id: job.user_id,
+    job_type: "workflow",
+    status: job.status,
+    workflow_id: job.workflow_id,
+    started_at: job.started_at ?? null,
+    finished_at: job.finished_at ?? null,
+    error: job.error ?? null,
+    cost: job.cost ?? null
+  };
+}
+
+// ── Nodes dummy ───────────────────────────────────────────────────
+
+export async function handleNodesDummy(request: Request): Promise<Response> {
+  if (request.method !== "GET") {
+    return errorResponse(405, "Method not allowed");
+  }
+  return jsonResponse({
+    type: "asset",
+    uri: "",
+    asset_id: null,
+    data: null,
+    metadata: null
+  });
+}
+
+// ── Asset types & helpers ──────────────────────────────────────────
+
+interface AssetCreateBody {
+  name: string;
+  content_type: string;
+  parent_id: string;
+  workflow_id?: string | null;
+  node_id?: string | null;
+  job_id?: string | null;
+  metadata?: Record<string, unknown> | null;
+  size?: number | null;
+}
+
+// Lazily initialized URL builder based on the configured storage backend.
+let _httpStorageConfig: StorageConfig | null = null;
+let _httpUrlBuilder: ((key: string) => Promise<string>) | null = null;
+
+function getHttpUrlBuilder(): (key: string) => Promise<string> {
+  const config = loadAssetStorageConfig();
+  if (!_httpUrlBuilder || _httpStorageConfig?.kind !== config.kind) {
+    _httpStorageConfig = config;
+    _httpUrlBuilder = createAssetUrlBuilder(config);
+  }
+  return _httpUrlBuilder;
+}
+
+export async function toAssetResponse(asset: Asset): Promise<JsonObject> {
+  const isFolder = asset.content_type === "folder";
+  const fileName = isFolder
+    ? null
+    : getAssetFileName(asset.id, asset.content_type);
+  const getUrl = fileName
+    ? await getHttpUrlBuilder()(assetObjectKey(asset.user_id, fileName)).catch(
+        () => null
+      )
+    : null;
+
+  const hasThumbnail =
+    asset.content_type.startsWith("image/") ||
+    asset.content_type.startsWith("video/") ||
+    asset.content_type.startsWith("audio/") ||
+    asset.content_type === "application/pdf";
+  const thumbUrl = hasThumbnail
+    ? await getHttpUrlBuilder()(
+        assetObjectKey(asset.user_id, thumbnailKey(asset.id))
+      ).catch(() => null)
+    : null;
+
+  return {
+    id: asset.id,
+    user_id: asset.user_id,
+    workflow_id: asset.workflow_id ?? null,
+    parent_id: asset.parent_id ?? null,
+    name: asset.name,
+    content_type: asset.content_type,
+    size: asset.size ?? null,
+    metadata: asset.metadata ?? null,
+    sketch_document_id: asset.sketch_document_id ?? null,
+    created_at: asset.created_at,
+    get_url: getUrl,
+    thumb_url: thumbUrl,
+    duration: asset.duration ?? null,
+    node_id: asset.node_id ?? null,
+    job_id: asset.job_id ?? null,
+    timeline_id: asset.timeline_id ?? null
+  };
+}
+
+/**
+ * Handle multipart file upload at POST /api/assets. JSON-only creation has
+ * moved to the tRPC `assets.create` procedure.
+ */
+export async function handleAssetsRoot(
+  request: Request,
+  options: HttpApiOptions
+): Promise<Response> {
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+
+  if (request.method === "POST") {
+    const contentType = request.headers.get("content-type") ?? "";
+    let body: AssetCreateBody | null = null;
+    let fileBuffer: Buffer | null = null;
+    let fileSize: number | null = null;
+
+    if (contentType.toLowerCase().includes("multipart/form-data")) {
+      try {
+        const fd = await request.formData();
+        const file = fd.get("file") as File | null;
+        // Frontend sends metadata as "json" field
+        const assetJson = fd.get("json") ?? fd.get("asset");
+        if (assetJson && typeof assetJson === "string") {
+          body = JSON.parse(assetJson) as AssetCreateBody;
+        }
+        if (file) {
+          const arrayBuffer = await file.arrayBuffer();
+          fileBuffer = Buffer.from(arrayBuffer);
+          fileSize = fileBuffer.byteLength;
+          // Use file metadata if not supplied in the asset JSON field
+          if (!body) {
+            body = {
+              name: file.name,
+              content_type: file.type || "application/octet-stream",
+              parent_id: userId
+            };
+          } else {
+            body.name = body.name || file.name;
+            body.content_type =
+              body.content_type || file.type || "application/octet-stream";
+            body.parent_id = body.parent_id || userId;
+          }
+        }
+      } catch {
+        return errorResponse(400, "Invalid multipart form data");
+      }
+    } else {
+      body = await parseJsonBody<AssetCreateBody>(request);
+    }
+
+    if (
+      !body ||
+      typeof body.name !== "string" ||
+      typeof body.content_type !== "string" ||
+      typeof body.parent_id !== "string"
+    ) {
+      return errorResponse(
+        400,
+        "Invalid JSON body: name, content_type, and parent_id are required"
+      );
+    }
+
+    const metadata: Record<string, unknown> = body.metadata ?? {};
+
+    const asset = (await Asset.create({
+      user_id: userId,
+      name: body.name,
+      content_type: body.content_type,
+      parent_id: body.parent_id,
+      workflow_id: body.workflow_id ?? null,
+      node_id: body.node_id ?? null,
+      job_id: body.job_id ?? null,
+      metadata:
+        Object.keys(metadata).length > 0 ? metadata : (body.metadata ?? null),
+      size: fileSize ?? body.size ?? null
+    })) as Asset;
+
+    if (fileBuffer) {
+      const fileName = getAssetFileName(asset.id, asset.content_type);
+      log.info("asset upload (multipart)", {
+        assetId: asset.id,
+        fileName,
+        contentType: asset.content_type,
+        bytes: fileBuffer.byteLength
+      });
+      try {
+        await storeAssetWithThumbnail(
+          asset.user_id,
+          asset.id,
+          fileName,
+          new Uint8Array(fileBuffer),
+          asset.content_type
+        );
+      } catch (error) {
+        // The row was created before the bytes were written. If the store
+        // rejects (over the upload cap, or any S3/Supabase failure) drop the
+        // row rather than leave it pointing at bytes that never landed.
+        try {
+          await asset.delete();
+        } catch (deleteError) {
+          log.warn("failed to delete asset row after upload failure", {
+            assetId: asset.id,
+            error: String(deleteError)
+          });
+        }
+        throw error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    return jsonResponse(await toAssetResponse(asset));
+  }
+
+  return errorResponse(405, "Method not allowed");
+}
+
+/**
+ * POST /api/assets/:id/extract-audio
+ *
+ * Extracts the audio track of a video asset into a new audio (WAV) asset and
+ * returns it. If the video has no audio track, responds `{ has_audio: false }`
+ * with no asset. Used by the timeline to create a linked, independently
+ * editable audio clip when a video is imported.
+ */
+export async function handleExtractAudio(
+  request: Request,
+  options: HttpApiOptions,
+  assetId: string
+): Promise<Response> {
+  const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+
+  const source = (await Asset.get(assetId)) as Asset | null;
+  if (!source) {
+    return errorResponse(404, "Asset not found");
+  }
+  // Ownership guard: in multi-user mode an asset is only visible to its owner.
+  if (source.user_id !== userId) {
+    return errorResponse(404, "Asset not found");
+  }
+  if (!source.content_type.startsWith("video/")) {
+    return errorResponse(400, "Asset is not a video");
+  }
+
+  const videoBytes = await retrieveAssetBytes(
+    getAssetAdapter(),
+    source.user_id,
+    source.id,
+    source.content_type
+  );
+  if (!videoBytes) {
+    return errorResponse(404, "Asset bytes not found");
+  }
+
+  // Write the video bytes to a single temp input file, then probe + extract
+  // against that path (ffmpeg/ffprobe need a path).
+  const dir = await fsp.mkdtemp(
+    nodePath.join(os.tmpdir(), "nodetool-extract-")
+  );
+  const inputPath = nodePath.join(dir, "input");
+  let wavBytes: Uint8Array;
+  let durationMs: number | null;
+  try {
+    await fsp.writeFile(inputPath, videoBytes);
+    if (!(await probeHasAudio(inputPath))) {
+      return jsonResponse({ has_audio: false });
+    }
+    ({ bytes: wavBytes, durationMs } = await extractAudio(inputPath));
+  } catch (err) {
+    if (err instanceof MediaToolingMissingError) {
+      return errorResponse(
+        503,
+        "ffmpeg is required to extract audio from video. Install the ffmpeg runtime."
+      );
+    }
+    throw err;
+  } finally {
+    await fsp.rm(dir, { recursive: true, force: true });
+  }
+
+  const audioAsset = (await Asset.create({
+    user_id: userId,
+    name: `${source.name} (audio)`,
+    content_type: "audio/wav",
+    parent_id: source.id,
+    workflow_id: source.workflow_id ?? null,
+    node_id: null,
+    job_id: null,
+    metadata: null,
+    size: wavBytes.byteLength,
+    duration: durationMs != null ? durationMs / 1000 : null
+  })) as Asset;
+
+  const audioKey = getAssetFileName(audioAsset.id, audioAsset.content_type);
+  await storeAssetWithThumbnail(
+    audioAsset.user_id,
+    audioAsset.id,
+    audioKey,
+    wavBytes,
+    audioAsset.content_type
+  );
+
+  return jsonResponse({
+    has_audio: true,
+    asset: await toAssetResponse(audioAsset)
+  });
+}
+
+export async function handleApiRequest(
+  request: Request,
+  options: HttpApiOptions = {}
+): Promise<Response> {
+  const url = new URL(request.url);
+  const pathname = normalizePath(url.pathname);
+
+  if (pathname.startsWith("/v1/")) {
+    const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+    const response = await handleOpenAIRequest(
+      request,
+      pathname,
+      userId,
+      options.openai
+    );
+    if (response) return response;
+  }
+
+  if (pathname.startsWith("/api/oauth/")) {
+    const response = await handleOAuthRequest(request, pathname, () =>
+      getUserId(request, options.userIdHeader ?? "x-user-id")
+    );
+    if (response) return response;
+  }
+
+  if (pathname === "/api/users/validate_username") {
+    if (request.method !== "GET")
+      return errorResponse(405, "Method not allowed");
+    const url = new URL(request.url);
+    const username = url.searchParams.get("username")?.trim() ?? null;
+    if (username === null)
+      return errorResponse(400, "username parameter is required");
+    if (!username) return errorResponse(400, "username cannot be empty");
+    const valid = /^[a-zA-Z0-9_-]{3,32}$/.test(username);
+    return jsonResponse({ valid, available: true });
+  }
+
+  if (pathname === "/api/nodes/dummy") {
+    return handleNodesDummy(request);
+  }
+
+  if (pathname === "/api/nodes/metadata" || pathname === "/api/node/metadata") {
+    return handleNodeMetadata(request, options);
+  }
+
+  if (pathname === "/api/sdk/v1/node-types") {
+    return handleSdkNodeTypeInventory(request, options);
+  }
+
+  if (pathname === "/api/sdk/v1/capabilities") {
+    return handleSdkCapabilities(request, options);
+  }
+
+  if (pathname === "/api/sdk/v1/preflight") {
+    return handleSdkPreflight(request, options);
+  }
+
+  if (pathname === "/api/workflows") {
+    return handleWorkflowsRoot(request, options);
+  }
+
+  if (pathname === "/api/sdk/v1/workflows") {
+    return handleSdkWorkflowSummaries(request, options);
+  }
+
+  if (pathname === "/api/sdk/v1/workflow-interfaces") {
+    return handleWorkflowInterfaces(request, options);
+  }
+
+  if (pathname === "/api/workflows/names") {
+    if (request.method !== "GET")
+      return errorResponse(405, "Method not allowed");
+    const userId = getUserId(request, options.userIdHeader ?? "x-user-id");
+    const [workflows] = await Workflow.paginate(userId, { limit: 1000 });
+    const names: Record<string, string> = {};
+    for (const wf of workflows) names[wf.id] = wf.name;
+    return jsonResponse(names);
+  }
+
+  if (pathname === "/api/workflows/tools") {
+    return handleWorkflowTools(request, options);
+  }
+
+  if (pathname === "/api/workflows/export-bundle") {
+    return handleWorkflowsExportBundle(request, options);
+  }
+
+  if (pathname === "/api/workflows/import-bundle") {
+    return handleWorkflowImportBundle(request, options);
+  }
+
+  if (pathname === "/api/workflows/examples") {
+    return handleWorkflowExamples(request, options);
+  }
+
+  if (pathname === "/api/workflows/examples/search") {
+    return handleWorkflowExamplesSearch(request, options);
+  }
+
+  if (pathname.startsWith("/api/workflows/examples/thumbnails/")) {
+    const filename = decodeURIComponent(
+      pathname.slice("/api/workflows/examples/thumbnails/".length)
+    );
+    return handleWorkflowExamplesThumbnail(request, filename, options);
+  }
+
+  // /api/workflows/examples/{package}/{name} — one example with its graph.
+  if (pathname.startsWith("/api/workflows/examples/")) {
+    const rest = pathname.slice("/api/workflows/examples/".length);
+    const slash = rest.indexOf("/");
+    if (slash > 0) {
+      return handleWorkflowExampleByName(
+        request,
+        decodeURIComponent(rest.slice(0, slash)),
+        decodeURIComponent(rest.slice(slash + 1)),
+        options
+      );
+    }
+    return errorResponse(404, "Not found");
+  }
+
+  if (pathname === "/api/workflows/public") {
+    return handlePublicWorkflows(request);
+  }
+
+  if (pathname.startsWith("/api/workflows/public/")) {
+    const workflowId = decodeURIComponent(
+      pathname.slice("/api/workflows/public/".length)
+    );
+    if (!workflowId) return errorResponse(404, "Not found");
+    return handlePublicWorkflowById(request, workflowId);
+  }
+
+  // ── Interactive debug sessions ─────────────────────────────────────
+  // Pattern: /api/debug/sessions/{id}[/verdict|/cancel]
+  {
+    const debugSessionMatch = pathname.match(
+      /^\/api\/debug\/sessions\/([^/]+)(?:\/([a-z]+))?$/
+    );
+    if (debugSessionMatch) {
+      return handleDebugSessionRequest(
+        request,
+        decodeURIComponent(debugSessionMatch[1]),
+        debugSessionMatch[2] ?? null,
+        options
+      );
+    }
+  }
+
+  // ── Workflow sub-resource routes ───────────────────────────────────
+  // Pattern: /api/workflows/{id}/...
+  {
+    const wfSubMatch = pathname.match(/^\/api\/workflows\/([^/]+)\/(.+)$/);
+    if (wfSubMatch) {
+      const workflowId = decodeURIComponent(wfSubMatch[1]);
+      const subPath = wfSubMatch[2];
+
+      if (subPath === "run") {
+        return handleWorkflowRun(request, workflowId, options);
+      }
+      if (subPath === "debug") {
+        return handleWorkflowRun(request, workflowId, options, true);
+      }
+      if (subPath === "autosave") {
+        return handleWorkflowAutosave(request, workflowId, options);
+      }
+      if (subPath === "app") {
+        return handleWorkflowApp(request, workflowId, options);
+      }
+      if (subPath === "generate-name") {
+        return handleWorkflowGenerateName(request, workflowId, options);
+      }
+      if (subPath === "dsl-export") {
+        return handleWorkflowDslExport(request, workflowId, options);
+      }
+      if (subPath === "interface") {
+        return handleWorkflowInterface(request, workflowId, options);
+      }
+      if (subPath === "export-bundle") {
+        return handleWorkflowExportBundle(request, workflowId, options);
+      }
+      if (subPath === "versions") {
+        return handleWorkflowVersions(request, workflowId, options);
+      }
+      // /api/workflows/{id}/versions/{version}/restore
+      const versionRestoreMatch = subPath.match(/^versions\/(\d+)\/restore$/);
+      if (versionRestoreMatch) {
+        const versionNum = Number.parseInt(versionRestoreMatch[1], 10);
+        return handleWorkflowVersionByNumber(
+          request,
+          workflowId,
+          versionNum,
+          options
+        );
+      }
+      // /api/workflows/{id}/versions/{version} (GET by version number)
+      const versionNumMatch = subPath.match(/^versions\/(\d+)$/);
+      if (versionNumMatch) {
+        const versionNum = Number.parseInt(versionNumMatch[1], 10);
+        return handleWorkflowVersionByNumber(
+          request,
+          workflowId,
+          versionNum,
+          options
+        );
+      }
+      // /api/workflows/{id}/versions/{version_id} (DELETE by id — version_id is not numeric)
+      const versionIdMatch = subPath.match(/^versions\/([^/]+)$/);
+      if (versionIdMatch) {
+        const versionId = decodeURIComponent(versionIdMatch[1]);
+        return handleWorkflowVersionDeleteById(
+          request,
+          workflowId,
+          versionId,
+          options
+        );
+      }
+    }
+  }
+
+  if (pathname.startsWith("/api/workflows/")) {
+    const workflowId = decodeURIComponent(
+      pathname.slice("/api/workflows/".length)
+    );
+    if (!workflowId) return errorResponse(404, "Not found");
+    return handleWorkflowById(request, workflowId, options);
+  }
+
+  if (pathname.startsWith("/api/storage/")) {
+    return getStorageHandler(options.storage)(request);
+  }
+
+  if (pathname === "/api/files" || pathname.startsWith("/api/files/")) {
+    return handleFileRequest(request);
+  }
+
+  if (pathname === "/admin/secrets/import") {
+    if (request.method !== "POST")
+      return errorResponse(405, "Method not allowed");
+    return errorResponse(
+      501,
+      "Secrets import not available in standalone mode"
+    );
+  }
+
+  return errorResponse(404, "Not found");
+}
+
+async function readNodeRequestBody(
+  request: IncomingMessage
+): Promise<Uint8Array> {
+  const chunks: Uint8Array[] = [];
+  for await (const chunk of request) {
+    if (chunk instanceof Uint8Array) {
+      chunks.push(chunk);
+    } else {
+      chunks.push(Buffer.from(String(chunk)));
+    }
+  }
+  const size = chunks.reduce((sum, c) => sum + c.byteLength, 0);
+  const merged = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
+}
+
+export async function handleNodeHttpRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  options: HttpApiOptions = {}
+): Promise<void> {
+  const method = req.method ?? "GET";
+  const baseUrl = options.baseUrl ?? "http://127.0.0.1:7777";
+  const url = new URL(req.url ?? "/", baseUrl);
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (Array.isArray(value)) {
+      for (const v of value) headers.append(key, v);
+    } else if (value !== undefined) {
+      headers.set(key, value);
+    }
+  }
+
+  const hasBody = method !== "GET" && method !== "HEAD";
+  const rawBody = hasBody ? await readNodeRequestBody(req) : undefined;
+  const request = new Request(url.toString(), {
+    method,
+    headers,
+    body:
+      rawBody && rawBody.byteLength > 0 ? new Uint8Array(rawBody) : undefined
+  });
+
+  const response = await handleApiRequest(request, options);
+
+  res.statusCode = response.status;
+  response.headers.forEach((value, key) => {
+    res.setHeader(key, value);
+  });
+
+  if (!response.body) {
+    res.end();
+    return;
+  }
+
+  const acceptEncoding = req.headers["accept-encoding"] ?? "";
+  const contentType = response.headers.get("content-type") ?? "";
+  const mayCompress =
+    response.status !== 206 &&
+    !response.headers.has("content-range") &&
+    (contentType.includes("json") || contentType.startsWith("text/")) &&
+    acceptEncoding.includes("gzip");
+
+  if (mayCompress) {
+    const bodyBuffer = Buffer.from(await response.arrayBuffer());
+    if (bodyBuffer.length > GZIP_THRESHOLD) {
+      const compressed = gzipSync(bodyBuffer);
+      res.setHeader("content-encoding", "gzip");
+      res.setHeader("content-length", compressed.length);
+      res.end(compressed);
+    } else {
+      res.end(bodyBuffer);
+    }
+    return;
+  }
+
+  const reader = response.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (!res.write(value)) {
+      await once(res, "drain");
+    }
+  }
+  res.end();
+}
+
+export function createHttpApiServer(options: HttpApiOptions = {}): Server {
+  return createServer((req, res) => {
+    void handleNodeHttpRequest(req, res, options).catch((error) => {
+      log.error(
+        "Request failed",
+        error instanceof Error ? error : new Error(String(error))
+      );
+      res.statusCode = 500;
+      res.setHeader("content-type", "application/json");
+      const detail = error instanceof Error ? error.message : String(error);
+      res.end(JSON.stringify({ detail }));
+    });
+  });
+}

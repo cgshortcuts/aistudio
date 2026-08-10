@@ -1,0 +1,161 @@
+import React, { useMemo, useCallback, memo, useRef } from "react";
+import { Handle, Position } from "@xyflow/react";
+import useConnectionStore from "../../stores/ConnectionStore";
+import { useShallow } from "zustand/react/shallow";
+import { Slugify } from "../../utils/TypeHandler";
+import { OutputSlot, TypeMetadata } from "../../stores/ApiTypes";
+import { useContextMenuActions } from "../../stores/ContextMenuStore";
+import isEqual from "../../utils/isEqual";
+import { isConnectableCached } from "../node_menu/typeFilterUtils";
+import HandleTooltip from "../HandleTooltip";
+import { useNodes } from "../../contexts/NodeContext";
+import useMetadataStore from "../../stores/MetadataStore";
+import { findInputHandle } from "../../utils/handleUtils";
+
+export type NodeOutputProps = {
+  id: string;
+  output: OutputSlot;
+  isDynamic?: boolean;
+  displayName?: string;
+};
+
+const NodeOutput: React.FC<NodeOutputProps> = ({ id, output, displayName }) => {
+  const { connectType, connectDirection, connectNodeId, connectHandleId } =
+    useConnectionStore(
+      useShallow((state) => ({
+        connectType: state.connectType,
+        connectDirection: state.connectDirection,
+        connectNodeId: state.connectNodeId,
+        connectHandleId: state.connectHandleId
+      }))
+    );
+  const { openContextMenu } = useContextMenuActions();
+  const findNode = useNodes((state) => state.findNode);
+  const getMetadata = useMetadataStore((state) => state.getMetadata);
+
+  const contextMenuTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const effectiveConnectType = useMemo<TypeMetadata | null>(() => {
+    if (
+      connectDirection !== "target" ||
+      !connectNodeId ||
+      !connectHandleId ||
+      connectType
+    ) {
+      return connectType;
+    }
+    const targetNode = findNode(connectNodeId);
+    if (!targetNode) {
+      return null;
+    }
+    const metadata = getMetadata(targetNode.type || "");
+    if (!metadata) {
+      return null;
+    }
+    const handle = findInputHandle(targetNode, connectHandleId, metadata);
+    return handle?.type ?? null;
+  }, [
+    connectDirection,
+    connectHandleId,
+    connectNodeId,
+    connectType,
+    findNode,
+    getMetadata
+  ]);
+
+  const outputContextMenu = useCallback(
+    (event: React.MouseEvent, id: string, output: OutputSlot) => {
+      event.preventDefault();
+      if (contextMenuTimeoutRef.current) {
+        clearTimeout(contextMenuTimeoutRef.current);
+      }
+      contextMenuTimeoutRef.current = setTimeout(() => {
+        openContextMenu(
+          "output-context-menu",
+          id,
+          event.clientX + 25,
+          event.clientY - 50,
+          "react-flow__pane",
+          output.type,
+          output.name
+        );
+      }, 0);
+    },
+    [openContextMenu]
+  );
+
+  React.useEffect(() => {
+    return () => {
+      if (contextMenuTimeoutRef.current) {
+        clearTimeout(contextMenuTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const isConnectable = useMemo(() => {
+    if (!effectiveConnectType || connectDirection !== "target") {
+      return true;
+    }
+    return (
+      isConnectableCached(output.type, effectiveConnectType) &&
+      connectNodeId !== id
+    );
+  }, [connectDirection, connectNodeId, effectiveConnectType, id, output.type]);
+
+  const classConnectable = useMemo(() => {
+    // Control edges can connect from any Agent node
+    if (effectiveConnectType?.type === "control") {
+      return "is-connectable";
+    }
+    if (connectDirection === "source") {
+      if (connectNodeId === id && connectHandleId === output.name) {
+        return "is-connectable";
+      }
+      return "not-connectable";
+    }
+    if (!effectiveConnectType || connectDirection !== "target") {
+      return "is-connectable";
+    }
+    return isConnectableCached(output.type, effectiveConnectType) &&
+      connectNodeId !== id
+      ? "is-connectable"
+      : "not-connectable";
+  }, [
+    connectDirection,
+    connectHandleId,
+    connectNodeId,
+    effectiveConnectType,
+    id,
+    output.type,
+    output.name
+  ]);
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => outputContextMenu(e, id, output),
+    [outputContextMenu, id, output]
+  );
+
+  return (
+    <div className="output-handle-container">
+      <HandleTooltip
+        typeMetadata={output.type}
+        paramName={output.name}
+        displayName={displayName}
+        className={classConnectable}
+        handlePosition="right"
+        enableHover={true}
+      >
+        <Handle
+          type="source"
+          id={output.name}
+          position={Position.Right}
+          isConnectable={isConnectable}
+          onContextMenu={handleContextMenu}
+          className={`${classConnectable} ${Slugify(output.type.type)}`}
+        />
+      </HandleTooltip>
+    </div>
+  );
+};
+
+export default memo(NodeOutput, isEqual);

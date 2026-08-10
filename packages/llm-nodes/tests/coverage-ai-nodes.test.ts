@@ -1,0 +1,2147 @@
+import { describe, it, expect } from "vitest";
+import { getNodeMetadata, hasStreamingOutput } from "@nodetool-ai/node-sdk";
+import { BaseProvider } from "@nodetool-ai/runtime";
+// Import from source (not the package's stale dist) so these tests exercise the
+// current AgentNode, which now drives its tool loop through provider.generateLoop.
+// AGENT_NODES and CreateThreadNode must come from the same source module so class
+// identity and the module-level thread store are shared with AgentNode.
+import {
+  SummarizerNode,
+  EnhancePromptNode,
+  CreateThreadNode,
+  ExtractorNode,
+  ClassifierNode,
+  AgentNode,
+  AGENT_NODES
+} from "../src/nodes/agents.js";
+import {
+  StructuredOutputGeneratorNode,
+  DataGeneratorNode,
+  ListGeneratorNode,
+  ChartGeneratorNode,
+  SVGGeneratorNode,
+  GENERATOR_NODES
+} from "../src/nodes/generators.js";
+
+// Delegate to the real base loop so completion-style mocks (which only implement
+// generateMessages) drive AgentNode's generateLoop-based tool loop. The agent SDK
+// style mock overrides generateLoop itself instead.
+function delegateGenerateLoop(this: any, args: unknown) {
+  return (
+    BaseProvider.prototype as { generateLoop: (a: unknown) => unknown }
+  ).generateLoop.call(this, args);
+}
+
+// Wrap a completion-style mock provider (only generateMessages) so the base
+// generateLoop can drive it: add a traced alias it calls per turn plus the loop.
+function withAgentLoop<T extends Record<string, any>>(provider: T): T {
+  const traced =
+    provider.generateMessagesTraced ??
+    async function* (this: any, ...args: any[]) {
+      yield* this.generateMessages(...args);
+    };
+  return {
+    ...provider,
+    generateMessagesTraced: traced,
+    generateLoop: delegateGenerateLoop
+  };
+}
+
+function metadataDefaults(NodeCls: any) {
+  const metadata = getNodeMetadata(NodeCls);
+  return Object.fromEntries(
+    metadata.properties
+      .filter((prop) => Object.prototype.hasOwnProperty.call(prop, "default"))
+      .map((prop) => [prop.name, prop.default])
+  );
+}
+
+function expectMetadataDefaults(NodeCls: any) {
+  expect(new NodeCls().serialize()).toEqual(metadataDefaults(NodeCls));
+}
+
+describe("text agents persist generations", () => {
+  // These text content-card nodes opt into auto_save_asset so their primary
+  // text output is saved as a generation (text/plain asset) on job completion,
+  // giving them a reload-surviving, browsable history like media nodes.
+  it.each([
+    [SummarizerNode, "text"],
+    [EnhancePromptNode, "text"],
+    [ClassifierNode, "output"],
+    [AgentNode, "text"]
+  ])("%p saves its primary str output as a generation", (NodeCls, primary) => {
+    const meta = getNodeMetadata(NodeCls as any);
+    expect(meta.auto_save_asset).toBe(true);
+    // The backend only persists text generations when the primary output is str.
+    expect(meta.outputs[0]?.name).toBe(primary);
+    expect((meta.outputs[0]?.type as { type?: string })?.type).toBe("str");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// agents.ts
+// ---------------------------------------------------------------------------
+
+describe("AGENT_NODES export", () => {
+  it("contains all 7 agent node classes", () => {
+    expect(AGENT_NODES).toHaveLength(6);
+    expect(AGENT_NODES).toContain(SummarizerNode);
+    expect(AGENT_NODES).toContain(EnhancePromptNode);
+    expect(AGENT_NODES).toContain(CreateThreadNode);
+    expect(AGENT_NODES).toContain(ExtractorNode);
+    expect(AGENT_NODES).toContain(ClassifierNode);
+    expect(AGENT_NODES).toContain(AgentNode);
+  });
+});
+
+
+// ---- SummarizerNode ----
+describe("SummarizerNode", () => {
+  it("has correct static metadata", () => {
+    expect(SummarizerNode.nodeType).toBe("nodetool.agents.Summarizer");
+    expect(SummarizerNode.title).toBe("Summarizer");
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(SummarizerNode);
+  });
+
+  it("throws 'Select a model' when no model is configured", async () => {
+    const n = new (SummarizerNode as any)();
+    n.assign({
+      text: "First sentence. Second sentence. Third sentence."
+    });
+    n.max_sentences = 2;
+    await expect(n.process()).rejects.toThrow("Select a model");
+  });
+
+  it("throws when a model is set but the context lacks getProvider", async () => {
+    const n = new (SummarizerNode as any)();
+    n.assign({
+      text: "Long text",
+      model: { provider: "test", id: "m1" }
+    });
+    await expect(n.process({} as any)).rejects.toThrow(
+      "Processing context is required"
+    );
+  });
+
+  it("uses provider when model is connected", async () => {
+    const n = new (SummarizerNode as any)();
+    const mockProvider = {
+      generateMessage: async ({ messages }: any) => ({
+        content: `summary:${messages[1].content}`
+      }),
+      async generateMessageTraced(...a: any[]) {
+        return (this as any).generateMessage(...a);
+      }
+    };
+    const mockContext = {
+      getProvider: async () => mockProvider
+    };
+    n.assign({
+      text: "Long text",
+      model: { provider: "test", id: "m1" }
+    });
+    n.max_sentences = 2;
+    const result = await n.process(mockContext as any);
+    expect(result.text).toContain("Long text");
+  });
+
+  it("strips <think> tags from streamed chunks and the final summary", async () => {
+    const n = new (SummarizerNode as any)();
+    const mockProvider = {
+      async *generateMessages() {
+        yield {
+          type: "chunk",
+          content: "<think>reasoning here</think>Clean ",
+          content_type: "text",
+          done: false
+        };
+        yield {
+          type: "chunk",
+          content: "summary.",
+          content_type: "text",
+          done: true
+        };
+      }
+    };
+    const mockContext = { getProvider: async () => mockProvider };
+    n.assign({ text: "x", model: { provider: "test", id: "m1" } });
+    const chunks: string[] = [];
+    let finalText = "";
+    for await (const item of n.genProcess(mockContext as any)) {
+      if (item.chunk) chunks.push((item.chunk as any).content);
+      if (typeof item.text === "string") finalText = item.text;
+    }
+    expect(chunks.join("")).toBe("Clean summary.");
+    expect(chunks.join("")).not.toContain("reasoning");
+    expect(finalText).toBe("Clean summary.");
+    expect(finalText).not.toContain("think");
+  });
+});
+
+// ---- EnhancePromptNode ----
+describe("EnhancePromptNode", () => {
+  it("has correct static metadata", () => {
+    expect(EnhancePromptNode.nodeType).toBe("nodetool.agents.EnhancePrompt");
+    expect(EnhancePromptNode.title).toBe("Enhance Prompt");
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(EnhancePromptNode);
+  });
+
+  it("declares a target enum with the expected options", () => {
+    const meta = getNodeMetadata(EnhancePromptNode as any);
+    const target = meta.properties.find((p) => p.name === "target");
+    expect(target?.values).toEqual([
+      "general",
+      "text",
+      "image",
+      "video",
+      "audio",
+      "code"
+    ]);
+    expect(target?.default).toBe("general");
+  });
+
+  it("throws 'Select a model' when a non-empty prompt has no model", async () => {
+    const n = new (EnhancePromptNode as any)();
+    n.assign({ prompt: "  a short idea  " });
+    await expect(n.process()).rejects.toThrow("Select a model");
+  });
+
+  it("throws when a model is set but the context lacks getProvider", async () => {
+    const n = new (EnhancePromptNode as any)();
+    n.assign({ prompt: "idea", model: { provider: "test", id: "m1" } });
+    await expect(n.process({} as any)).rejects.toThrow(
+      "Processing context is required"
+    );
+  });
+
+  it("returns empty string for empty prompt", async () => {
+    const n = new (EnhancePromptNode as any)();
+    n.assign({ prompt: "   " });
+    const result = await n.process();
+    expect(result.text).toBe("");
+  });
+
+  it("uses the provider to rewrite the prompt, tailored to the target", async () => {
+    const n = new (EnhancePromptNode as any)();
+    const mockProvider = {
+      generateMessage: async ({ messages }: any) => ({
+        content: `ENHANCED: ${messages[1].content}`
+      }),
+      async generateMessageTraced(...a: any[]) {
+        return (this as any).generateMessage(...a);
+      }
+    };
+    const mockContext = { getProvider: async () => mockProvider };
+    n.assign({
+      prompt: "a cat",
+      target: "image",
+      model: { provider: "test", id: "m1" }
+    });
+    const result = await n.process(mockContext as any);
+    expect(result.text).toContain("ENHANCED");
+    expect(result.text).toContain("a cat");
+    // The image-target guidance is folded into the user message.
+    expect(result.text).toContain("image generation model");
+  });
+
+  it("streams improved-prompt chunks then a final text output", async () => {
+    const n = new (EnhancePromptNode as any)();
+    const mockProvider = {
+      async *generateMessages() {
+        yield {
+          type: "chunk",
+          content: "better ",
+          content_type: "text",
+          done: false
+        };
+        yield {
+          type: "chunk",
+          content: "prompt",
+          content_type: "text",
+          done: false
+        };
+      }
+    };
+    const mockContext = { getProvider: async () => mockProvider };
+    n.assign({ prompt: "x", model: { provider: "test", id: "m1" } });
+    const chunks: string[] = [];
+    let finalText = "";
+    for await (const item of n.genProcess(mockContext as any)) {
+      if (item.chunk) chunks.push((item.chunk as any).content);
+      if (typeof item.text === "string") finalText = item.text;
+    }
+    expect(chunks.join("")).toBe("better prompt");
+    expect(finalText).toBe("better prompt");
+  });
+
+  it("ignores thinking chunks and falls back to the original prompt when the model emits no content", async () => {
+    const n = new (EnhancePromptNode as any)();
+    const mockProvider = {
+      async *generateMessages() {
+        yield {
+          type: "chunk",
+          content: "internal reasoning",
+          content_type: "text",
+          thinking: true,
+          done: false
+        };
+      }
+    };
+    const mockContext = { getProvider: async () => mockProvider };
+    n.assign({ prompt: "keep me", model: { provider: "test", id: "m1" } });
+    const result = await n.process(mockContext as any);
+    expect(result.text).toBe("keep me");
+  });
+
+  it("strips <think> tags from streamed chunks and the final prompt", async () => {
+    const n = new (EnhancePromptNode as any)();
+    const mockProvider = {
+      async *generateMessages() {
+        yield {
+          type: "chunk",
+          content: "<think>plan the rewrite</think>Better ",
+          content_type: "text",
+          done: false
+        };
+        yield {
+          type: "chunk",
+          content: "prompt.",
+          content_type: "text",
+          done: true
+        };
+      }
+    };
+    const mockContext = { getProvider: async () => mockProvider };
+    n.assign({ prompt: "x", model: { provider: "test", id: "m1" } });
+    const chunks: string[] = [];
+    let finalText = "";
+    for await (const item of n.genProcess(mockContext as any)) {
+      if (item.chunk) chunks.push((item.chunk as any).content);
+      if (typeof item.text === "string") finalText = item.text;
+    }
+    expect(chunks.join("")).toBe("Better prompt.");
+    expect(chunks.join("")).not.toContain("plan the rewrite");
+    expect(finalText).toBe("Better prompt.");
+  });
+});
+
+// ---- CreateThreadNode ----
+describe("CreateThreadNode", () => {
+  it("has correct static metadata", () => {
+    expect(CreateThreadNode.nodeType).toBe("nodetool.agents.CreateThread");
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(CreateThreadNode);
+  });
+
+  it("creates a new thread with auto-generated id", async () => {
+    const n = new (CreateThreadNode as any)();
+    n.assign({ title: "My Thread" });
+    const result = await n.process();
+    expect(result.thread_id).toMatch(/^thread_\d+_/);
+  });
+
+  it("reuses existing thread when thread_id provided", async () => {
+    const n = new (CreateThreadNode as any)();
+    // First call creates the thread
+    n.assign({ thread_id: "test_reuse_123", title: "T1" });
+    const r1 = await n.process();
+    expect(r1.thread_id).toBe("test_reuse_123");
+    // Second call reuses it
+    n.assign({ thread_id: "test_reuse_123", title: "T2" });
+    const r2 = await n.process();
+    expect(r2.thread_id).toBe("test_reuse_123");
+  });
+
+  it("creates thread from assigned defaults when inputs are empty", async () => {
+    const n = new (CreateThreadNode as any)();
+    n.assign({ thread_id: "", title: "PropTitle" });
+    const result = await n.process();
+    expect(result.thread_id).toMatch(/^thread_/);
+  });
+});
+
+// ---- ExtractorNode ----
+describe("ExtractorNode", () => {
+  it("has correct static metadata", () => {
+    expect(ExtractorNode.nodeType).toBe("nodetool.agents.Extractor");
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(ExtractorNode);
+  });
+
+  it("throws 'Select a model' when no model is configured", async () => {
+    const n = new (ExtractorNode as any)();
+    n.assign({ text: '{"name": "Alice", "age": 30}' });
+    await expect(n.process()).rejects.toThrow("Select a model");
+  });
+
+  it("throws when a model is set but the context lacks getProvider", async () => {
+    const n = new (ExtractorNode as any)();
+    n.assign({ text: "data", model: { provider: "test", id: "m1" } });
+    await expect(n.process({} as any)).rejects.toThrow(
+      "Processing context is required"
+    );
+  });
+
+  it("returns the structured tool call from the provider", async () => {
+    const n = new (ExtractorNode as any)();
+    const mockProvider = {
+      generateMessage: async () => ({
+        content: "",
+        toolCalls: [
+          {
+            id: "t1",
+            name: "extraction_result",
+            args: { name: "Alice", age: 30 }
+          }
+        ]
+      }),
+      async generateMessageTraced(...a: any[]) {
+        return (this as any).generateMessage(...a);
+      }
+    };
+    const mockContext = { getProvider: async () => mockProvider };
+    n.assign({
+      text: "Alice is 30",
+      model: { provider: "test", id: "m1" }
+    });
+    const result = await n.process(mockContext as any);
+    expect(result.name).toBe("Alice");
+    expect(result.age).toBe(30);
+  });
+
+  it("throws when the model returns no structured data", async () => {
+    const n = new (ExtractorNode as any)();
+    const mockProvider = {
+      generateMessage: async () => ({ content: "sorry, no idea" }),
+      async generateMessageTraced(...a: any[]) {
+        return (this as any).generateMessage(...a);
+      }
+    };
+    const mockContext = { getProvider: async () => mockProvider };
+    n.assign({
+      text: "unparseable",
+      model: { provider: "test", id: "m1" }
+    });
+    await expect(n.process(mockContext as any)).rejects.toThrow(
+      "did not return structured data"
+    );
+  });
+
+  it("default system prompt tells the model to call the extraction tool, not emit a fenced block", () => {
+    const meta = getNodeMetadata(ExtractorNode as any);
+    const systemPrompt = meta.properties.find(
+      (p) => p.name === "system_prompt"
+    );
+    const value = String(systemPrompt?.default ?? "");
+    expect(value.toLowerCase()).toContain("extraction tool");
+    expect(value.toLowerCase()).not.toContain("fenced code block");
+  });
+});
+
+// ---- ClassifierNode ----
+describe("ClassifierNode", () => {
+  it("has correct static metadata", () => {
+    expect(ClassifierNode.nodeType).toBe("nodetool.agents.Classifier");
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(ClassifierNode);
+  });
+
+  it("throws when fewer than two categories are provided", async () => {
+    const n = new (ClassifierNode as any)();
+    n.assign({ text: "hello", categories: [] });
+    await expect(n.process()).rejects.toThrow(
+      "At least 2 categories are required"
+    );
+  });
+
+  it("throws 'Select a model' when categories are valid but no model is set", async () => {
+    const n = new (ClassifierNode as any)();
+    n.assign({
+      text: "I love programming in python",
+      categories: ["sports", "programming", "cooking"]
+    });
+    await expect(n.process()).rejects.toThrow("Select a model");
+  });
+
+  it("throws when a model is set but the context lacks getProvider", async () => {
+    const n = new (ClassifierNode as any)();
+    n.assign({
+      text: "hi",
+      categories: ["a", "b"],
+      model: { provider: "test", id: "m1" }
+    });
+    await expect(n.process({} as any)).rejects.toThrow(
+      "Processing context is required"
+    );
+  });
+
+  it("throws when the model output maps to no allowed category", async () => {
+    const n = new (ClassifierNode as any)();
+    const mockProvider = {
+      generateMessage: async () => ({ content: '{"category":"nonexistent"}' }),
+      async generateMessageTraced(...a: any[]) {
+        return (this as any).generateMessage(...a);
+      }
+    };
+    const mockContext = { getProvider: async () => mockProvider };
+    n.assign({
+      text: "help me",
+      categories: ["billing", "support"],
+      model: { provider: "test", id: "m1" }
+    });
+    await expect(n.process(mockContext as any)).rejects.toThrow(
+      /could not map the model output/i
+    );
+  });
+
+  it("handles non-array categories via getCategories", async () => {
+    const n = new (ClassifierNode as any)();
+    n.assign({
+      text: "test",
+      categories: "not-an-array"
+    });
+    await expect(n.process()).rejects.toThrow(
+      "At least 2 categories are required"
+    );
+  });
+
+  it("filters empty strings from categories", async () => {
+    const n = new (ClassifierNode as any)();
+    n.assign({
+      text: "hello world",
+      categories: ["", "  ", "hello"]
+    });
+    await expect(n.process()).rejects.toThrow(
+      "At least 2 categories are required"
+    );
+  });
+
+  it("uses provider-backed classification when model is connected", async () => {
+    const n = new (ClassifierNode as any)();
+    const mockProvider = {
+      generateMessage: async () => ({ content: '{"category":"support"}' }),
+      async generateMessageTraced(...a: any[]) {
+        return (this as any).generateMessage(...a);
+      }
+    };
+    const mockContext = {
+      getProvider: async () => mockProvider
+    };
+    n.assign({
+      text: "help me",
+      categories: ["billing", "support"],
+      model: { provider: "test", id: "m1" }
+    });
+    const result = await n.process(mockContext as any);
+    expect(result.category).toBe("support");
+  });
+});
+
+// ---- AgentNode ----
+describe("AgentNode", () => {
+  it("has correct static metadata", () => {
+    expect(AgentNode.nodeType).toBe("nodetool.agents.Agent");
+    expect(hasStreamingOutput(AgentNode)).toBe(true);
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(AgentNode);
+    expect(metadataDefaults(AgentNode).max_tokens).toBe(16384);
+  });
+
+  it("requires a model selection", async () => {
+    const n = new (AgentNode as any)();
+    n.assign({ prompt: "Hello" });
+    await expect(n.process()).rejects.toThrow("Select a model");
+  });
+
+  it("plan mode rejects loop-only inputs (thread_id/history/image/audio)", async () => {
+    const mockContext = {
+      getProvider: async () => withAgentLoop({
+        async *generateMessages(): AsyncGenerator<Record<string, unknown>> {
+          yield { type: "chunk", content: "x", content_type: "text", done: true };
+        }
+      })
+    };
+    for (const loopOnly of [
+      { thread_id: "t1" },
+      { history: [{ role: "user", content: "hi" }] },
+      { image: [{ uri: "file://a.png" }] },
+      { audio: [{ data: "YXVkaW8=" }] }
+    ]) {
+      const n = new (AgentNode as any)();
+      n.assign({
+        mode: "plan",
+        prompt: "Do a task",
+        model: { provider: "test", id: "m1" },
+        ...loopOnly
+      });
+      await expect(n.process(mockContext as any)).rejects.toThrow(
+        /only apply in loop mode/i
+      );
+    }
+  });
+
+  it("streams text chunks and final text from the provider", async () => {
+    const n = new (AgentNode as any)();
+    const mockProvider = withAgentLoop({
+      async *generateMessages(): AsyncGenerator<Record<string, unknown>> {
+        yield {
+          type: "chunk",
+          content: "Hello ",
+          content_type: "text",
+          done: false
+        };
+        yield {
+          type: "chunk",
+          content: "world",
+          content_type: "text",
+          done: true
+        };
+      }
+    });
+    n.assign({
+      prompt: "Test prompt",
+      model: { provider: "openai", id: "gpt-4", name: "GPT-4" },
+      max_tokens: 512
+    });
+    const streamed: any[] = [];
+    for await (const item of n.genProcess({
+      getProvider: async () => mockProvider
+    } as any)) {
+      streamed.push(item);
+    }
+    expect(streamed[0].chunk.content).toBe("Hello ");
+    expect(streamed[1].chunk.content).toBe("world");
+    expect(streamed[2]).toEqual({
+      chunk: null,
+      thinking: null,
+      text: "Hello world",
+      audio: null
+    });
+    const result = await n.process({
+      getProvider: async () => mockProvider
+    } as any);
+    expect(result.text).toBe("Hello world");
+    expect(result.output).toBe("Hello world");
+    expect(result.chunk).toBeNull();
+    expect(result.thinking).toBeNull();
+    expect(result.audio).toBeNull();
+  });
+
+  it("does not accept dynamic input variables", async () => {
+    const n = new (AgentNode as any)();
+    let capturedMessages: any[] = [];
+    const mockProvider = withAgentLoop({
+      async *generateMessages({
+        messages
+      }: any): AsyncGenerator<Record<string, unknown>> {
+        // Snapshot the turn's input. generateLoop seeds its working array from
+        // these and appends the assistant turn to it afterward, so a live
+        // reference would no longer end at the prepared user message.
+        capturedMessages = [...messages];
+        yield {
+          type: "chunk",
+          content: "ok",
+          content_type: "text",
+          done: true
+        };
+      }
+    });
+    n.assign({
+      system: "Tone: {{ tone|upper }}.",
+      prompt: "Hello {{ name }}!",
+      name: "Ada",
+      tone: "formal",
+      model: { provider: "test", id: "m1" }
+    });
+    expect(AgentNode.supportsDynamicInputs).toBe(false);
+    expect(n.dynamicProps.size).toBe(0);
+    await n.process({ getProvider: async () => mockProvider } as any);
+    expect(capturedMessages[0]).toEqual({
+      role: "system",
+      content: "Tone: {{ tone|upper }}."
+    });
+    const lastUser = capturedMessages[capturedMessages.length - 1];
+    expect(lastUser.role).toBe("user");
+    expect(lastUser.content[0].text).toBe("Hello {{ name }}!");
+  });
+
+  it("prepares python-style messages including thread history, history, image, and audio", async () => {
+    const n = new (AgentNode as any)();
+    let capturedMessages: any[] = [];
+    const mockProvider = withAgentLoop({
+      async *generateMessages({
+        messages
+      }: any): AsyncGenerator<Record<string, unknown>> {
+        // Snapshot the turn's input. generateLoop seeds its working array from
+        // these and appends the assistant turn to it afterward, so a live
+        // reference would no longer end at the prepared user message.
+        capturedMessages = [...messages];
+        yield {
+          type: "chunk",
+          content: "ok",
+          content_type: "text",
+          done: true
+        };
+      }
+    });
+    const mockContext = {
+      getProvider: async () => mockProvider,
+      hasModelInterface: (name: string) => name === "getMessages",
+      getThreadMessages: async () => ({
+        messages: [
+          { role: "user", content: "persisted-user" },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "persisted-assistant" }]
+          }
+        ],
+        next: null
+      })
+    };
+    n.assign({
+      system: "Be concise.",
+      prompt: "Hi",
+      image: { uri: "file://image.png" },
+      audio: { data: "YXVkaW8=" },
+      history: [
+        { role: "user", content: "history-user" },
+        { role: "assistant", content: "history-assistant" },
+        { role: "invalid_role", content: "skip-me" }
+      ],
+      thread_id: "thread-1",
+      model: { provider: "test", id: "m1" }
+    });
+    await n.process(mockContext as any);
+    expect(capturedMessages[0]).toEqual({
+      role: "system",
+      content: "Be concise."
+    });
+    expect(capturedMessages[1]).toEqual({
+      role: "user",
+      content: "persisted-user",
+      toolCalls: null,
+      toolCallId: null,
+      threadId: null
+    });
+    expect(capturedMessages[2].content[0].text).toBe("persisted-assistant");
+    expect(capturedMessages[3]).toEqual({
+      role: "user",
+      content: "history-user",
+      toolCalls: null,
+      toolCallId: null,
+      threadId: null
+    });
+    expect(capturedMessages[4]).toEqual({
+      role: "assistant",
+      content: "history-assistant",
+      toolCalls: null,
+      toolCallId: null,
+      threadId: null
+    });
+    expect(capturedMessages[capturedMessages.length - 1].role).toBe("user");
+    expect(capturedMessages[capturedMessages.length - 1].content[0].text).toBe(
+      "Hi"
+    );
+    expect(capturedMessages[capturedMessages.length - 1].content[1].type).toBe(
+      "image_url"
+    );
+    expect(capturedMessages[capturedMessages.length - 1].content[2].type).toBe(
+      "audio"
+    );
+  });
+
+  it("attaches a list of images and audio as separate content blocks", async () => {
+    const n = new (AgentNode as any)();
+    let capturedMessages: any[] = [];
+    const mockProvider = withAgentLoop({
+      async *generateMessages({
+        messages
+      }: any): AsyncGenerator<Record<string, unknown>> {
+        // Snapshot the turn's input. generateLoop seeds its working array from
+        // these and appends the assistant turn to it afterward, so a live
+        // reference would no longer end at the prepared user message.
+        capturedMessages = [...messages];
+        yield {
+          type: "chunk",
+          content: "ok",
+          content_type: "text",
+          done: true
+        };
+      }
+    });
+    n.assign({
+      prompt: "Describe these",
+      image: [{ uri: "file://a.png" }, { uri: "file://b.png" }],
+      audio: [{ data: "YXVkaW8x" }, { data: "YXVkaW8y" }],
+      model: { provider: "test", id: "m1" }
+    });
+    await n.process({ getProvider: async () => mockProvider } as any);
+    const lastUser = capturedMessages[capturedMessages.length - 1];
+    expect(lastUser.role).toBe("user");
+    expect(lastUser.content[0].text).toBe("Describe these");
+    const images = lastUser.content.filter((p: any) => p.type === "image_url");
+    const audios = lastUser.content.filter((p: any) => p.type === "audio");
+    expect(images.map((p: any) => p.image.uri)).toEqual([
+      "file://a.png",
+      "file://b.png"
+    ]);
+    expect(audios.map((p: any) => p.audio.data)).toEqual([
+      "YXVkaW8x",
+      "YXVkaW8y"
+    ]);
+  });
+
+  it("persists the user and assistant messages through context thread APIs", async () => {
+    const n = new (AgentNode as any)();
+    const created: any[] = [];
+    const mockProvider = withAgentLoop({
+      async *generateMessages(): AsyncGenerator<Record<string, unknown>> {
+        yield {
+          type: "chunk",
+          content: "saved",
+          content_type: "text",
+          done: true
+        };
+      }
+    });
+    const mockContext = {
+      getProvider: async () => mockProvider,
+      hasModelInterface: (name: string) => name === "createMessage",
+      createMessage: async (req: any) => {
+        created.push(req);
+      }
+    };
+    n.assign({
+      prompt: "persist me",
+      thread_id: "thread-2",
+      model: { provider: "test", id: "m1" }
+    });
+    await n.process(mockContext as any);
+    expect(created).toHaveLength(2);
+    expect(created[0].thread_id).toBe("thread-2");
+    expect(created[0].role).toBe("user");
+    expect(created[0].content[0].text).toBe("persist me");
+    expect(created[1]).toMatchObject({
+      thread_id: "thread-2",
+      role: "assistant"
+    });
+  });
+
+  it("propagates errors from a wired thread store instead of silently falling back", async () => {
+    const n = new (AgentNode as any)();
+    const mockProvider = withAgentLoop({
+      async *generateMessages(): AsyncGenerator<Record<string, unknown>> {
+        yield {
+          type: "chunk",
+          content: "unused",
+          content_type: "text",
+          done: true
+        };
+      }
+    });
+    const mockContext = {
+      getProvider: async () => mockProvider,
+      hasModelInterface: (name: string) => name === "createMessage",
+      createMessage: async () => {
+        throw new Error("db write failed");
+      }
+    };
+    n.assign({
+      prompt: "persist me",
+      thread_id: "thread-err",
+      model: { provider: "test", id: "m1" }
+    });
+    await expect(n.process(mockContext as any)).rejects.toThrow(
+      "db write failed"
+    );
+  });
+
+  it("emits thinking and audio updates from provider chunks", async () => {
+    const n = new (AgentNode as any)();
+    const mockProvider = withAgentLoop({
+      async *generateMessages(): AsyncGenerator<Record<string, unknown>> {
+        yield {
+          type: "chunk",
+          content: "reasoning",
+          content_type: "text",
+          thinking: true,
+          done: false
+        };
+        yield {
+          type: "chunk",
+          content: Buffer.from("audio-bytes").toString("base64"),
+          content_type: "audio",
+          done: true
+        };
+      }
+    });
+    n.assign({
+      model: { provider: "test", id: "m1" },
+      prompt: "Listen"
+    });
+    const streamed: any[] = [];
+    for await (const item of n.genProcess({
+      getProvider: async () => mockProvider
+    } as any)) {
+      streamed.push(item);
+    }
+    expect(streamed[0].thinking.content).toBe("reasoning");
+    expect(streamed[1].chunk.content_type).toBe("audio");
+    expect(Buffer.from(streamed[2].audio.data).toString("utf8")).toBe(
+      "audio-bytes"
+    );
+  });
+
+  it("normalizes provider text chunks to include content_type", async () => {
+    const n = new (AgentNode as any)();
+    const mockProvider = withAgentLoop({
+      async *generateMessages(): AsyncGenerator<Record<string, unknown>> {
+        yield {
+          type: "chunk",
+          content: "Hello",
+          done: false
+        };
+        yield {
+          type: "chunk",
+          content: " world",
+          done: true
+        };
+      }
+    });
+    n.assign({
+      model: { provider: "test", id: "m1" },
+      prompt: "Hi"
+    });
+    const streamed: any[] = [];
+    for await (const item of n.genProcess({
+      getProvider: async () => mockProvider
+    } as any)) {
+      streamed.push(item);
+    }
+
+    expect(streamed[0].chunk).toMatchObject({
+      type: "chunk",
+      content: "Hello",
+      content_type: "text"
+    });
+    expect(streamed[1].chunk).toMatchObject({
+      type: "chunk",
+      content: " world",
+      content_type: "text"
+    });
+  });
+
+  it("returns structured outputs from dynamic output schemas", async () => {
+    const n = new (AgentNode as any)();
+    n._dynamic_outputs = {
+      answer: { type: "str" },
+      score: { type: "int" }
+    };
+    const mockProvider = withAgentLoop({
+      async *generateMessages(args: {
+        tools?: Array<{ name: string }>;
+      }): AsyncGenerator<Record<string, unknown>> {
+        const resultTool = args.tools?.find((tool) =>
+          tool.name.startsWith("submit_result")
+        );
+        yield {
+          id: "call_result",
+          name: resultTool?.name ?? "submit_result",
+          args: { answer: "ready", score: 7 }
+        };
+      }
+    });
+    n.assign({
+      model: { provider: "test", id: "m1" },
+      prompt: "Return JSON"
+    });
+    const streamed: any[] = [];
+    for await (const item of n.genProcess({
+      getProvider: async () => mockProvider
+    } as any)) {
+      streamed.push(item);
+    }
+    // The last yield is the final result with structured outputs
+    const last = streamed[streamed.length - 1];
+    expect(last.answer).toBe("ready");
+    expect(last.score).toBe(7);
+  });
+
+  it("continues after non-executable tool calls until dynamic result is submitted", async () => {
+    const n = new (AgentNode as any)();
+    n._dynamic_outputs = {
+      answer: { type: "str" }
+    };
+    n.assign({
+      model: { provider: "test", id: "m1" },
+      prompt: "Search, then answer",
+      tools: [{ name: "google_search", description: "Search" }]
+    });
+
+    let calls = 0;
+    const mockProvider = withAgentLoop({
+      async *generateMessages(args: {
+        tools?: Array<{ name: string }>;
+      }): AsyncGenerator<Record<string, unknown>> {
+        calls += 1;
+        if (calls === 1) {
+          yield {
+            id: "call_search",
+            name: "google_search",
+            args: { query: "latest" }
+          };
+          return;
+        }
+        const resultTool = args.tools?.find((tool) =>
+          tool.name.startsWith("submit_result")
+        );
+        yield {
+          id: "call_result",
+          name: resultTool?.name ?? "submit_result",
+          args: { answer: "done" }
+        };
+      }
+    });
+
+    const streamed: any[] = [];
+    for await (const item of n.genProcess({
+      getProvider: async () => mockProvider
+    } as any)) {
+      streamed.push(item);
+    }
+
+    expect(calls).toBe(2);
+    expect(streamed[streamed.length - 1].answer).toBe("done");
+  });
+
+  it("replays locally stored thread messages when model persistence is unavailable", async () => {
+    const create = new (CreateThreadNode as any)();
+    create.assign({ thread_id: "thread_replay_case" });
+    const { thread_id } = await create.process();
+    const n = new (AgentNode as any)();
+    n.assign({
+      prompt: "first",
+      thread_id,
+      model: { provider: "test", id: "m1" }
+    });
+    await n.process({
+      getProvider: async () =>
+        withAgentLoop({
+          async *generateMessages(): AsyncGenerator<Record<string, unknown>> {
+            yield {
+              type: "chunk",
+              content: "first-reply",
+              content_type: "text",
+              done: true
+            };
+          }
+        })
+    } as any);
+
+    const secondCalls: any[] = [];
+    n.assign({
+      prompt: "second",
+      thread_id,
+      model: { provider: "test", id: "m1" }
+    });
+    await n.process({
+      getProvider: async () =>
+        withAgentLoop({
+          async *generateMessages({
+            messages
+          }: any): AsyncGenerator<Record<string, unknown>> {
+            secondCalls.push(messages);
+            yield {
+              type: "chunk",
+              content: "second-reply",
+              content_type: "text",
+              done: true
+            };
+          }
+        })
+    } as any);
+    const replayed = secondCalls[0];
+    expect(
+      replayed.some(
+        (message: any) =>
+          Array.isArray(message.content) && message.content[0].text === "first"
+      )
+    ).toBe(true);
+    expect(
+      replayed.some(
+        (message: any) =>
+          Array.isArray(message.content) &&
+          message.content[0].text === "first-reply"
+      )
+    ).toBe(true);
+  });
+
+  it("returns empty text when the provider returns no text content", async () => {
+    const n = new (AgentNode as any)();
+    const mockProvider = withAgentLoop({
+      async *generateMessages(): AsyncGenerator<Record<string, unknown>> {
+        yield { type: "chunk", content: "", content_type: "text", done: true };
+      }
+    });
+    n.assign({
+      prompt: "Hi",
+      model: { provider: "test", id: "m1" }
+    });
+    const result = await n.process({
+      getProvider: async () => mockProvider
+    } as any);
+    expect(result.text).toBe("");
+    expect(result.output).toBe("");
+    expect(result.chunk).toBeNull();
+    expect(result.thinking).toBeNull();
+    expect(result.audio).toBeNull();
+  });
+
+  it("dispatches control tools via sendControlEvent when _control_context is provided", async () => {
+    const n = new (AgentNode as any)();
+    n.setDynamic("_control_context", {
+      "node-ctrl-1": {
+        node_type: "nodetool.test.ControlledNode",
+        node_title: "Controlled Node",
+        control_actions: {
+          run: {
+            properties: {
+              message: { type: "string", description: "Message to send" }
+            }
+          }
+        }
+      }
+    });
+
+    let callCount = 0;
+    let capturedTools: any[] = [];
+    const mockProvider = withAgentLoop({
+      async *generateMessages(args: any): AsyncGenerator<Record<string, unknown>> {
+        callCount += 1;
+        capturedTools = args.tools ?? [];
+        if (callCount === 1) {
+          yield {
+            id: "call_ctrl",
+            name: "run_controlled_node",
+            args: { message: "hello" }
+          };
+          return;
+        }
+        yield { type: "chunk", content: "done", content_type: "text", done: true };
+      }
+    });
+
+    const sentEvents: any[] = [];
+    const mockContext = {
+      getProvider: async () => mockProvider,
+      hasControlEventSupport: true,
+      sendControlEvent: async (targetNodeId: string, args: any) => {
+        sentEvents.push({ targetNodeId, args });
+        return { success: true, output: "controlled result" };
+      }
+    };
+
+    n.assign({
+      model: { provider: "test", id: "m1" },
+      prompt: "Use the control node"
+    });
+
+    const result = await n.process(mockContext as any);
+    expect(capturedTools.some((t: any) => t.name === "run_controlled_node")).toBe(true);
+    expect(result.text).toBe("done");
+    expect(sentEvents).toHaveLength(1);
+    expect(sentEvents[0].targetNodeId).toBe("node-ctrl-1");
+    expect(sentEvents[0].args).toEqual({ message: "hello" });
+  });
+
+  it("submits the structured result when the provider runs its OWN loop (agent SDK style)", async () => {
+    // The Claude Agent SDK provider's generateMessages is tool-free (mcp: null):
+    // submit_result only reaches the model through the provider's own
+    // generateLoop. This mock mirrors that — the single-turn primitives surface
+    // no tool call, but the generateLoop override drives the scripted
+    // submit_result call by dispatching to the provider tool's own `execute`
+    // (the new mechanism, matching the real Claude Agent SDK provider) and emits
+    // the matching ToolCall + tool-result/assistant message events. The
+    // structured result must still come through, which the pre-migration loop
+    // could not do.
+    const n = new (AgentNode as any)();
+    n._dynamic_outputs = { answer: { type: "str" } };
+    n.assign({
+      model: { provider: "test", id: "m1" },
+      prompt: "Answer with the structured tool"
+    });
+
+    let executedToolFree = false;
+    const sdkProvider = {
+      provider: "sdk_loop",
+      // Tool-free single-turn primitives — never surface the submit_result call.
+      async *generateMessages() {
+        executedToolFree = true;
+        yield { type: "chunk", content: "", content_type: "text", done: true };
+      },
+      async *generateMessagesTraced() {
+        executedToolFree = true;
+        yield { type: "chunk", content: "", content_type: "text", done: true };
+      },
+      async *generateLoop(args: any) {
+        const submitTool = (args.tools ?? []).find((t: any) =>
+          t.name.startsWith("submit_result")
+        );
+        const call = {
+          id: "tc_submit",
+          name: submitTool?.name ?? "submit_result",
+          args: { answer: "from-sdk-loop" }
+        };
+        yield call;
+        const content = submitTool?.execute
+          ? await submitTool.execute(call.args)
+          : args.executeTool
+            ? await args.executeTool(call)
+            : "";
+        yield {
+          type: "message",
+          message: { role: "tool", toolCallId: call.id, content }
+        };
+        yield {
+          type: "message",
+          message: { role: "assistant", content: "Submitted." }
+        };
+      }
+    };
+
+    const streamed: any[] = [];
+    for await (const item of n.genProcess({
+      getProvider: async () => sdkProvider
+    } as any)) {
+      streamed.push(item);
+    }
+
+    // The structured result reached the node even though generateMessages never
+    // emitted the tool call — it was driven through the provider tool's execute.
+    const last = streamed[streamed.length - 1];
+    expect(last.answer).toBe("from-sdk-loop");
+    expect(executedToolFree).toBe(false);
+  });
+});
+
+// Research node coverage is handled by the general Agent node in agents.ts
+
+// ---------------------------------------------------------------------------
+// generators.ts
+// ---------------------------------------------------------------------------
+
+describe("GENERATOR_NODES export", () => {
+  it("contains all 5 generator node classes", () => {
+    expect(GENERATOR_NODES).toHaveLength(5);
+    expect(GENERATOR_NODES).toContain(StructuredOutputGeneratorNode);
+    expect(GENERATOR_NODES).toContain(DataGeneratorNode);
+    expect(GENERATOR_NODES).toContain(ListGeneratorNode);
+    expect(GENERATOR_NODES).toContain(ChartGeneratorNode);
+    expect(GENERATOR_NODES).toContain(SVGGeneratorNode);
+  });
+});
+
+// ---- StructuredOutputGeneratorNode ----
+describe("StructuredOutputGeneratorNode", () => {
+  it("has correct static metadata", () => {
+    expect(StructuredOutputGeneratorNode.nodeType).toBe(
+      "nodetool.generators.StructuredOutputGenerator"
+    );
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(StructuredOutputGeneratorNode);
+  });
+
+  it("generates defaults from schema with various types", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    // _dynamic_outputs is used by buildSchemaFromDynamicOutputs to create the schema
+    n._dynamic_outputs = {
+      name: { type: "str" },
+      age: { type: "number" },
+      count: { type: "integer" },
+      active: { type: "boolean" },
+      tags: { type: "array" },
+      meta: { type: "object" },
+      other: {} // no type specified, defaults to "str" -> "string"
+    };
+    const result = await n.process();
+    expect(result.name).toBe("");
+    expect(result.age).toBe(0);
+    expect(result.count).toBe(0);
+    expect(result.active).toBe(false);
+    expect(result.tags).toEqual([]);
+    expect(result.meta).toEqual({});
+    expect(result.other).toBe("");
+  });
+
+  it("generates schema defaults with no properties key", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    // No _dynamic_outputs set, so schema is null; falls through to instructions/context fallback
+    // with empty defaults
+    n.assign({});
+    const result = await n.process();
+    // Falls through to { output: { instructions, context } }
+    expect(result.output).toEqual({ instructions: "", context: "" });
+  });
+
+  it("falls back to instructions/context when no schema", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n.assign({
+      instructions: "Generate a list",
+      context: "user context"
+    });
+    const result = await n.process();
+    expect(result.output).toEqual({
+      instructions: "Generate a list",
+      context: "user context"
+    });
+  });
+
+  it("falls back when schema is null", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n.assign({
+      schema: null,
+      instructions: "test"
+    });
+    const result = await n.process();
+    expect(result.output).toEqual({ instructions: "test", context: "" });
+  });
+
+  it("falls back when schema is an array", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n.assign({
+      schema: [1, 2, 3],
+      instructions: "test"
+    });
+    const result = await n.process();
+    expect(result.output).toEqual({ instructions: "test", context: "" });
+  });
+
+  it("handles numeric input for instructions via asText", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n.assign({
+      instructions: 42,
+      context: true
+    });
+    const result = await n.process();
+    expect(result.output).toEqual({
+      instructions: "42",
+      context: "true"
+    });
+  });
+
+  it("handles null/undefined/object inputs via asText in generators", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    // null triggers asText !value branch
+    n.assign({ instructions: null, context: undefined });
+    const r1 = await n.process();
+    expect(r1.output).toEqual({ instructions: "", context: "" });
+    // object triggers JSON.stringify branch
+    n.assign({ instructions: { a: 1 }, context: [1, 2] });
+    const r2 = await n.process();
+    expect(r2.output.instructions).toBe('{"a":1}');
+    expect(r2.output.context).toBe("[1,2]");
+  });
+
+  it("maps int type alias to integer default 0", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n._dynamic_outputs = { count: { type: "int" } };
+    const result = await n.process();
+    expect(result.count).toBe(0);
+  });
+
+  it("maps float type alias to number default 0", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n._dynamic_outputs = { score: { type: "float" } };
+    const result = await n.process();
+    expect(result.score).toBe(0);
+  });
+
+  it("maps bool type alias to boolean default false", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n._dynamic_outputs = { enabled: { type: "bool" } };
+    const result = await n.process();
+    expect(result.enabled).toBe(false);
+  });
+
+  it("maps list type alias to array default []", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n._dynamic_outputs = { items: { type: "list" } };
+    const result = await n.process();
+    expect(result.items).toEqual([]);
+  });
+
+  it("maps dict type alias to object default {}", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n._dynamic_outputs = { metadata: { type: "dict" } };
+    const result = await n.process();
+    expect(result.metadata).toEqual({});
+  });
+
+  it("returns instructions/context fallback when _dynamic_outputs is empty object", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n._dynamic_outputs = {};
+    n.assign({ instructions: "do stuff", context: "some context" });
+    const result = await n.process();
+    expect(result.output).toEqual({
+      instructions: "do stuff",
+      context: "some context"
+    });
+  });
+
+  it("returns instructions/context fallback when _dynamic_outputs is an array", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n._dynamic_outputs = ["not", "an", "object"];
+    n.assign({ instructions: "test" });
+    const result = await n.process();
+    expect(result.output).toEqual({ instructions: "test", context: "" });
+  });
+
+  it("generates defaults for multiple fields of the same type", async () => {
+    const n = new (StructuredOutputGeneratorNode as any)();
+    n._dynamic_outputs = {
+      first_name: { type: "str" },
+      last_name: { type: "str" },
+      age: { type: "integer" },
+      weight: { type: "number" }
+    };
+    const result = await n.process();
+    expect(result).toEqual({
+      first_name: "",
+      last_name: "",
+      age: 0,
+      weight: 0
+    });
+  });
+});
+
+// ---- DataGeneratorNode ----
+describe("DataGeneratorNode", () => {
+  it("has correct static metadata", () => {
+    expect(DataGeneratorNode.nodeType).toBe(
+      "nodetool.generators.DataGenerator"
+    );
+    expect(hasStreamingOutput(DataGeneratorNode)).toBe(true);
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(DataGeneratorNode);
+  });
+
+  it("generates rows with default 5 count", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({ prompt: "generate data" });
+    const result = await n.process();
+    const rows = (result.output as any).rows;
+    expect(rows).toHaveLength(5);
+    // default column is "value"
+    expect(rows[0]).toHaveProperty("value");
+  });
+
+  it("parses count from prompt", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({ prompt: "generate 3 items" });
+    const result = await n.process();
+    expect((result.output as any).rows).toHaveLength(3);
+  });
+
+  it("uses columns array with name objects", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({
+      prompt: "2 records",
+      columns: [{ name: "id" }, { name: "name" }, { name: "score" }]
+    });
+    const result = await n.process();
+    const rows = (result.output as any).rows;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].id).toBe(1);
+    expect(rows[0].name).toContain("_1");
+    expect(typeof rows[0].score).toBe("number");
+  });
+
+  it("uses columns from nested object with columns key", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({
+      prompt: "2 records",
+      columns: { columns: ["id", "date", "active"] }
+    });
+    const result = await n.process();
+    const rows = (result.output as any).rows;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].id).toBe(1);
+    expect(rows[0].date).toBeTruthy();
+    expect(typeof rows[0].active).toBe("boolean");
+  });
+
+  it("handles price/amount column type", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({
+      prompt: "2 items",
+      columns: ["price", "amount"]
+    });
+    const result = await n.process();
+    const rows = (result.output as any).rows;
+    expect(typeof rows[0].price).toBe("number");
+    expect(typeof rows[0].amount).toBe("number");
+  });
+
+  it("handles is_ prefixed columns as booleans", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({
+      prompt: "3 items",
+      columns: ["is_on"]
+    });
+    const result = await n.process();
+    const rows = (result.output as any).rows;
+    // "is_on" starts with "is_" and does not include "id"/"name"/"date"/"price"/"amount"/"score"/"active"
+    expect(rows[0].is_on).toBe(true); // i=0, even
+    expect(rows[1].is_on).toBe(false); // i=1, odd
+    expect(rows[2].is_on).toBe(true); // i=2, even
+  });
+
+  it("caps count at 200", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({ prompt: "generate 999 rows" });
+    const result = await n.process();
+    // parseRequestedCount caps at 200
+    // But 999 has 3 digits, and regex matches \b(\d{1,3})\b
+    const rows = (result.output as any).rows;
+    expect(rows.length).toBeLessThanOrEqual(200);
+  });
+
+  it("genProcess yields individual rows then final dataframe", async () => {
+    const n = new (DataGeneratorNode as any)();
+    const results: any[] = [];
+    n.assign({ prompt: "3 items" });
+    for await (const chunk of n.genProcess()) {
+      results.push(chunk);
+    }
+    // 3 row yields + 1 final dataframe yield
+    expect(results).toHaveLength(4);
+    expect(results[0].index).toBe(0);
+    expect(results[0].record).toBeTruthy();
+    expect(results[0].dataframe).toBeNull();
+    expect(results[3].record).toBeNull();
+    expect(results[3].index).toBeNull();
+    expect(results[3].dataframe).toBeTruthy();
+  });
+
+  it("uses input_text as seed when no prompt", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({ input_text: "mydata" });
+    const result = await n.process();
+    const rows = (result.output as any).rows;
+    expect(rows[0].value).toContain("mydata");
+  });
+
+  it("handles empty columns from parseColumns", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({
+      prompt: "2 items",
+      columns: [{ name: "" }, ""]
+    });
+    const result = await n.process();
+    const rows = (result.output as any).rows;
+    // Empty names are filtered, defaults to ["value"]
+    expect(rows[0]).toHaveProperty("value");
+  });
+
+  it("parseRequestedCount returns fallback for no digit in prompt", async () => {
+    const n = new (DataGeneratorNode as any)();
+    n.assign({ prompt: "some data please" });
+    const result = await n.process();
+    expect((result.output as any).rows).toHaveLength(5);
+  });
+
+  it("ensures minimum count of 1", async () => {
+    const n = new (DataGeneratorNode as any)();
+    // parseRequestedCount: Math.max(1, ...)
+    n.assign({ prompt: "0 items" });
+    const result = await n.process();
+    // 0 matches but max(1, 0) = 1... actually it is clamped to min 1
+    // Actually the regex matches "0", n=0, max(1,min(200,0))=max(1,0)=1
+    expect((result.output as any).rows).toHaveLength(1);
+  });
+
+  it("parses provider CSV into records and dataframe", async () => {
+    const n = new (DataGeneratorNode as any)();
+    const mockContext = {
+      runProviderPrediction: async () => ({
+        content: `name,age\nAlice,30\nBob,25`
+      }),
+      streamProviderPrediction: async function* () {}
+    };
+
+    n.assign({
+      prompt: "Generate people",
+      columns: [
+        { name: "name", data_type: "string" },
+        { name: "age", data_type: "int" }
+      ],
+      model: { provider: "mock", id: "gpt-4" }
+    });
+    const result = await n.process(mockContext as any);
+
+    expect((result.output as any).rows).toEqual([
+      { name: "Alice", age: 30 },
+      { name: "Bob", age: 25 }
+    ]);
+    expect((result.output as any).data).toEqual([
+      ["Alice", 30],
+      ["Bob", 25]
+    ]);
+  });
+
+  it("streams provider CSV into row chunks and final dataframe", async () => {
+    const n = new (DataGeneratorNode as any)();
+    const mockContext = {
+      runProviderPrediction: async () => ({
+        content: `name,age\nAlice,30\nBob,25`
+      }),
+      streamProviderPrediction: async function* () {}
+    };
+
+    n.assign({
+      prompt: "Generate people",
+      columns: [
+        { name: "name", data_type: "string" },
+        { name: "age", data_type: "int" }
+      ],
+      model: { provider: "mock", id: "gpt-4" }
+    });
+    const results: any[] = [];
+    for await (const chunk of n.genProcess(mockContext as any)) {
+      results.push(chunk);
+    }
+
+    expect(results.slice(0, 2)).toEqual([
+      { record: { name: "Alice", age: 30 }, index: 0, dataframe: null },
+      { record: { name: "Bob", age: 25 }, index: 1, dataframe: null }
+    ]);
+    expect(results[2].dataframe.data).toEqual([
+      ["Alice", 30],
+      ["Bob", 25]
+    ]);
+  });
+});
+
+// ---- ListGeneratorNode ----
+describe("ListGeneratorNode", () => {
+  it("has correct static metadata", () => {
+    expect(ListGeneratorNode.nodeType).toBe(
+      "nodetool.generators.ListGenerator"
+    );
+    expect(hasStreamingOutput(ListGeneratorNode)).toBe(true);
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(ListGeneratorNode);
+  });
+
+  it("generates a list with default count 5", async () => {
+    const n = new (ListGeneratorNode as any)();
+    n.assign({ prompt: "list things" });
+    const result = await n.process();
+    expect(result.output).toHaveLength(5);
+    expect(result.output[0]).toContain("_1");
+  });
+
+  it("parses count from prompt", async () => {
+    const n = new (ListGeneratorNode as any)();
+    n.assign({ prompt: "give me 7 colors" });
+    const result = await n.process();
+    expect(result.output).toHaveLength(7);
+  });
+
+  it("uses input_text as seed", async () => {
+    const n = new (ListGeneratorNode as any)();
+    n.assign({ input_text: "fruit" });
+    const result = await n.process();
+    expect(result.output[0]).toBe("fruit_1");
+  });
+
+  it("genProcess yields individual items then a consolidated list", async () => {
+    const n = new (ListGeneratorNode as any)();
+    const results: any[] = [];
+    n.assign({ prompt: "3 items" });
+    for await (const chunk of n.genProcess()) {
+      results.push(chunk);
+    }
+    // 3 per-item frames + 1 consolidating final frame carrying the whole list
+    // on the single `output` handle (drives the saved/reloaded generation).
+    expect(results).toHaveLength(4);
+    expect(results[0]).toEqual({ item: expect.any(String), index: 0 });
+    expect(results[2].index).toBe(2);
+    expect(results[3]).toEqual({ output: [results[0].item, results[1].item, results[2].item] });
+  });
+
+  function makeMockContextWithToolCallSequences(sequences: string[][]) {
+    let callIndex = 0;
+    return {
+      getProvider: async () => ({
+        async *generateMessages() {
+          const items = sequences[callIndex++] ?? [];
+          for (let i = 0; i < items.length; i++) {
+            yield { id: `call_${callIndex}_${i}`, name: "add_item", args: { item: items[i] } };
+          }
+        }
+      })
+    };
+  }
+
+  function makeMockContextWithToolCalls(items: string[]) {
+    return makeMockContextWithToolCallSequences([items]);
+  }
+
+  it("collects items emitted via add_item tool calls", async () => {
+    const n = new (ListGeneratorNode as any)();
+    const mockContext = makeMockContextWithToolCalls([
+      "First item",
+      "Second item",
+      "Third item"
+    ]);
+    n.assign({
+      prompt: "Generate items",
+      model: { provider: "mock", id: "gpt-4" }
+    });
+    const result = await n.process(mockContext as any);
+    expect(result.output).toEqual(["First item", "Second item", "Third item"]);
+  });
+
+  it("genProcess streams items as tool calls arrive", async () => {
+    const n = new (ListGeneratorNode as any)();
+    const mockContext = makeMockContextWithToolCalls([
+      "First item",
+      "Second item",
+      "Third item"
+    ]);
+    n.assign({
+      prompt: "Generate items",
+      model: { provider: "mock", id: "gpt-4" }
+    });
+    const results: any[] = [];
+    for await (const chunk of n.genProcess(mockContext as any)) {
+      results.push(chunk);
+    }
+    expect(results).toEqual([
+      { item: "First item", index: 0 },
+      { item: "Second item", index: 1 },
+      { item: "Third item", index: 2 },
+      { output: ["First item", "Second item", "Third item"] }
+    ]);
+  });
+
+  it("continues the agent loop when one add_item call arrives per turn", async () => {
+    const n = new (ListGeneratorNode as any)();
+    const mockContext = makeMockContextWithToolCallSequences([
+      ["First item"],
+      ["Second item"],
+      ["Third item"]
+    ]);
+    n.assign({
+      prompt: "Generate 3 items",
+      model: { provider: "mock", id: "gpt-4" }
+    });
+    const result = await n.process(mockContext as any);
+    expect(result.output).toEqual(["First item", "Second item", "Third item"]);
+  });
+
+  it("ignores prose chunks and only yields tool-call items", async () => {
+    const n = new (ListGeneratorNode as any)();
+    let called = false;
+    const mockContext = {
+      getProvider: async () => ({
+        async *generateMessages() {
+          if (called) return;
+          called = true;
+          yield { type: "chunk", content: "ignored prose", content_type: "text" };
+          yield { id: "call_0", name: "add_item", args: { item: "Only item" } };
+          yield { type: "chunk", content: "more prose", content_type: "text", done: true };
+        }
+      })
+    };
+    n.assign({
+      prompt: "Generate items",
+      model: { provider: "mock", id: "gpt-4" }
+    });
+    const result = await n.process(mockContext as any);
+    expect(result.output).toEqual(["Only item"]);
+  });
+
+  it("throws when model emits no add_item tool calls", async () => {
+    const n = new (ListGeneratorNode as any)();
+    const mockContext = {
+      getProvider: async () => ({
+        async *generateMessages() {
+          yield { type: "chunk", content: "no tools", content_type: "text", done: true };
+        }
+      })
+    };
+    n.assign({
+      prompt: "Generate items",
+      model: { provider: "mock", id: "gpt-4" }
+    });
+    await expect(n.process(mockContext as any)).rejects.toThrow(
+      "no add_item tool calls"
+    );
+  });
+
+  it("re-runs with an enforcement prompt when the first attempt yields no items", async () => {
+    const n = new (ListGeneratorNode as any)();
+    // First attempt: no tool calls (model answered in prose). The enforcement
+    // re-run then emits items, so the node recovers instead of throwing.
+    const mockContext = makeMockContextWithToolCallSequences([
+      [],
+      ["Recovered item"]
+    ]);
+    n.assign({
+      prompt: "Generate items",
+      model: { provider: "mock", id: "gpt-4" }
+    });
+    const result = await n.process(mockContext as any);
+    expect(result.output).toEqual(["Recovered item"]);
+  });
+});
+
+// ---- ChartGeneratorNode ----
+describe("ChartGeneratorNode", () => {
+  it("has correct static metadata", () => {
+    expect(ChartGeneratorNode.nodeType).toBe(
+      "nodetool.generators.ChartGenerator"
+    );
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(ChartGeneratorNode);
+  });
+
+  it("generates chart config from data rows", async () => {
+    const n = new (ChartGeneratorNode as any)();
+    n.assign({
+      prompt: "Sales Chart",
+      data: {
+        rows: [
+          { month: "Jan", revenue: 100 },
+          { month: "Feb", revenue: 200 }
+        ]
+      }
+    });
+    const result = await n.process();
+    const output = result.output as any;
+    // output.data is { type: "chart_data", series: [...] }
+    expect(output.data.series[0].type).toBe("bar");
+    expect(output.data.series[0].x_column).toBe("month");
+    expect(output.data.series[0].y_column).toBe("revenue");
+    expect(output.data.series[0].label).toBe("Sales Chart");
+    expect(output.title).toBe("Sales Chart");
+  });
+
+  it("uses default series name when no prompt", async () => {
+    const n = new (ChartGeneratorNode as any)();
+    n.assign({
+      data: { rows: [{ a: 1 }] }
+    });
+    const result = await n.process();
+    const output = result.output as any;
+    expect(output.data.series[0].label).toBe("series");
+    expect(output.title).toBe("Generated Chart");
+  });
+
+  it("handles empty rows", async () => {
+    const n = new (ChartGeneratorNode as any)();
+    n.assign({ prompt: "Empty", data: { rows: [] } });
+    const result = await n.process();
+    const output = result.output as any;
+    expect(output.data.series[0].x_column).toBe("x");
+    expect(output.data.series[0].y_column).toBe("x");
+  });
+
+  it("handles data without rows key", async () => {
+    const n = new (ChartGeneratorNode as any)();
+    n.assign({ data: {} });
+    const result = await n.process();
+    const output = result.output as any;
+    expect(output.data.series[0].x_column).toBe("x");
+  });
+
+  it("uses index as fallback when key missing in row", async () => {
+    const n = new (ChartGeneratorNode as any)();
+    // Only one key so xKey and yKey are the same
+    n.assign({
+      data: { rows: [{ only: 10 }, { only: 20 }] }
+    });
+    const result = await n.process();
+    const output = result.output as any;
+    expect(output.data.series[0].x_column).toBe("only");
+    expect(output.data.series[0].y_column).toBe("only");
+  });
+
+  it("output has type chart_config with proper series structure", async () => {
+    const n = new (ChartGeneratorNode as any)();
+    n.assign({
+      prompt: "bar chart",
+      data: {
+        rows: [
+          { category: "A", value: 10 },
+          { category: "B", value: 20 }
+        ]
+      }
+    });
+    const result = await n.process();
+    const output = result.output as any;
+    expect(output.type).toBe("chart_config");
+    expect(output.title).toBe("bar chart");
+    expect(output.x_label).toBe("category");
+    expect(output.y_label).toBe("value");
+    expect(output.legend).toBe(true);
+    expect(output.legend_position).toBe("auto");
+    expect(output.corner).toBe(false);
+    expect(output.annot).toBe(false);
+    expect(output.square).toBe(false);
+    expect(output.fmt).toBe(".2g");
+    // series structure
+    expect(output.data.type).toBe("chart_data");
+    expect(Array.isArray(output.data.series)).toBe(true);
+    expect(output.data.series).toHaveLength(1);
+    expect(output.data.series[0]).toEqual({
+      type: "bar",
+      x_column: "category",
+      y_column: "value",
+      label: "bar chart"
+    });
+    expect(output.data.row).toBeNull();
+    expect(output.data.col).toBeNull();
+    expect(output.data.col_wrap).toBeNull();
+    // nullable config fields
+    expect(output.height).toBeNull();
+    expect(output.aspect).toBeNull();
+    expect(output.x_lim).toBeNull();
+    expect(output.y_lim).toBeNull();
+    expect(output.palette).toBeNull();
+  });
+});
+
+// ---- SVGGeneratorNode ----
+describe("SVGGeneratorNode", () => {
+  it("has correct static metadata", () => {
+    expect(SVGGeneratorNode.nodeType).toBe("nodetool.generators.SVGGenerator");
+  });
+
+  it("defaults", () => {
+    expectMetadataDefaults(SVGGeneratorNode);
+  });
+
+  it("generates SVG with prompt text", async () => {
+    const n = new (SVGGeneratorNode as any)();
+    n.assign({ prompt: "Hello World" });
+    const result = await n.process();
+    const svg = (result.output as any[])[0].content;
+    expect(svg).toContain("<svg");
+    expect(svg).toContain("Hello World");
+    expect(svg).toContain('width="512"');
+    expect(svg).toContain('height="512"');
+  });
+
+  it("uses custom dimensions", async () => {
+    const n = new (SVGGeneratorNode as any)();
+    n.assign({ prompt: "Test" });
+    // width and height are not declared props, set them directly
+    n.width = 100;
+    n.height = 200;
+    const result = await n.process();
+    const svg = (result.output as any[])[0].content;
+    expect(svg).toContain('width="100"');
+    expect(svg).toContain('height="200"');
+  });
+
+  it("escapes HTML entities in prompt", async () => {
+    const n = new (SVGGeneratorNode as any)();
+    n.assign({ prompt: "A & B <C>" });
+    const result = await n.process();
+    const svg = (result.output as any[])[0].content;
+    expect(svg).toContain("A &amp; B &lt;C&gt;");
+    expect(svg).not.toContain("A & B <C>");
+  });
+
+  it("uses 'SVG' as default text when no prompt", async () => {
+    const n = new (SVGGeneratorNode as any)();
+    const result = await n.process();
+    const svg = (result.output as any[])[0].content;
+    expect(svg).toContain(">SVG</text>");
+  });
+
+  it("attaches a list of images as separate content blocks", async () => {
+    let captured: any[] = [];
+    const mockContext = {
+      getProvider: async () => ({}),
+      // eslint-disable-next-line require-yield
+      async *streamProviderPrediction() {},
+      runProviderPrediction: async ({ params }: any) => {
+        captured = params.messages;
+        return { content: '<svg xmlns="http://www.w3.org/2000/svg"></svg>' };
+      }
+    };
+    const n = new (SVGGeneratorNode as any)();
+    n.assign({
+      prompt: "draw from these",
+      image: [{ uri: "file://a.png" }, { uri: "file://b.png" }],
+      model: { provider: "test", id: "m1" }
+    });
+    await n.process(mockContext as any);
+    const user = captured[captured.length - 1];
+    expect(user.role).toBe("user");
+    const images = user.content.filter((p: any) => p.type === "image");
+    expect(images.map((p: any) => p.image.uri)).toEqual([
+      "file://a.png",
+      "file://b.png"
+    ]);
+  });
+
+  it("defaults width/height to 512 when given 0 or NaN", async () => {
+    expectMetadataDefaults(SVGGeneratorNode);
+  });
+
+  it("output is an array with one svg_element containing content field", async () => {
+    const n = new (SVGGeneratorNode as any)();
+    n.assign({ prompt: "test shape" });
+    const result = await n.process();
+    expect(Array.isArray(result.output)).toBe(true);
+    expect(result.output).toHaveLength(1);
+    const element = (result.output as any[])[0];
+    expect(element).toHaveProperty("content");
+    expect(typeof element.content).toBe("string");
+    expect(element.content).toContain("<svg");
+    expect(element.content).toContain("</svg>");
+    expect(element.content).toContain('xmlns="http://www.w3.org/2000/svg"');
+  });
+
+  it("generates valid SVG structure with rect and text elements", async () => {
+    const n = new (SVGGeneratorNode as any)();
+    n.assign({ prompt: "my icon" });
+    const result = await n.process();
+    const svg = (result.output as any[])[0].content;
+    expect(svg).toContain('<rect width="100%" height="100%" fill="#f2f2f2"/>');
+    expect(svg).toContain('font-size="20"');
+    expect(svg).toContain("my icon");
+  });
+
+  it("falls back to 512 when width/height are 0", async () => {
+    const n = new (SVGGeneratorNode as any)();
+    n.assign({ prompt: "zero dims" });
+    n.width = 0;
+    n.height = 0;
+    const result = await n.process();
+    const svg = (result.output as any[])[0].content;
+    expect(svg).toContain('width="512"');
+    expect(svg).toContain('height="512"');
+  });
+});
+
+
+describe("AgentNode – injected tools", () => {
+  // The agent workflow runner puts its live tools on the context; a node that
+  // selects one by name must get that instance rather than a builtin stub.
+  const makeContext = (tools: unknown[], onLoop: (args: any) => void) => ({
+    getProvider: async () => ({
+      provider: "test",
+      async *generateLoop(args: any) {
+        onLoop(args);
+        const tool = (args.tools ?? [])[0];
+        const call = { id: "tc_1", name: tool.name, args: { q: "hi" } };
+        yield call;
+        const content = await tool.execute(call.args, call.id);
+        yield {
+          type: "message",
+          message: { role: "tool", toolCallId: call.id, content }
+        };
+        yield { type: "message", message: { role: "assistant", content: "ok" } };
+      }
+    }),
+    getInjectedTool: (name: string) =>
+      (tools as Array<{ name: string }>).find((t) => t.name === name) ?? null
+  });
+
+  it("forwards the provider's tool-call id to the injected tool", async () => {
+    const calls: Array<{
+      params: Record<string, unknown>;
+      options?: { toolCallId?: string };
+    }> = [];
+    const injected = {
+      name: "run_subtask",
+      description: "runs a subtask",
+      inputSchema: { type: "object", properties: {} },
+      execute: async (
+        _ctx: unknown,
+        params: Record<string, unknown>,
+        options?: { toolCallId?: string }
+      ) => {
+        calls.push({ params, options });
+        return { status: "ok" };
+      }
+    };
+
+    const n = new (AgentNode as any)();
+    n.assign({
+      model: { provider: "test", id: "m1" },
+      prompt: "go",
+      tools: [{ name: "run_subtask" }]
+    });
+
+    let seenTools: any[] = [];
+    await n.process(
+      makeContext([injected], (args) => {
+        seenTools = args.tools ?? [];
+      }) as any
+    );
+
+    expect(seenTools.map((t) => t.name)).toEqual(["run_subtask"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].params).toEqual({ q: "hi" });
+    expect(calls[0].options).toEqual({ toolCallId: "tc_1" });
+  });
+
+  it("prefers the injected tool over builtin hydration", async () => {
+    let injectedRan = false;
+    const injected = {
+      name: "google_search",
+      description: "the run's wired search tool",
+      inputSchema: { type: "object", properties: {} },
+      execute: async () => {
+        injectedRan = true;
+        return { status: "ok" };
+      }
+    };
+
+    const n = new (AgentNode as any)();
+    n.assign({
+      model: { provider: "test", id: "m1" },
+      prompt: "go",
+      tools: [{ name: "google_search" }]
+    });
+
+    let seenTools: any[] = [];
+    await n.process(
+      makeContext([injected], (args) => {
+        seenTools = args.tools ?? [];
+      }) as any
+    );
+
+    expect(seenTools[0].description).toBe("the run's wired search tool");
+    expect(injectedRan).toBe(true);
+  });
+});

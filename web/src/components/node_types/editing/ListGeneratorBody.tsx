@@ -1,0 +1,349 @@
+/** @jsxImportSource @emotion/react */
+/**
+ * ListGeneratorBody — bespoke body for `nodetool.generators.ListGenerator`.
+ *
+ * The node streams a list of strings (one `item` per LLM `add_item` call). We
+ * render them as a numbered, scrollable list that fills in live as items
+ * arrive, with a count + running indicator. The node sets
+ * `alwaysEmitOutputUpdates` so its `item` stream reaches the client even when
+ * the handle is wired onward.
+ *
+ * Each row collapses to a one-line preview; expanding it renders the item via
+ * `MarkdownRenderer`, which brings markdown formatting, a copy button, an
+ * internal scrollbar, and a fullscreen overlay viewer. The row header also
+ * exposes a copy button on hover so an item can be copied without expanding.
+ *
+ * Value resolution mirrors OutputNode: prefer the live output-stream buffer
+ * (scoped to the focused job), falling back to the node's settled generation.
+ * The buffer interleaves the `item` (string) and `index` (int) handles, so we
+ * keep only the string items.
+ */
+import React, {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+import { css } from "@emotion/react";
+import { useTheme } from "@mui/material/styles";
+import type { Theme } from "@mui/material/styles";
+
+import {
+  CopyButton,
+  FlexRow,
+  LoadingSpinner,
+  BORDER_RADIUS,
+  MOTION,
+  reducedMotion,
+  FONT_WEIGHT,
+  SPACING,
+  thinScrollbarStyles
+} from "../../ui_primitives";
+import MarkdownRenderer from "../../../utils/MarkdownRenderer";
+import { NodeOutputs } from "../../node/NodeOutputs";
+import HandleColumn from "../../node/HandleColumn";
+import NodeProgress from "../../node/NodeProgress";
+import FormatListNumberedRoundedIcon from "@mui/icons-material/FormatListNumberedRounded";
+import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
+
+import useResultsStore from "../../../stores/ResultsStore";
+import useWorkflowRunsStore from "../../../stores/WorkflowRunsStore";
+import { useNodeGenerations } from "../../../hooks/nodes/useNodeGenerations";
+import { outputOf } from "../../../utils/nodeGenerations";
+import { resolveExposedInputNames } from "../../../utils/exposedInputs";
+import type { BespokeBodyProps } from "./bespokeRegistry";
+
+export { LIST_GENERATOR_NODE_TYPE } from "./bespokeNodeTypes";
+
+/** Pull a display string out of one streamed/settled value, or undefined. */
+const pullString = (x: unknown): string | undefined => {
+  if (typeof x === "string") return x;
+  if (x && typeof x === "object") {
+    const o = x as Record<string, unknown>;
+    if (typeof o.item === "string") return o.item;
+    if (typeof o.output === "string") return o.output;
+    if (o.type === "text" && typeof o.data === "string") return o.data;
+  }
+  return undefined;
+};
+
+/** Normalize a node value into the list of item strings (drops index ints). */
+const toItems = (value: unknown): string[] => {
+  if (Array.isArray(value)) {
+    return value
+      .map(pullString)
+      .filter((s): s is string => typeof s === "string");
+  }
+  const single = pullString(value);
+  return single !== undefined ? [single] : [];
+};
+
+/** First non-empty line, stripped of markdown markers, for the collapsed row. */
+const previewOf = (item: string): string => {
+  const firstLine = item.split("\n").find((l) => l.trim().length > 0) ?? "";
+  return firstLine
+    .replace(/^\s{0,3}#{1,6}\s+/, "") // headings
+    .replace(/^\s{0,3}[-*+]\s+/, "") // bullet list
+    .replace(/^\s{0,3}\d+\.\s+/, "") // ordered list
+    .replace(/^\s{0,3}>\s+/, "") // blockquote
+    .replace(/[*_`~]/g, "") // inline emphasis / code
+    .trim();
+};
+
+/** Fixed size of the circular index badge (px). The expanded body aligns to it. */
+const INDEX_BADGE = 18;
+
+const styles = (theme: Theme) =>
+  css({
+    position: "relative",
+    minHeight: 0,
+    height: "100%",
+    width: "100%",
+    display: "flex",
+    flexDirection: "column",
+    gap: theme.spacing(SPACING.sm),
+    padding: theme.spacing(SPACING.md),
+
+    ".list-header": {
+      display: "flex",
+      alignItems: "center",
+      gap: theme.spacing(SPACING.sm),
+      color: theme.vars.palette.text.secondary,
+      fontSize: theme.fontSizeSmaller
+    },
+    // One flat, divided list — the node frame is already the card, so wrapping
+    // each item in its own bordered box would be nested cards.
+    ".list-scroll": {
+      flex: "1 1 auto",
+      minHeight: 0,
+      overflowY: "auto",
+      overflowX: "hidden",
+      ...thinScrollbarStyles(theme)
+    },
+    ".list-item": {
+      borderBottom: `1px solid ${theme.vars.palette.divider}`,
+      "&:last-of-type": { borderBottom: "none" }
+    },
+    ".list-head": {
+      display: "flex",
+      alignItems: "center",
+      gap: theme.spacing(SPACING.md),
+      padding: `${theme.spacing(SPACING.sm)} ${theme.spacing(SPACING.xs)}`,
+      borderRadius: BORDER_RADIUS.sm,
+      cursor: "pointer",
+      userSelect: "none",
+      transition: MOTION.background,
+      ...reducedMotion({ transition: MOTION.none }),
+      "&:hover": {
+        backgroundColor: theme.vars.palette.action.hover
+      }
+    },
+    ".list-index": {
+      flexShrink: 0,
+      minWidth: INDEX_BADGE,
+      height: INDEX_BADGE,
+      borderRadius: BORDER_RADIUS.pill,
+      backgroundColor: `rgba(var(--palette-primary-mainChannel) / 0.18)`,
+      color: theme.vars.palette.primary.main,
+      fontSize: theme.fontSizeSmaller,
+      fontWeight: FONT_WEIGHT.semibold,
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: `0 ${theme.spacing(SPACING.sm)}`
+    },
+    ".list-preview": {
+      flex: 1,
+      minWidth: 0,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+      fontSize: theme.fontSizeSmall,
+      color: theme.vars.palette.text.primary
+    },
+    ".list-actions": {
+      flexShrink: 0,
+      display: "flex",
+      alignItems: "center",
+      opacity: 0,
+      transition: MOTION.opacity,
+      ...reducedMotion({ transition: MOTION.none })
+    },
+    ".list-head:hover .list-actions, .list-head:focus-within .list-actions": {
+      opacity: 1
+    },
+    // Touch devices have no hover; keep the list actions reachable.
+    "@media (pointer: coarse)": {
+      ".list-actions": { opacity: 1 }
+    },
+    ".list-chevron": {
+      flexShrink: 0,
+      fontSize: theme.fontSizeNormal,
+      color: theme.vars.palette.text.secondary,
+      transition: MOTION.transform,
+      ...reducedMotion({ transition: MOTION.none })
+    },
+    ".list-chevron.expanded": {
+      transform: "rotate(90deg)"
+    },
+    // Hang the expanded body under the preview text, past the badge + gap.
+    ".list-full": {
+      paddingTop: 0,
+      paddingRight: theme.spacing(SPACING.xs),
+      paddingBottom: theme.spacing(SPACING.sm),
+      paddingLeft: `calc(${INDEX_BADGE}px + ${theme.spacing(SPACING.md)} + ${theme.spacing(SPACING.xs)})`,
+      fontSize: theme.fontSizeSmall,
+      color: theme.vars.palette.text.primary
+    },
+    ".list-empty": {
+      flex: 1,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      textAlign: "center",
+      color: theme.vars.palette.text.disabled,
+      fontSize: theme.fontSizeSmaller,
+      padding: theme.spacing(SPACING.lg)
+    },
+    ".outputs-row": {
+      flex: "0 0 auto"
+    }
+  });
+
+const ListGeneratorBodyInner: React.FC<BespokeBodyProps> = ({
+  id,
+  nodeMetadata,
+  data,
+  workflowId,
+  status,
+  isOutputNode
+}) => {
+  const theme = useTheme();
+  const isRunning = status === "running";
+
+  // Input handles (prompt, etc.) — same set the default node body shows, so
+  // edges can still attach and the inspector stays in sync.
+  const inputProperties = useMemo(() => {
+    const names = new Set(resolveExposedInputNames(nodeMetadata, data));
+    return (nodeMetadata.properties ?? []).filter((p) => names.has(p.name));
+  }, [nodeMetadata, data]);
+
+  const focusedJob = useWorkflowRunsStore((s) => s.focusedJob[workflowId]);
+  const streamBuffer = useResultsStore((s) =>
+    focusedJob ? s.getOutputResult(workflowId, focusedJob, id) : undefined
+  );
+  const { current } = useNodeGenerations(workflowId, id);
+
+  const items = useMemo(() => {
+    if (streamBuffer !== undefined) return toItems(streamBuffer);
+    // The settled generation carries the full list on the `output` handle
+    // (live: stream-end frame; reloaded: persisted JSON generation).
+    return current ? toItems(outputOf(current, "output")) : [];
+  }, [streamBuffer, current]);
+
+  // Accordion expand state, keyed by item index. Items start collapsed.
+  const [expanded, setExpanded] = useState<ReadonlySet<number>>(
+    () => new Set()
+  );
+  const toggle = useCallback((index: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  }, []);
+
+  // Auto-scroll to the newest item as the stream grows.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [items.length]);
+
+  return (
+    <div css={styles(theme)} className="nodrag" data-bespoke-body="ListGenerator">
+      {inputProperties.length > 0 && (
+        <HandleColumn id={id} properties={inputProperties} layout="stacked" />
+      )}
+      <div className="list-header">
+        <FormatListNumberedRoundedIcon sx={{ fontSize: "var(--fontSizeSmall)" }} />
+        <span>
+          {items.length === 0
+            ? isRunning
+              ? "Generating…"
+              : "List"
+            : `${items.length} item${items.length === 1 ? "" : "s"}`}
+        </span>
+        {isRunning && <LoadingSpinner inline size={12} color="inherit" />}
+      </div>
+
+      {items.length === 0 ? (
+        <div className="list-empty">
+          {isRunning ? "Generating items…" : "Run to generate a list"}
+        </div>
+      ) : (
+        <div ref={scrollRef} className="list-scroll nowheel">
+          {items.map((item, i) => {
+            const isOpen = expanded.has(i);
+            return (
+              <div className="list-item" key={`${i}-${item.slice(0, 24)}`}>
+                <div
+                  className="list-head"
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={isOpen}
+                  onClick={() => toggle(i)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      toggle(i);
+                    }
+                  }}
+                >
+                  <span className="list-index">{i + 1}</span>
+                  <span className="list-preview">{previewOf(item)}</span>
+                  <span
+                    className="list-actions"
+                    role="presentation"
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => e.stopPropagation()}
+                  >
+                    <CopyButton
+                      value={item}
+                      tooltip="Copy item"
+                      buttonSize="small"
+                    />
+                  </span>
+                  <ChevronRightRoundedIcon
+                    className={`list-chevron${isOpen ? " expanded" : ""}`}
+                  />
+                </div>
+                {isOpen && (
+                  <div className="list-full">
+                    <MarkdownRenderer content={item} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {!isOutputNode && (
+        <div className="outputs-row">
+          <NodeOutputs id={id} outputs={nodeMetadata.outputs} />
+        </div>
+      )}
+      {isRunning && (
+        <FlexRow>
+          <NodeProgress id={id} workflowId={workflowId} />
+        </FlexRow>
+      )}
+    </div>
+  );
+};
+
+export default memo(ListGeneratorBodyInner);

@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "moduleDetection": "force",
+    "outDir": "dist-electron",
+    "esModuleInterop": true,
+    "jsx": "react-jsx",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "types": ["react", "react-dom", "node"]
+  },
+  "include": [
+    "src/**/*",
+    "vite.config.ts",
+    "eslint.config.mjs",
+    "pages/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "dist-web",
+    "dist-electron",
+    "out",
+    "src/__tests__",
+    "src/__mocks__",
+    "**/*.test.ts",
+    "**/*.spec.ts"
+  ]
+}
