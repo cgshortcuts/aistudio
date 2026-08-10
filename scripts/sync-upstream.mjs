@@ -18,7 +18,8 @@ import { resolve } from "node:path";
 const ROOT = resolve(import.meta.dirname, "..");
 const CUSTOM_DIR = resolve(ROOT, "web/src/custom");
 const UPSTREAM_URL = "https://github.com/nodetool-ai/nodetool.git";
-const ORIGIN_HINT = "https://github.com/cgshortcuts/aistudio.git";
+const ORIGIN_HINT = "https://cgshortcuts@github.com/cgshortcuts/aistudio.git";
+const ORIGIN_ACCOUNT = "cgshortcuts";
 const wantMerge = process.argv.includes("--merge");
 
 function run(args, options = {}) {
@@ -72,6 +73,14 @@ if (!/\bupstream\b/.test(remoteText)) {
 if (!/\borigin\b/.test(remoteText)) {
   fail(
     `missing remote "origin". Add it with:\n  git remote add origin ${ORIGIN_HINT}`
+  );
+}
+
+const activeUser = run(["config", "--get", "credential.username"]);
+const configuredUser = (activeUser.stdout || "").trim();
+if (configuredUser && configuredUser !== ORIGIN_ACCOUNT) {
+  console.warn(
+    `warning: credential.username is "${configuredUser}", expected "${ORIGIN_ACCOUNT}". Fix with:\n  git config --local credential.username ${ORIGIN_ACCOUNT}\n  gh auth switch --user ${ORIGIN_ACCOUNT}`
   );
 }
 

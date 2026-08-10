@@ -34,5 +34,11 @@ describe("settingsStyles", () => {
       mockTheme.fontSizeSmall
     );
     expect(styles[".settings-content"].margin).toBe(0);
+    expect(styles[".settings-tabs"].marginBottom).toBe(0);
+    expect(styles[".sticky-header"].pointerEvents).toBe("none");
+    expect(
+      (styles[".sticky-header"] as Record<string, CSSObject>)["& .settings-tabs"]
+        .pointerEvents
+    ).toBe("auto");
   });
 });

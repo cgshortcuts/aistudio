@@ -32,6 +32,7 @@ import WorkspaceTree from "../workspaces/WorkspaceTree";
 import { VersionHistoryPanel } from "../version";
 import PanelHeadline from "../ui/PanelHeadline";
 import { useCombo } from "../../stores/KeyPressedStore";
+import { useWorkspaceTabsStore } from "../../stores/WorkspaceTabsStore";
 import { TOOLTIP_ENTER_DELAY } from "../../config/constants";
 import { isProduction } from "../../lib/env";
 import { useWorkflowManager } from "../../contexts/WorkflowManagerContext";
@@ -524,8 +525,18 @@ const PanelBottom: React.FC = () => {
 
   const systemStats = useSystemStatsStore((state) => state.stats);
 
-  useCombo(["Control", "Shift", "T"], () => handlePanelToggle("trace"), false);
-  useCombo(["l"], () => handlePanelToggle("logs"), false);
+  const activeTab = useWorkspaceTabsStore((state) =>
+    state.tabs.find((tab) => tab.id === state.activeTabId) ?? null
+  );
+  const pageTabActive = activeTab?.type === "page";
+
+  useCombo(
+    ["Control", "Shift", "T"],
+    () => handlePanelToggle("trace"),
+    false,
+    !pageTabActive
+  );
+  useCombo(["l"], () => handlePanelToggle("logs"), false, !pageTabActive);
 
   // Production-disabled-view safeguard: if a previous session persisted a
   // gated-off view (workspace/sandboxes), migrate the store to "logs" so the

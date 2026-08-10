@@ -203,6 +203,7 @@ const DashboardTemplates: React.FC<DashboardTemplatesProps> = ({
             placeholder="Search templates by name, tag…"
             kbd="/"
             aria-label="Search templates"
+            focusOnTyping
           />
           {!fullPage && (
             <SectionLink onClick={handleViewAllTemplates}>

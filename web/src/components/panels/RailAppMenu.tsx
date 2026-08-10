@@ -39,8 +39,10 @@ const logoButtonStyles = (theme: Theme) =>
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
+    // === CUSTOM FORK START: AiStudio Branding ===
     width: "40px",
-    height: "34px",
+    height: "40px",
+    // === CUSTOM FORK END ===
     margin: `0 ${theme.spacing(SPACING.micro)}`,
     padding: 0,
     border: "none",
@@ -185,13 +187,15 @@ const RailAppMenu: React.FC<RailAppMenuProps> = ({ onAction }) => {
           aria-expanded={open}
           onClick={() => setOpen((value) => !value)}
         >
+          {/* === CUSTOM FORK START: AiStudio Branding === */}
           <Logo
             small
-            width="22px"
-            height="22px"
+            width="40px"
+            height="40px"
             fontSize="1em"
             borderRadius={BORDER_RADIUS.sm}
           />
+          {/* === CUSTOM FORK END === */}
         </button>
       </Tooltip>
 

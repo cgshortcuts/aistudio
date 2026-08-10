@@ -4,3 +4,4 @@
  */
 export * from "./rail-hover-labels";
 export * from "./branding";
+export * from "./model-manager";

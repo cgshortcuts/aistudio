@@ -9,6 +9,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import ClearIcon from "@mui/icons-material/Clear";
 import { TOOLTIP_ENTER_DELAY } from "../../config/constants";
 import { useAutoFocusEnabled } from "../../hooks/useAutoFocusEnabled";
+import { isEditableElement } from "../../utils/browser";
 
 export interface SearchInputProps {
   /** Current search value */
@@ -29,6 +30,11 @@ export interface SearchInputProps {
   /** Auto-focus on mount. Ignored on touch devices, where it would raise the
    * virtual keyboard over the panel that just opened. */
   autoFocus?: boolean;
+  /**
+   * When true, alphanumeric keys focus this field and start the query — same
+   * behavior as Model Manager search. Skipped while another editable is focused.
+   */
+  focusOnTyping?: boolean;
   /** Debounce delay in ms (0 = no debounce) */
   debounceMs?: number;
   /** Callback when Enter is pressed */
@@ -132,6 +138,7 @@ export const SearchInput = memo(forwardRef<HTMLInputElement, SearchInputProps>((
   size = "small",
   disabled = false,
   autoFocus = false,
+  focusOnTyping = false,
   debounceMs = 0,
   onSubmit,
   onClear,
@@ -145,22 +152,46 @@ export const SearchInput = memo(forwardRef<HTMLInputElement, SearchInputProps>((
   const autoFocusEnabled = useAutoFocusEnabled();
   const [localValue, setLocalValue] = useState(value);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const setInputRefs = useCallback(
+    (node: HTMLInputElement | null) => {
+      inputRef.current = node;
+      if (typeof ref === "function") {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    },
+    [ref]
+  );
+
+  // Clicking the search icon / padding must still focus the field — otherwise
+  // canvas single-key shortcuts eat the next keystrokes and "nothing is typed".
+  const focusInput = useCallback(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const commitValue = useCallback(
+    (newValue: string) => {
+      setLocalValue(newValue);
+      if (debounceMs > 0) {
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+        timeoutRef.current = setTimeout(() => {
+          onChange(newValue);
+        }, debounceMs);
+      } else {
+        onChange(newValue);
+      }
+    },
+    [onChange, debounceMs]
+  );
   
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.value;
-    setLocalValue(newValue);
-    
-    if (debounceMs > 0) {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
-      timeoutRef.current = setTimeout(() => {
-        onChange(newValue);
-      }, debounceMs);
-    } else {
-      onChange(newValue);
-    }
-  }, [onChange, debounceMs]);
+    commitValue(e.target.value);
+  }, [commitValue]);
   
   const handleClear = useCallback(() => {
     // Drop the pending debounced change, or it fires after the clear and puts
@@ -172,6 +203,7 @@ export const SearchInput = memo(forwardRef<HTMLInputElement, SearchInputProps>((
     setLocalValue("");
     onChange("");
     onClear?.();
+    inputRef.current?.focus();
   }, [onChange, onClear]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -197,9 +229,55 @@ export const SearchInput = memo(forwardRef<HTMLInputElement, SearchInputProps>((
       }
     };
   }, []);
+
+  // Match Model Manager: type anywhere on the page to start searching, unless
+  // focus is already in another editable control (API key fields, etc.).
+  React.useEffect(() => {
+    if (!focusOnTyping || disabled) {
+      return;
+    }
+    const handleWindowKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
+      if (document.activeElement === inputRef.current) {
+        return;
+      }
+      // Inactive workspace tabs stay mounted; never steal keys from there.
+      if (inputRef.current?.closest("[inert]") != null) {
+        return;
+      }
+      const eventTarget =
+        event.target instanceof Element ? event.target : null;
+      if (
+        isEditableElement(document.activeElement) ||
+        isEditableElement(eventTarget)
+      ) {
+        return;
+      }
+      if (event.key.length !== 1 || !/[a-zA-Z0-9]/.test(event.key)) {
+        return;
+      }
+      event.preventDefault();
+      inputRef.current?.focus();
+      commitValue(event.key);
+    };
+    window.addEventListener("keydown", handleWindowKeyDown);
+    return () => window.removeEventListener("keydown", handleWindowKeyDown);
+  }, [focusOnTyping, disabled, commitValue]);
   
   return (
-    <div className={`search-input-wrapper nodrag ${className || ""}`} css={styles(theme)}>
+    <div
+      className={`search-input-wrapper nodrag ${className || ""}`}
+      css={styles(theme)}
+      onMouseDown={(e) => {
+        // Don't steal focus from the clear button's own mousedown handler.
+        if ((e.target as HTMLElement).closest("button")) {
+          return;
+        }
+        focusInput();
+      }}
+    >
       <TextField
         className="search-input"
         value={localValue}
@@ -211,7 +289,7 @@ export const SearchInput = memo(forwardRef<HTMLInputElement, SearchInputProps>((
         autoFocus={autoFocus && autoFocusEnabled}
         fullWidth={fullWidth}
         sx={sx}
-        inputRef={ref}
+        inputRef={setInputRefs}
         slotProps={{
           htmlInput: { "aria-label": ariaLabel ?? placeholder },
           input: {

@@ -1,15 +1,8 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type FocusEvent
-} from "react";
-import { RAIL_LEAVE_DELAY_MS } from "./constants";
+import { useCallback, useState, type FocusEvent } from "react";
 
 /**
  * Hover + focus-within expand state for the left icon rail overlay.
- * Leave is delayed so the cursor can move across items without flicker.
+ * Collapses as soon as the pointer or focus leaves the rail.
  */
 export function useRailExpand(): {
   railExpanded: boolean;
@@ -22,49 +15,26 @@ export function useRailExpand(): {
 } {
   const [hovered, setHovered] = useState(false);
   const [focusWithin, setFocusWithin] = useState(false);
-  const leaveTimerRef = useRef<number | null>(null);
   const railExpanded = hovered || focusWithin;
 
-  const clearLeaveTimer = useCallback(() => {
-    if (leaveTimerRef.current != null) {
-      window.clearTimeout(leaveTimerRef.current);
-      leaveTimerRef.current = null;
-    }
+  const onMouseEnter = useCallback(() => {
+    setHovered(true);
   }, []);
 
-  useEffect(() => () => clearLeaveTimer(), [clearLeaveTimer]);
-
-  const onMouseEnter = useCallback(() => {
-    clearLeaveTimer();
-    setHovered(true);
-  }, [clearLeaveTimer]);
-
   const onMouseLeave = useCallback(() => {
-    clearLeaveTimer();
-    leaveTimerRef.current = window.setTimeout(() => {
-      setHovered(false);
-      leaveTimerRef.current = null;
-    }, RAIL_LEAVE_DELAY_MS);
-  }, [clearLeaveTimer]);
+    setHovered(false);
+  }, []);
 
   const onFocus = useCallback(() => {
-    clearLeaveTimer();
     setFocusWithin(true);
-  }, [clearLeaveTimer]);
+  }, []);
 
-  const onBlur = useCallback(
-    (event: FocusEvent<HTMLDivElement>) => {
-      if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
-        return;
-      }
-      clearLeaveTimer();
-      leaveTimerRef.current = window.setTimeout(() => {
-        setFocusWithin(false);
-        leaveTimerRef.current = null;
-      }, RAIL_LEAVE_DELAY_MS);
-    },
-    [clearLeaveTimer]
-  );
+  const onBlur = useCallback((event: FocusEvent<HTMLDivElement>) => {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return;
+    }
+    setFocusWithin(false);
+  }, []);
 
   return {
     railExpanded,

@@ -640,6 +640,45 @@ const SECTION_TITLES: Record<string, string> = {
   advanced: "Services & Advanced"
 };
 
+/** Match name, description, tag, section title, or secret key against a query. */
+const providerMatchesSearch = (
+  meta: ProviderMeta,
+  lowerSearch: string
+): boolean => {
+  if (!lowerSearch) {
+    return true;
+  }
+  if (meta.name.toLowerCase().includes(lowerSearch)) {
+    return true;
+  }
+  if (meta.description.toLowerCase().includes(lowerSearch)) {
+    return true;
+  }
+  if (meta.tag?.toLowerCase().includes(lowerSearch)) {
+    return true;
+  }
+  if (SECTION_TITLES[meta.section].toLowerCase().includes(lowerSearch)) {
+    return true;
+  }
+  const key = meta.key.toLowerCase();
+  if (key.includes(lowerSearch)) {
+    return true;
+  }
+  // OPENAI_API_KEY → "openai" so users can type the provider id without the suffix.
+  const keyStem = key
+    .replace(/_api_key$/, "")
+    .replace(/_api_token$/, "")
+    .replace(/_token$/, "")
+    .replace(/_/g, " ");
+  return keyStem.includes(lowerSearch);
+};
+
+const googleWorkspaceMatchesSearch = (lowerSearch: string): boolean =>
+  !lowerSearch ||
+  "google workspace".includes(lowerSearch) ||
+  lowerSearch.includes("google") ||
+  lowerSearch.includes("workspace");
+
 /* ------------------------------------------------------------------ */
 //  Main content
 /* ------------------------------------------------------------------ */
@@ -697,11 +736,7 @@ export const APIKeysTabContent = memo(function APIKeysTabContent({
         continue;
       }
 
-      if (
-        lowerSearch &&
-        !meta.name.toLowerCase().includes(lowerSearch) &&
-        !meta.description.toLowerCase().includes(lowerSearch)
-      ) {
+      if (!providerMatchesSearch(meta, lowerSearch)) {
         continue;
       }
 
@@ -731,9 +766,7 @@ export const APIKeysTabContent = memo(function APIKeysTabContent({
       (p) =>
         isProviderAvailable(p) &&
         !areAllFieldsConfigured(p, configuredKeys) &&
-        (!lowerSearch ||
-          p.name.toLowerCase().includes(lowerSearch) ||
-          p.description.toLowerCase().includes(lowerSearch))
+        providerMatchesSearch(p, lowerSearch)
     );
   }, [configuredKeys, lowerSearch]);
 
@@ -880,18 +913,24 @@ export const APIKeysTabContent = memo(function APIKeysTabContent({
     return false;
   }, [connected, unconfiguredBySection]);
 
+  const isSearching = lowerSearch.length > 0;
+
   return (
     <FlexColumn sx={{ gap: "1.5rem" }}>
-      <ProviderHero theme={theme} />
+      {/* Hero + get-started are browse chrome — hide them while filtering so
+          the matching cards are the first thing on screen. */}
+      {!isSearching && <ProviderHero theme={theme} />}
 
       {/* Show the onboarding banner only until the user connects their first
           provider — once anything is configured, the Connected Providers
           section above makes the banner redundant. */}
-      {connected.length === 0 && <GetStartedBanner theme={theme} />}
+      {!isSearching && connected.length === 0 && (
+        <GetStartedBanner theme={theme} />
+      )}
 
       {/* Google Workspace has no API key — access rides on the Google login.
           Renders nothing when the backend does not offer the integration. */}
-      <GoogleWorkspaceCard />
+      {googleWorkspaceMatchesSearch(lowerSearch) && <GoogleWorkspaceCard />}
 
       {!hasContent && lowerSearch && (
         <EmptyState

@@ -15,6 +15,9 @@ import { readSettingsAsync, updateSetting } from "./settings";
 import { createMiniAppWindow, createChatWindow } from "./workflowWindow";
 import type { Workflow } from "./types";
 import { EventEmitter } from "events";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_ID } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 let trayInstance: Electron.Tray | null = null;
 
@@ -111,7 +114,9 @@ async function createTray(): Promise<Electron.Tray> {
 
   if (isWindows) {
     logMessage("Setting Windows-specific app ID", "info");
-    app.setAppUserModelId("com.nodetool.desktop");
+    // === CUSTOM FORK START: AiStudio Branding ===
+    app.setAppUserModelId(APP_ID);
+    // === CUSTOM FORK END ===
   }
 
   try {

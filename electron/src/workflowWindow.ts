@@ -3,6 +3,9 @@ import { getServerPort } from "./utils";
 import path from "path";
 import { getWebDevServerUrl } from "./devMode";
 import { hardenWebContents } from "./windowSecurity";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME, getAppIconPath } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 // Map to store workflow windows
 const workflowWindows = new Map<number, BrowserWindow>();
@@ -27,6 +30,9 @@ function createWorkflowWindow(workflowId: string): BrowserWindow {
     titleBarStyle: "hidden",
     transparent: true,
     alwaysOnTop: true,
+    // === CUSTOM FORK START: AiStudio Branding ===
+    icon: getAppIconPath(),
+    // === CUSTOM FORK END ===
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -63,7 +69,12 @@ function createMiniAppWindow(workflowId: string, workflowName?: string): Browser
     height: windowHeight,
     minWidth: 800,
     minHeight: 600,
-    title: workflowName ? `${workflowName} - NodeTool` : "Mini App - NodeTool",
+    // === CUSTOM FORK START: AiStudio Branding ===
+    title: workflowName
+      ? `${workflowName} - ${APP_DISPLAY_NAME}`
+      : `Mini App - ${APP_DISPLAY_NAME}`,
+    icon: getAppIconPath(),
+    // === CUSTOM FORK END ===
     backgroundColor: "#181a1b",
     webPreferences: {
       nodeIntegration: false,
@@ -117,7 +128,10 @@ function createChatWindow(): BrowserWindow {
     height: windowHeight,
     minWidth: 800,
     minHeight: 600,
-    title: "Chat - NodeTool",
+    // === CUSTOM FORK START: AiStudio Branding ===
+    title: `Chat - ${APP_DISPLAY_NAME}`,
+    icon: getAppIconPath(),
+    // === CUSTOM FORK END ===
     backgroundColor: "#181a1b",
     webPreferences: {
       nodeIntegration: false,

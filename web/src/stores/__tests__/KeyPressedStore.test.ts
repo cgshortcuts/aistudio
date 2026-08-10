@@ -435,6 +435,39 @@ describe("KeyPressedStore", () => {
       unregisterComboCallback("backspace");
     });
 
+    it("lets search fields type when a hidden editor still holds document.activeElement", () => {
+      // Regression: inactive workspace tabs stay mounted. A composer left focused
+      // inside one can remain document.activeElement after the user clicks a
+      // Settings/Examples search box — single-letter shortcuts then steal keys.
+      const callback = jest.fn();
+      registerComboCallback("a", { callback, preventDefault: true });
+
+      const stale = document.createElement("textarea");
+      document.body.appendChild(stale);
+      stale.focus();
+
+      const search = document.createElement("input");
+      search.setAttribute("aria-label", "Search providers...");
+      document.body.appendChild(search);
+
+      const { setKeysPressed } = useKeyPressedStore.getState();
+      const event = new KeyboardEvent("keydown", {
+        key: "a",
+        bubbles: true
+      });
+      Object.defineProperty(event, "target", { value: search });
+
+      act(() => {
+        setKeysPressed({ a: true, shift: false, control: false, alt: false, meta: false }, event);
+      });
+
+      expect(callback).not.toHaveBeenCalled();
+
+      document.body.removeChild(stale);
+      document.body.removeChild(search);
+      unregisterComboCallback("a");
+    });
+
     it("allows delete callback when canvas is focused", () => {
       const callback = jest.fn();
       registerComboCallback("delete", { callback, preventDefault: true });

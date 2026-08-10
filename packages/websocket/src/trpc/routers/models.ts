@@ -38,6 +38,7 @@ import {
 } from "@nodetool-ai/transformers-js-nodes";
 import type { UnifiedModel } from "@nodetool-ai/protocol";
 import { MODEL_SEARCH_KINDS } from "@nodetool-ai/protocol";
+import { localGgufUnifiedFields } from "../../local-gguf-model.js";
 import { access, readdir } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { homedir } from "node:os";
@@ -713,32 +714,37 @@ function tjsCachedAsRecommended(repoId: string): TjsModelRef[] {
   return out;
 }
 
-function toUnifiedLanguageModel(
+async function toUnifiedLanguageModel(
   model: {
     id: string;
     name: string;
     provider: string;
+    path?: string | null;
   },
   supportsTools?: boolean | null
-): UnifiedModel {
+): Promise<UnifiedModel> {
+  const local = await localGgufUnifiedFields(model);
   return {
     id: model.id,
     type: "language_model",
     name: model.name,
     provider: model.provider,
-    repo_id: null,
-    path: null,
-    downloaded: model.provider === "ollama" || model.provider === "llama_cpp",
+    repo_id: local.repo_id,
+    path: local.path,
+    cache_path: local.cache_path,
+    size_on_disk: local.size_on_disk,
+    downloaded: local.downloaded,
     tags: [model.provider],
     supports_tools: supportsTools ?? null
   };
 }
 
-function toUnifiedModel(
+async function toUnifiedModel(
   model: {
     id: string;
     name: string;
     provider: string;
+    path?: string | null;
     voices?: string[];
     supportedTasks?: string[];
     durations?: number[];
@@ -746,15 +752,28 @@ function toUnifiedModel(
     aspectRatios?: string[];
   },
   type: string
-): UnifiedModel {
+): Promise<UnifiedModel> {
+  const local =
+    type === "language_model" || type === "embedding_model"
+      ? await localGgufUnifiedFields(model)
+      : {
+          repo_id: null as string | null,
+          path: model.path ?? null,
+          cache_path: null as string | null,
+          downloaded:
+            model.provider === "ollama" || model.provider === "llama_cpp",
+          size_on_disk: null as number | null
+        };
   return {
     id: model.id,
     type,
     name: model.name,
     provider: model.provider,
-    repo_id: null,
-    path: null,
-    downloaded: model.provider === "ollama" || model.provider === "llama_cpp",
+    repo_id: local.repo_id,
+    path: local.path,
+    cache_path: local.cache_path,
+    size_on_disk: local.size_on_disk,
+    downloaded: local.downloaded,
     tags: [model.provider],
     voices: model.voices ?? null,
     supported_tasks: model.supportedTasks ?? null,
@@ -794,7 +813,9 @@ export async function getAllModels(userId: string): Promise<UnifiedModel[]> {
             .catch(() => null as boolean | null)
         )
       );
-      return models.map((m, i) => toUnifiedLanguageModel(m, toolFlags[i]));
+      return Promise.all(
+        models.map((m, i) => toUnifiedLanguageModel(m, toolFlags[i]))
+      );
     } catch {
       // Provider unavailable — skip
       return [];
@@ -877,14 +898,20 @@ async function collectProviderModelsForKind(
                 instance.hasToolSupport(m.id).catch(() => null as boolean | null)
               )
             );
-            models.forEach((m, i) =>
-              out.push(toUnifiedLanguageModel(m, toolFlags[i]))
+            out.push(
+              ...(await Promise.all(
+                models.map((m, i) => toUnifiedLanguageModel(m, toolFlags[i]))
+              ))
             );
             return;
           }
           case "embedding": {
             const models = await instance.getAvailableEmbeddingModels();
-            for (const m of models) out.push(toUnifiedModel(m, "embedding_model"));
+            out.push(
+              ...(await Promise.all(
+                models.map((m) => toUnifiedModel(m, "embedding_model"))
+              ))
+            );
             return;
           }
           case "text_to_image":
@@ -892,23 +919,35 @@ async function collectProviderModelsForKind(
             const models = await instance.getAvailableImageModels();
             for (const m of models) {
               if (m.supportedTasks && !m.supportedTasks.includes(kind)) continue;
-              out.push(toUnifiedModel(m, "image_model"));
+              out.push(await toUnifiedModel(m, "image_model"));
             }
             return;
           }
           case "text_to_speech": {
             const models = await instance.getAvailableTTSModels();
-            for (const m of models) out.push(toUnifiedModel(m, "tts_model"));
+            out.push(
+              ...(await Promise.all(
+                models.map((m) => toUnifiedModel(m, "tts_model"))
+              ))
+            );
             return;
           }
           case "text_to_music": {
             const models = await instance.getAvailableMusicModels();
-            for (const m of models) out.push(toUnifiedModel(m, "music_model"));
+            out.push(
+              ...(await Promise.all(
+                models.map((m) => toUnifiedModel(m, "music_model"))
+              ))
+            );
             return;
           }
           case "speech_to_text": {
             const models = await instance.getAvailableASRModels();
-            for (const m of models) out.push(toUnifiedModel(m, "asr_model"));
+            out.push(
+              ...(await Promise.all(
+                models.map((m) => toUnifiedModel(m, "asr_model"))
+              ))
+            );
             return;
           }
           case "text_to_video":
@@ -916,7 +955,7 @@ async function collectProviderModelsForKind(
             const models = await instance.getAvailableVideoModels();
             for (const m of models) {
               if (m.supportedTasks && !m.supportedTasks.includes(kind)) continue;
-              out.push(toUnifiedModel(m, "video_model"));
+              out.push(await toUnifiedModel(m, "video_model"));
             }
             return;
           }
@@ -955,7 +994,10 @@ export async function collectProviderCatalogModels(
             safeProviderCall(
               `catalogModels:${type}`,
               { provider: providerId, userId },
-              async () => (await fetchModels()).map((m) => toUnifiedModel(m, type)),
+              async () =>
+                Promise.all(
+                  (await fetchModels()).map((m) => toUnifiedModel(m, type))
+                ),
               [] as UnifiedModel[]
             );
           const lists = await Promise.all([
@@ -1299,8 +1341,8 @@ export const modelsRouter = router({
                 .catch(() => null as boolean | null)
             )
           );
-          return models.map((m, i) =>
-            toUnifiedLanguageModel(m, toolFlags[i])
+          return Promise.all(
+            models.map((m, i) => toUnifiedLanguageModel(m, toolFlags[i]))
           );
         },
         []
@@ -1374,7 +1416,7 @@ export const modelsRouter = router({
           );
           if (!instance) return [];
           const models = await instance.getAvailableImageModels();
-          return models.map((m) => toUnifiedModel(m, "image_model"));
+          return Promise.all(models.map((m) => toUnifiedModel(m, "image_model")));
         },
         []
       )
@@ -1391,7 +1433,7 @@ export const modelsRouter = router({
             const instance = await instantiateProvider(providerId, ctx.userId);
             if (!instance) return [] as UnifiedModel[];
             const models = await instance.getAvailableTTSModels();
-            return models.map((m) => toUnifiedModel(m, "tts_model"));
+            return Promise.all(models.map((m) => toUnifiedModel(m, "tts_model")));
           },
           [] as UnifiedModel[]
         )
@@ -1414,7 +1456,7 @@ export const modelsRouter = router({
           );
           if (!instance) return [];
           const models = await instance.getAvailableTTSModels();
-          return models.map((m) => toUnifiedModel(m, "tts_model"));
+          return Promise.all(models.map((m) => toUnifiedModel(m, "tts_model")));
         },
         []
       )
@@ -1431,7 +1473,7 @@ export const modelsRouter = router({
             const instance = await instantiateProvider(providerId, ctx.userId);
             if (!instance) return [] as UnifiedModel[];
             const models = await instance.getAvailableMusicModels();
-            return models.map((m) => toUnifiedModel(m, "music_model"));
+            return Promise.all(models.map((m) => toUnifiedModel(m, "music_model")));
           },
           [] as UnifiedModel[]
         )
@@ -1454,7 +1496,7 @@ export const modelsRouter = router({
           );
           if (!instance) return [];
           const models = await instance.getAvailableMusicModels();
-          return models.map((m) => toUnifiedModel(m, "music_model"));
+          return Promise.all(models.map((m) => toUnifiedModel(m, "music_model")));
         },
         []
       )
@@ -1471,7 +1513,7 @@ export const modelsRouter = router({
             const instance = await instantiateProvider(providerId, ctx.userId);
             if (!instance) return [] as UnifiedModel[];
             const models = await instance.getAvailableASRModels();
-            return models.map((m) => toUnifiedModel(m, "asr_model"));
+            return Promise.all(models.map((m) => toUnifiedModel(m, "asr_model")));
           },
           [] as UnifiedModel[]
         )
@@ -1494,7 +1536,7 @@ export const modelsRouter = router({
           );
           if (!instance) return [];
           const models = await instance.getAvailableASRModels();
-          return models.map((m) => toUnifiedModel(m, "asr_model"));
+          return Promise.all(models.map((m) => toUnifiedModel(m, "asr_model")));
         },
         []
       )
@@ -1511,7 +1553,7 @@ export const modelsRouter = router({
             const instance = await instantiateProvider(providerId, ctx.userId);
             if (!instance) return [] as UnifiedModel[];
             const models = await instance.getAvailableVideoModels();
-            return models.map((m) => toUnifiedModel(m, "video_model"));
+            return Promise.all(models.map((m) => toUnifiedModel(m, "video_model")));
           },
           [] as UnifiedModel[]
         )
@@ -1534,7 +1576,7 @@ export const modelsRouter = router({
           );
           if (!instance) return [];
           const models = await instance.getAvailableVideoModels();
-          return models.map((m) => toUnifiedModel(m, "video_model"));
+          return Promise.all(models.map((m) => toUnifiedModel(m, "video_model")));
         },
         []
       )
@@ -1554,7 +1596,7 @@ export const modelsRouter = router({
           );
           if (!instance) return [];
           const models = await instance.getAvailableEmbeddingModels();
-          return models.map((m) => toUnifiedModel(m, "embedding_model"));
+          return Promise.all(models.map((m) => toUnifiedModel(m, "embedding_model")));
         },
         []
       )

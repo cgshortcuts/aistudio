@@ -32,6 +32,7 @@ import {
   type HFFileRequest
 } from "@nodetool-ai/huggingface";
 import type { UnifiedModel } from "@nodetool-ai/protocol";
+import { localGgufUnifiedFields } from "./local-gguf-model.js";
 
 export type { UnifiedModel };
 
@@ -297,19 +298,23 @@ async function hasCachedFiles(repoId: string): Promise<boolean> {
   return (await listRepoCachedFiles(repoId)).length > 0;
 }
 
-function toUnifiedLanguageModel(model: LanguageModel): UnifiedModel {
+async function toUnifiedLanguageModel(model: LanguageModel): Promise<UnifiedModel> {
+  const local = await localGgufUnifiedFields(model);
   return {
     id: model.id,
     type: "language_model",
     name: model.name,
-    repo_id: null,
-    path: null,
-    downloaded: model.provider === "ollama" || model.provider === "llama_cpp",
+    provider: model.provider,
+    repo_id: local.repo_id,
+    path: local.path,
+    cache_path: local.cache_path,
+    size_on_disk: local.size_on_disk,
+    downloaded: local.downloaded,
     tags: [model.provider]
   };
 }
 
-function toUnifiedModel(
+async function toUnifiedModel(
   model:
     | LanguageModel
     | ImageModel
@@ -319,14 +324,28 @@ function toUnifiedModel(
     | MusicModel
     | EmbeddingModel,
   type: string
-): UnifiedModel {
+): Promise<UnifiedModel> {
+  const local =
+    type === "language_model" || type === "embedding_model"
+      ? await localGgufUnifiedFields(model)
+      : {
+          repo_id: null as string | null,
+          path: null as string | null,
+          cache_path: null as string | null,
+          downloaded:
+            model.provider === "ollama" || model.provider === "llama_cpp",
+          size_on_disk: null as number | null
+        };
   return {
     id: model.id,
     type,
     name: model.name,
-    repo_id: null,
-    path: null,
-    downloaded: model.provider === "ollama" || model.provider === "llama_cpp",
+    provider: model.provider,
+    repo_id: local.repo_id,
+    path: local.path,
+    cache_path: local.cache_path,
+    size_on_disk: local.size_on_disk,
+    downloaded: local.downloaded,
     tags: [model.provider]
   };
 }
@@ -627,7 +646,7 @@ async function getAllModels(userId = "1"): Promise<UnifiedModel[]> {
   const providerModelsPromises = availableIds.map(async (providerId) => {
     try {
       const models = await getLanguageModelsByProvider(providerId, userId);
-      return models.map(toUnifiedLanguageModel);
+      return Promise.all(models.map(toUnifiedLanguageModel));
     } catch {
       // Provider unavailable — skip
       return [];
@@ -1126,10 +1145,10 @@ export async function handleModelsApiRequest(
   return null;
 }
 
-export function toUnifiedModelsFromLanguage(
+export async function toUnifiedModelsFromLanguage(
   models: LanguageModel[]
-): UnifiedModel[] {
-  return models.map((model) => toUnifiedModel(model, "language_model"));
+): Promise<UnifiedModel[]> {
+  return Promise.all(models.map((model) => toUnifiedModel(model, "language_model")));
 }
 
 // ---------------------------------------------------------------------------

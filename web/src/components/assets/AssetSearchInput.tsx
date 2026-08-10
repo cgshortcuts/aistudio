@@ -12,6 +12,7 @@ import { useAssetSearch } from "../../serverState/useAssetSearch";
 import { Tooltip, MOTION, BORDER_RADIUS, reducedMotion } from "../ui_primitives";
 import { useTheme } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
+import { isEditableElement } from "../../utils/browser";
 
 
 const styles = (theme: Theme) =>
@@ -348,12 +349,33 @@ const AssetSearchInput: React.FC<AssetSearchInputProps> = ({
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      const shouldHandleEvent =
-        document.activeElement === inputRef.current ||
-        (focusOnTyping &&
-          !document.activeElement?.classList.contains("search-input"));
+      const active = document.activeElement;
+      const eventTarget =
+        event.target instanceof Element ? event.target : null;
+      const isOwnFocused = active === inputRef.current;
 
-      if (!shouldHandleEvent) {return;}
+      if (
+        focusOnTyping &&
+        !isOwnFocused &&
+        inputRef.current?.closest("[inert]") != null
+      ) {
+        return;
+      }
+
+      if (
+        focusOnTyping &&
+        !isOwnFocused &&
+        (isEditableElement(active) || isEditableElement(eventTarget))
+      ) {
+        return;
+      }
+
+      const shouldHandleEvent =
+        isOwnFocused || (focusOnTyping && !isEditableElement(active));
+
+      if (!shouldHandleEvent) {
+        return;
+      }
 
       if (
         (event.key === "Delete" || event.key === "Backspace") &&
@@ -365,7 +387,9 @@ const AssetSearchInput: React.FC<AssetSearchInputProps> = ({
       }
 
       if (focusOnTyping) {
-        if (isControlOrMetaPressed) {return;}
+        if (isControlOrMetaPressed) {
+          return;
+        }
         if (event.key.length === 1 && /[a-zA-Z0-9]/.test(event.key)) {
           if (document.activeElement !== inputRef.current) {
             event.preventDefault();

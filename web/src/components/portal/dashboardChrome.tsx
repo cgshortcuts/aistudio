@@ -2,8 +2,16 @@
 import { css } from "@emotion/react";
 import type { Theme } from "@mui/material/styles";
 import { useTheme } from "@mui/material/styles";
-import { memo, type ReactNode, type Ref } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useRef,
+  type ReactNode,
+  type Ref
+} from "react";
 import { MOTION, BORDER_RADIUS, SPACING, getSpacingPx } from "../ui_primitives";
+import { isEditableElement } from "../../utils/browser";
 
 /** Shared horizontal rhythm for the dashboard: a centered column that the hero
  *  background and section borders bleed past, while content stays aligned. */
@@ -139,6 +147,11 @@ interface DashboardSearchBoxProps {
   kbd?: string;
   "aria-label": string;
   ref?: Ref<HTMLInputElement>;
+  /**
+   * When true, alphanumeric keys focus this field and start the query — same
+   * behavior as Model Manager search. Skipped while another editable is focused.
+   */
+  focusOnTyping?: boolean;
 }
 
 export const DashboardSearchBox = memo(function DashboardSearchBox({
@@ -147,10 +160,59 @@ export const DashboardSearchBox = memo(function DashboardSearchBox({
   placeholder,
   kbd,
   "aria-label": ariaLabel,
-  ref
+  ref,
+  focusOnTyping = false
 }: DashboardSearchBoxProps) {
   const theme = useTheme();
   const hasValue = value.length > 0;
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const setInputRefs = useCallback(
+    (node: HTMLInputElement | null) => {
+      inputRef.current = node;
+      if (typeof ref === "function") {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    },
+    [ref]
+  );
+
+  useEffect(() => {
+    if (!focusOnTyping) {
+      return;
+    }
+    const handleWindowKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) {
+        return;
+      }
+      if (document.activeElement === inputRef.current) {
+        return;
+      }
+      // Inactive workspace tabs stay mounted; never steal keys from there.
+      if (inputRef.current?.closest("[inert]") != null) {
+        return;
+      }
+      const eventTarget =
+        event.target instanceof Element ? event.target : null;
+      if (
+        isEditableElement(document.activeElement) ||
+        isEditableElement(eventTarget)
+      ) {
+        return;
+      }
+      if (event.key.length !== 1 || !/[a-zA-Z0-9]/.test(event.key)) {
+        return;
+      }
+      event.preventDefault();
+      inputRef.current?.focus();
+      onChange(event.key);
+    };
+    window.addEventListener("keydown", handleWindowKeyDown);
+    return () => window.removeEventListener("keydown", handleWindowKeyDown);
+  }, [focusOnTyping, onChange]);
+
   return (
     <label css={searchStyles(theme)}>
       <svg
@@ -165,7 +227,7 @@ export const DashboardSearchBox = memo(function DashboardSearchBox({
         <path d="m10.5 10.5 3 3" />
       </svg>
       <input
-        ref={ref}
+        ref={setInputRefs}
         value={value}
         placeholder={placeholder}
         aria-label={ariaLabel}

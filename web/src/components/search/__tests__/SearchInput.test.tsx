@@ -14,7 +14,9 @@ jest.mock("../../ui_primitives", () => ({
 
 // No modifier keys held during these tests.
 jest.mock("../../../stores/KeyPressedStore", () => ({
-  useKeyPressedStore: () => false
+  useKeyPressedStore: Object.assign(() => false, {
+    getState: () => ({ isKeyPressed: () => false })
+  })
 }));
 
 const renderWithTheme = (ui: React.ReactElement) =>
@@ -135,5 +137,59 @@ describe("SearchInput", () => {
     );
 
     expect(screen.getByTestId("search-input-field")).toHaveFocus();
+  });
+
+  it("does not swallow letters typed into another input when focusOnTyping is on", () => {
+    const onSearchChange = jest.fn();
+    renderWithTheme(
+      <div>
+        <input aria-label="Settings search" />
+        <div inert>
+          <SearchInput
+            onSearchChange={onSearchChange}
+            searchTerm=""
+            focusSearchInput={false}
+            focusOnTyping
+          />
+        </div>
+      </div>
+    );
+
+    const other = screen.getByLabelText("Settings search") as HTMLInputElement;
+    other.focus();
+    const event = new KeyboardEvent("keydown", {
+      key: "a",
+      bubbles: true,
+      cancelable: true
+    });
+    const prevented = !window.dispatchEvent(event);
+
+    expect(prevented).toBe(false);
+    expect(onSearchChange).not.toHaveBeenCalled();
+  });
+
+  it("does not steal alphanumeric keys from a focused editable without inert", () => {
+    const onSearchChange = jest.fn();
+    renderWithTheme(
+      <div>
+        <input aria-label="Examples search" />
+        <SearchInput
+          onSearchChange={onSearchChange}
+          searchTerm=""
+          focusSearchInput={false}
+          focusOnTyping
+        />
+      </div>
+    );
+
+    const other = screen.getByLabelText("Examples search") as HTMLInputElement;
+    other.focus();
+    const event = new KeyboardEvent("keydown", {
+      key: "b",
+      bubbles: true,
+      cancelable: true
+    });
+    expect(window.dispatchEvent(event)).toBe(true);
+    expect(onSearchChange).not.toHaveBeenCalled();
   });
 });

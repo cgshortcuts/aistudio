@@ -4,6 +4,9 @@ import { QueryClient } from "@tanstack/react-query";
 import { trpc } from "../lib/trpc";
 import { useHfCacheStatusStore } from "./HfCacheStatusStore";
 import type { ModelScope } from "./ModelManagerStore";
+// === CUSTOM FORK START: model-manager ===
+import { isFilesystemModelId } from "../custom/model-manager";
+// === CUSTOM FORK END ===
 
 const DOWNLOAD_STATUSES = [
   "pending",
@@ -440,6 +443,15 @@ export const useModelDownloadStore = create<ModelDownloadStore>((set, get) => ({
     ignorePatterns?: string[] | null,
     scope: ModelScope = "local"
   ) => {
+    // === CUSTOM FORK START: model-manager ===
+    if (isFilesystemModelId(repoId)) {
+      console.error(
+        "[ModelDownloadStore] Refusing Hub download for filesystem path:",
+        repoId
+      );
+      return;
+    }
+    // === CUSTOM FORK END ===
     if (path) {
       if (allowPatterns) {
         throw new Error("allowPatterns is not supported when path is provided");

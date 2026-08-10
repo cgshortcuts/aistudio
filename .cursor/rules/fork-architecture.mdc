@@ -7,6 +7,22 @@ alwaysApply: true
 
 This repo is a **fork** of upstream NodeTool. Upstream is pulled regularly. Custom features, UI tweaks, and business logic must sit on top of base code so merges stay clean.
 
+## Git remotes and publishing (mandatory)
+
+This workspace always publishes to **one** fork remote. Do not push elsewhere.
+
+| Remote | URL | Purpose |
+|---|---|---|
+| `origin` | `https://cgshortcuts@github.com/cgshortcuts/aistudio.git` | **Push / PR target** (AiStudio fork) |
+| `upstream` | `https://github.com/nodetool-ai/nodetool.git` | Fetch-only NodeTool source |
+
+Rules for agents and humans:
+
+- Before any `git push`, ensure the active GitHub CLI account is **`cgshortcuts`** (`gh auth switch --user cgshortcuts`). Other accounts on this machine (`dave-cgshortcuts`, etc.) must not be used for this repo.
+- Never change `origin` to another user/org unless the user explicitly asks.
+- Sync from upstream with `npm run sync:upstream` (fetch) or `npm run sync:upstream -- --merge` (merge). Do not force-push to `upstream`.
+- Re-pin remotes anytime with `npm run git:ensure-remotes`.
+
 ## Where custom code lives
 
 - Put all fork-only code under **`web/src/custom/`** (UI / web) or **`electron/src/custom/`** (desktop shell).
@@ -57,3 +73,4 @@ Use the same feature name in START and in the `custom/<feature>/` folder.
 2. Core diffs are minimal and wrapped in `CUSTOM FORK` markers.
 3. Tests for the feature live next to the custom module (`custom/<feature>/__tests__/`).
 4. Upstream files still look upstream outside the marked mount points.
+5. Pushes go only to `origin` → `cgshortcuts/aistudio` as account `cgshortcuts`.

@@ -101,7 +101,7 @@ const WorkflowEditorSurface = ({
       <ReactFlowProvider>
         <ContextMenuProvider>
           <ConnectableNodesProvider>
-            <KeyboardProvider>
+            <KeyboardProvider active={active}>
               {active && (
                 <div
                   style={{

@@ -115,7 +115,9 @@ const ModelListItem: React.FC<
                   lastSlash !== -1 ? full?.slice(lastSlash + 1) : full;
                 const modelUrl = getModelUrl(
                   model.provider ?? undefined,
-                  model.id,
+                  // === CUSTOM FORK START: model-manager ===
+                  model.repo_id || model.id,
+                  // === CUSTOM FORK END ===
                   model.type || undefined
                 );
 

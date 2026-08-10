@@ -3,5 +3,7 @@ export {
   APP_ID,
   APP_SETUP_ARTIFACT,
   APP_GITHUB_OWNER,
-  APP_GITHUB_REPO
+  APP_GITHUB_REPO,
+  APP_ICON_SRC,
+  APP_LOGO_SRC
 } from "./constants";

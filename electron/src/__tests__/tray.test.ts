@@ -140,7 +140,9 @@ describe("createTray platform branching", () => {
     const ctorArg = (electronMock.Tray as jest.Mock).mock.calls[0][0];
     expect(ctorArg).toMatch(/tray-icon\.ico$/);
     expect(electronMock.app.setAppUserModelId).toHaveBeenCalledWith(
-      "com.nodetool.desktop",
+      // === CUSTOM FORK START: AiStudio Branding ===
+      "com.aistudio.desktop",
+      // === CUSTOM FORK END ===
     );
   });
 

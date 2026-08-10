@@ -175,9 +175,11 @@ describe("ErrorBoundary", () => {
       </ThemeProvider>
     );
 
-    const logo = screen.getByAltText("NodeTool Logo");
+    // === CUSTOM FORK START: AiStudio Branding ===
+    const logo = screen.getByAltText("AiStudio Logo");
+    // === CUSTOM FORK END ===
     expect(logo).toBeInTheDocument();
-    expect(logo).toHaveAttribute("src", "/logo192.png");
+    expect(logo).toHaveAttribute("src", "/ai-icon.svg");
   });
 
   it("renders CopyButton with stack trace", async () => {

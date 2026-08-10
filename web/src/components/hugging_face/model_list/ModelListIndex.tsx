@@ -32,6 +32,9 @@ import {
   canCheckHfCache,
   getHfCacheKey
 } from "../../../utils/hfCache";
+// === CUSTOM FORK START: model-manager ===
+import { hubRepoIdForModel } from "../../../custom/model-manager";
+// === CUSTOM FORK END ===
 
 const styles = (theme: Theme) =>
   css({
@@ -223,7 +226,12 @@ const ModelListIndex: React.FC = () => {
 
   const handleStartDownload = useCallback(
     (model: UnifiedModel) => {
-      const repoId = model.repo_id || model.id;
+      // === CUSTOM FORK START: model-manager ===
+      const repoId = hubRepoIdForModel(model);
+      if (!repoId) {
+        return;
+      }
+      // === CUSTOM FORK END ===
       const path = model.path ?? null;
       const allowPatterns = path ? null : model.allow_patterns ?? null;
       const ignorePatterns = path ? null : model.ignore_patterns ?? null;
@@ -614,7 +622,12 @@ const ModelListIndex: React.FC = () => {
                     (cachePending[cacheKey] ||
                       cacheStatuses[cacheKey] === undefined);
                   const isDownloaded =
-                    item.model.type === "llama_model" || scope === "worker"
+                    item.model.type === "llama_model" ||
+                    // === CUSTOM FORK START: model-manager ===
+                    item.model.provider === "node_llama_cpp" ||
+                    item.model.provider === "llama_cpp" ||
+                    // === CUSTOM FORK END ===
+                    scope === "worker"
                       ? !!item.model.downloaded
                       : cacheStatuses[cacheKey] !== undefined
                         ? !!cacheStatuses[cacheKey]

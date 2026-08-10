@@ -63,7 +63,7 @@ import { IpcChannels } from "./types.d";
 import { updateSetting, readSettingsAsync } from "./settings";
 import { isElectronDevMode, getWebDevServerUrl } from "./devMode";
 // === CUSTOM FORK START: AiStudio Branding ===
-import { APP_DISPLAY_NAME } from "./custom/branding";
+import { APP_DISPLAY_NAME, APP_ID } from "./custom/branding";
 // === CUSTOM FORK END ===
 
 async function initializeBackendServerWithKeychainRetry(): Promise<void> {
@@ -261,17 +261,20 @@ async function checkPythonEnvironmentExists(): Promise<boolean> {
   }
 }
 
+// === CUSTOM FORK START: desktop-dev-no-conda-required ===
+/** Warn if conda is missing in dev; do not block the desktop UI. */
 function assertActivatedCondaEnvironmentForDevMode(): void {
   if (process.env.CONDA_PREFIX && process.env.CONDA_PREFIX.trim().length > 0) {
+    logMessage(`Using active conda environment: ${process.env.CONDA_PREFIX}`);
     return;
   }
 
-  const message =
-    "Electron dev mode requires an activated conda environment. " +
-    "Please run `conda activate <env>` before starting `npm run electron:dev`.";
-  dialog.showErrorBox("Conda Environment Required", message);
-  throw new Error(message);
+  logMessage(
+    "No CONDA_PREFIX in Electron dev mode — continuing without conda. Python nodes may fail until you run `conda activate nodetool`.",
+    "warn",
+  );
 }
+// === CUSTOM FORK END ===
 
 async function waitForWebDevServerReady(
   baseUrl: string,
@@ -353,7 +356,6 @@ async function initialize(): Promise<void> {
     } else {
       logMessage("Running in Electron dev mode");
       assertActivatedCondaEnvironmentForDevMode();
-      logMessage(`Using active conda environment: ${process.env.CONDA_PREFIX}`);
     }
 
     assert(mainWindow, "MainWindow is not initialized");
@@ -481,6 +483,9 @@ let isInitialized = false;
 app.on("ready", async () => {
   // === CUSTOM FORK START: AiStudio Branding ===
   app.setName(APP_DISPLAY_NAME);
+  if (process.platform === "win32") {
+    app.setAppUserModelId(APP_ID);
+  }
   // === CUSTOM FORK END ===
   // Run settings warmup, IPC setup, and media permission check in parallel
   const settingsPromise = readSettingsAsync().catch((error) => {

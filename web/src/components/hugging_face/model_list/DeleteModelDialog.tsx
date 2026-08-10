@@ -21,6 +21,9 @@ import { trpc } from "../../../lib/trpc";
 import { useNotificationStore } from "../../../stores/NotificationStore";
 import { useModels } from "./useModels";
 import type { ModelScope } from "../../../stores/ModelManagerStore";
+// === CUSTOM FORK START: model-manager ===
+import { hubRepoIdForModel } from "../../../custom/model-manager";
+// === CUSTOM FORK END ===
 
 interface DeleteModelDialogProps {
   modelId: string | null;
@@ -87,6 +90,8 @@ const DeleteModelDialog: React.FC<DeleteModelDialogProps> = ({
 
     if (isOllama) {
       await openOllamaPath();
+    } else if (model?.cache_path) {
+      await openInExplorer(model.cache_path);
     } else if (model?.path) {
       await openInExplorer(model.path);
     } else {
@@ -106,7 +111,9 @@ const DeleteModelDialog: React.FC<DeleteModelDialogProps> = ({
     !fileExplorerAvailable ||
     !modelId ||
     !modelForExplorer ||
-    (modelForExplorer.type !== "llama_model" && !modelForExplorer.path);
+    (modelForExplorer.type !== "llama_model" &&
+      !modelForExplorer.path &&
+      !modelForExplorer.cache_path);
 
   const handleConfirmDelete = async () => {
     if (modelId) {
@@ -115,7 +122,19 @@ const DeleteModelDialog: React.FC<DeleteModelDialogProps> = ({
         if (model?.type === "llama_model") {
           await deleteOllamaModelMutation.mutateAsync(modelId);
         } else {
-          await deleteHFModel(modelId);
+          // === CUSTOM FORK START: model-manager ===
+          const repoId = hubRepoIdForModel(model ?? { id: modelId });
+          if (!repoId) {
+            addNotification({
+              type: "error",
+              content:
+                "Cannot delete this local model via Hub id. Remove the file from the models folder instead.",
+              dismissable: true
+            });
+            return;
+          }
+          await deleteHFModel(repoId);
+          // === CUSTOM FORK END ===
         }
         onClose();
       } catch (error: unknown) {

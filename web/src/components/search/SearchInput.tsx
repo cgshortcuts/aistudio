@@ -10,6 +10,7 @@ import { useKeyPressedStore } from "../../stores/KeyPressedStore";
 import { useDebouncedCallback } from "../../hooks/useDebouncedCallback";
 import { isMac } from "../../utils/platform";
 import { useAutoFocusEnabled } from "../../hooks/useAutoFocusEnabled";
+import { isEditableElement } from "../../utils/browser";
 import type { NodeMetadata } from "../../stores/ApiTypes";
 
 const styles = (theme: Theme) =>
@@ -185,14 +186,43 @@ const SearchInput: React.FC<SearchInputProps> = ({
 
   React.useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      const active = document.activeElement;
+      const eventTarget =
+        event.target instanceof Element ? event.target : null;
+      const isOwnFocused = active === inputRef.current;
+
+      // Workspace page tabs stay mounted under `[inert]`. Their window
+      // listeners still run — without this guard, Model Manager search
+      // preventDefault'd a–z/0–9 while Settings/Examples search was focused
+      // (special characters worked; letters/numbers did not).
+      if (
+        focusOnTyping &&
+        !isOwnFocused &&
+        inputRef.current?.closest("[inert]") != null
+      ) {
+        return;
+      }
+
+      // Do not steal from another text field. The old check required class
+      // `search-input`, which MUI Settings search and native Examples search
+      // do not carry.
+      if (
+        focusOnTyping &&
+        !isOwnFocused &&
+        (isEditableElement(active) || isEditableElement(eventTarget))
+      ) {
+        return;
+      }
+
       const shouldHandleEvent =
-        document.activeElement === inputRef.current ||
-        (focusOnTyping &&
-          !document.activeElement?.classList.contains("search-input"));
+        isOwnFocused || (focusOnTyping && !isEditableElement(active));
 
-      if (!shouldHandleEvent) { return; }
+      if (!shouldHandleEvent) {
+        return;
+      }
 
-      const isControlOrMeta = useKeyPressedStore.getState().isKeyPressed("control") ||
+      const isControlOrMeta =
+        useKeyPressedStore.getState().isKeyPressed("control") ||
         useKeyPressedStore.getState().isKeyPressed("meta");
       if (
         (event.key === "Delete" || event.key === "Backspace") &&
@@ -242,7 +272,9 @@ const SearchInput: React.FC<SearchInputProps> = ({
       }
 
       if (focusOnTyping) {
-        if (isControlOrMeta) { return; }
+        if (isControlOrMeta) {
+          return;
+        }
         if (event.key.length === 1 && /[a-zA-Z0-9]/.test(event.key)) {
           if (document.activeElement !== inputRef.current) {
             event.preventDefault();

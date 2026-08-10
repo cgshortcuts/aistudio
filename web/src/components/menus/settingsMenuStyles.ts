@@ -218,7 +218,11 @@ export const settingsStyles = (theme: Theme): CSSObject => ({
   minHeight: 0,
   width: "100%",
   ".settings-tabs": {
-    marginBottom: `${getSpacingPx(SPACING.xl)}`,
+    // Spacing under the tabs lives on the content panel, not here — a
+    // marginBottom on the sticky header extends its hit box over the search
+    // field below (even when the header itself is pointer-events: none, the
+    // tabs root still painted a dead band when pointer-events were inherited).
+    marginBottom: 0,
     paddingTop: 0,
     lineHeight: 1.5,
     "& .MuiTabs-indicator": {
@@ -409,19 +413,26 @@ export const settingsStyles = (theme: Theme): CSSObject => ({
       flex: 1
     }
   },
+  // Sticky tabs sit above the scrollable panel. The header itself must not
+  // capture clicks in its margin/gap — a transparent hit target there steals
+  // focus from the Search providers field that sits immediately below.
   ".sticky-header": {
     position: "sticky",
     top: 0,
     zIndex: Z_INDEX.overlay,
     padding: `0 ${getSpacingPx(SPACING.xl)}`,
     display: "block",
-    backgroundColor: "transparent"
+    backgroundColor: "transparent",
+    pointerEvents: "none",
+    "& .settings-tabs": {
+      pointerEvents: "auto"
+    }
   },
   ".settings-content": {
     flex: 1,
     minWidth: 0,
     minHeight: 0,
-    padding: `0 ${getSpacingPx(SPACING.xl)}`,
+    padding: `${getSpacingPx(SPACING.xl)} ${getSpacingPx(SPACING.xl)} 0`,
     overflowY: "auto",
     // Cap the readable measure on the form tabs (General, Integrations,
     // About). The API Keys panel overrides this with a wider cap.
@@ -536,10 +547,10 @@ export const settingsStyles = (theme: Theme): CSSObject => ({
       padding: `0 ${getSpacingPx(SPACING.md)}`
     },
     ".settings-tabs": {
-      marginBottom: `${getSpacingPx(SPACING.md)}`
+      marginBottom: 0
     },
     ".settings-content": {
-      padding: `0 ${getSpacingPx(SPACING.md)}`,
+      padding: `${getSpacingPx(SPACING.md)} ${getSpacingPx(SPACING.md)} 0`,
       maxWidth: "100%"
     },
     ".settings-content--api-keys": {

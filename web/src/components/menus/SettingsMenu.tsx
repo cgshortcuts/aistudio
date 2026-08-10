@@ -617,6 +617,7 @@ function SettingsPage() {
                       onChange={setGeneralSearchTerm}
                       size="small"
                       showClear
+                      focusOnTyping
                     />
                   </Box>
                   <div className="general-settings">
@@ -1064,6 +1065,8 @@ function SettingsPage() {
                       onChange={setApiSearchTerm}
                       size="small"
                       showClear
+                      fullWidth
+                      focusOnTyping
                     />
                   </Box>
                   <APIKeysTabContent searchTerm={apiSearchTerm} />

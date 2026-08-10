@@ -2,9 +2,14 @@
 import { css } from "@emotion/react";
 import React, { useEffect, useState, useCallback, memo } from "react";
 import { DATA_TYPES } from "../config/data_types";
-import { useColorScheme, useTheme } from "@mui/material/styles";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { useTheme } from "@mui/material/styles";
+// === CUSTOM FORK END ===
 import type { Theme } from "@mui/material/styles";
 import { MOTION, SPACING, getSpacingPx } from "./ui_primitives";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME, APP_ICON_SRC } from "../custom/branding";
+// === CUSTOM FORK END ===
 
 const randomDatatype = () => {
   return DATA_TYPES[Math.floor(Math.random() * DATA_TYPES.length)];
@@ -65,8 +70,11 @@ const logoStyles = (
     },
     ".logo-image": {
       cursor: "pointer",
-      width: "20px",
-      height: "20px",
+      // === CUSTOM FORK START: AiStudio Branding ===
+      width: width,
+      height: height,
+      // === CUSTOM FORK END ===
+      objectFit: "contain",
       filter: invertLogo ? "invert(1)" : undefined
     }
   });
@@ -108,7 +116,6 @@ const Logo = memo(function Logo({
   }, []);
 
   const theme = useTheme();
-  const { mode } = useColorScheme();
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -133,7 +140,10 @@ const Logo = memo(function Logo({
         fontSize,
         borderRadius,
         small,
-        mode === "light"
+        // === CUSTOM FORK START: AiStudio Branding ===
+        // Color SVG mark — do not invert in light mode.
+        false
+        // === CUSTOM FORK END ===
       )}
       onClick={onClick}
       onKeyDown={onClick ? handleKeyDown : undefined}
@@ -142,7 +152,9 @@ const Logo = memo(function Logo({
       style={onClick ? { cursor: "pointer" } : undefined}
     >
       {small && (
-        <img className="logo-image" src="/nodetool_icon.png" alt="NodeTool" />
+        // === CUSTOM FORK START: AiStudio Branding ===
+        <img className="logo-image" src={APP_ICON_SRC} alt={APP_DISPLAY_NAME} />
+        // === CUSTOM FORK END ===
       )}
       {enableText && (
         <div className="nt" onMouseEnter={handleMouseEnter} aria-hidden="true">

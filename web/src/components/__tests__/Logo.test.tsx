@@ -60,7 +60,11 @@ describe("Logo", () => {
         enableText
       />
     );
-    expect(screen.getByAltText("NodeTool")).toBeInTheDocument();
+    // === CUSTOM FORK START: AiStudio Branding ===
+    const img = screen.getByAltText("AiStudio");
+    expect(img).toBeInTheDocument();
+    expect(img).toHaveAttribute("src", "/cgshortcuts-ai-logo-color.svg");
+    // === CUSTOM FORK END ===
   });
 
   it("renders text when enableText is true", () => {

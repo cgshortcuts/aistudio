@@ -30,6 +30,18 @@ const INACTIVE_TAB_STYLE: React.CSSProperties = {
   zIndex: Z_INDEX.base
 };
 
+/**
+ * Inactive tabs stay mounted (viewport / editor state survives switches) but
+ * must not keep keyboard focus. `pointer-events: none` alone is not enough —
+ * a focused search/composer inside a hidden layer still receives keydown, so
+ * typing in Settings/Examples search appears to do nothing. `inert` removes
+ * the subtree from focus and input processing.
+ */
+const tabLayerProps = (isActive: boolean) =>
+  isActive
+    ? { style: ACTIVE_TAB_STYLE }
+    : { style: INACTIVE_TAB_STYLE, inert: true as const };
+
 const PanelLeft = React.lazy(() => import("../panels/PanelLeft"));
 const PanelRight = React.lazy(() => import("../panels/PanelRight"));
 const PanelBottom = React.lazy(() => import("../panels/PanelBottom"));
@@ -169,11 +181,7 @@ const WorkspaceShell = () => {
             {tabs.map((tab) => {
               const isActive = tab.id === activeTabId;
               return (
-                <div
-                  key={tab.id}
-                  className="tab-layer"
-                  style={isActive ? ACTIVE_TAB_STYLE : INACTIVE_TAB_STYLE}
-                >
+                <div key={tab.id} className="tab-layer" {...tabLayerProps(isActive)}>
                   <TabContent tab={tab} active={isActive} />
                 </div>
               );

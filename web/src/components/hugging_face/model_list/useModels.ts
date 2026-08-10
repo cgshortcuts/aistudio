@@ -17,6 +17,9 @@ import { openInExplorer, openOllamaPath } from "../../../utils/fileExplorer";
 import { isHfModel } from "../../../utils/hfCache";
 import { isLocalProvider } from "../../../utils/providerDisplay";
 import useMetadataStore from "../../../stores/MetadataStore";
+// === CUSTOM FORK START: model-manager ===
+import { isFilesystemModelId } from "../../../custom/model-manager";
+// === CUSTOM FORK END ===
 
 /**
  * HuggingFace Hub pipeline tags, shown as the fixed category list when browsing
@@ -329,6 +332,14 @@ export const useModels = (scope: ModelScope = "local"): UseModelsResult => {
 
     if (isOllama) {
       await openOllamaPath();
+      // === CUSTOM FORK START: model-manager ===
+    } else if (model.cache_path && isFilesystemModelId(model.cache_path)) {
+      await openInExplorer(model.cache_path);
+    } else if (model.path && isFilesystemModelId(model.path)) {
+      await openInExplorer(model.path);
+    } else if (isFilesystemModelId(model.id)) {
+      await openInExplorer(model.id);
+      // === CUSTOM FORK END ===
     } else if (model.path) {
       await openInExplorer(model.path);
     } else {

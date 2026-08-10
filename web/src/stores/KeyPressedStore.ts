@@ -182,9 +182,13 @@ const executeComboCallbacks = (
   // An active callback exists for the pressed keys.
   // Now, check if we should suppress it due to input focus.
   
+  const eventTarget =
+    event?.target instanceof Element ? event.target : null;
+  // Prefer the event target over activeElement: a hidden, still-focused
+  // composer in an inactive workspace tab can leave activeElement stale while
+  // the user is typing into a newly clicked search field.
   const isInputFocused =
-    isEditableElement(activeElement) ||
-    (event?.target instanceof Element && isEditableElement(event.target));
+    isEditableElement(eventTarget) || isEditableElement(activeElement);
 
   // Canvas focus = focus is somewhere inside the workflow editor *and not*
   // inside an editable child. Without the input-focus exclusion, a Lexical
@@ -195,8 +199,7 @@ const executeComboCallbacks = (
     !isInputFocused &&
     (lastPointerDownWasCanvas ||
       isWorkflowEditorElement(activeElement) ||
-      (event?.target instanceof Element &&
-        isWorkflowEditorElement(event.target)));
+      (eventTarget !== null && isWorkflowEditorElement(eventTarget)));
 
   if (isInputFocused && options.scope !== "global") {
     // --- Input Focus Handling ---
@@ -548,9 +551,12 @@ const toggleConversationCallback = () => {
   useCanvasChatDockStore.getState().toggleConversation();
 };
 
-// Lower-case 'o' — toggles the canvas chat conversation overlay.
+// Lower-case 'o' — toggles the canvas chat conversation overlay. Scope is
+// canvas-only so typing "o" into Settings/Examples search (or any input) is
+// never intercepted; canvas scope still suppresses while an input is focused.
 registerComboCallback("o", {
   preventDefault: false,
+  scope: "canvas",
   callback: toggleConversationCallback
 });
 

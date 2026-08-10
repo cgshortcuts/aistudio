@@ -80,6 +80,25 @@ describe("hfCache", () => {
       const model = createMockModel({ repo_id: undefined, id: undefined });
       expect(canCheckHfCache(model)).toBe(false);
     });
+    it("returns false when id is a filesystem path", () => {
+      const model = createMockModel({
+        type: "language_model",
+        path: "Qwen3-32B-Q4_K_M.gguf",
+        repo_id: null,
+        id: "C:/Users/Dave/.cache/huggingface/hub/models--Qwen--Qwen3-32B-GGUF/snapshots/a/Qwen3-32B-Q4_K_M.gguf"
+      });
+      expect(canCheckHfCache(model)).toBe(false);
+    });
+
+    it("returns true when repo_id is a Hub id even if path is set", () => {
+      const model = createMockModel({
+        type: "language_model",
+        path: "Qwen3-32B-Q4_K_M.gguf",
+        repo_id: "Qwen/Qwen3-32B-GGUF",
+        id: "C:/Users/Dave/.cache/huggingface/hub/models--Qwen--Qwen3-32B-GGUF/snapshots/a/Qwen3-32B-Q4_K_M.gguf"
+      });
+      expect(canCheckHfCache(model)).toBe(true);
+    });
   });
 
   describe("getHfCacheKey", () => {

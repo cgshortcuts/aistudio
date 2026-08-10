@@ -7,7 +7,7 @@ import { isAppQuitting } from "./main";
 import { isElectronDevMode, getWebDevServerUrl } from "./devMode";
 import { hardenWebContents } from "./windowSecurity";
 // === CUSTOM FORK START: AiStudio Branding ===
-import { APP_DISPLAY_NAME } from "./custom/branding";
+import { APP_DISPLAY_NAME, getAppIconPath } from "./custom/branding";
 // === CUSTOM FORK END ===
 
 /**
@@ -63,13 +63,24 @@ function createWindow(): BrowserWindow {
     width: 1500,
     height: 1000,
     frame: true,
+    show: false,
     // === CUSTOM FORK START: AiStudio Branding ===
     title: APP_DISPLAY_NAME,
+    icon: getAppIconPath(),
     // === CUSTOM FORK END ===
     webPreferences: { ...secureWebPreferences },
   });
 
   window.setBackgroundColor("#111111");
+
+  // === CUSTOM FORK START: desktop-window-maximized ===
+  // Maximized keeps the normal Windows title bar (min / max / close).
+  // Do not use setFullScreen — that hides the system chrome.
+  window.once("ready-to-show", () => {
+    window.maximize();
+    window.show();
+  });
+  // === CUSTOM FORK END ===
 
   if (isElectronDevMode()) {
     window.loadURL(
@@ -106,6 +117,9 @@ function createLogViewerWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1200,
     height: 800,
+    // === CUSTOM FORK START: AiStudio Branding ===
+    icon: getAppIconPath(),
+    // === CUSTOM FORK END ===
     webPreferences: { ...secureWebPreferences },
   });
 

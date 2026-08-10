@@ -21,6 +21,9 @@ import { useShallow } from "zustand/react/shallow";
 import { ScopeToggle } from "./ScopeToggle";
 import { SourceToggle } from "./SourceToggle";
 import { HUB_RESULT_LIMIT } from "./useModels";
+// === CUSTOM FORK START: model-manager ===
+import { OpenModelsFolderButton } from "../../../custom/model-manager";
+// === CUSTOM FORK END ===
 
 interface ModelListHeaderProps {
   totalCount: number;
@@ -135,6 +138,10 @@ const ModelListHeader: React.FC<ModelListHeaderProps> = ({
         )}
 
         <SourceToggle source={source} onChange={onSourceChange} />
+
+        {/* === CUSTOM FORK START: model-manager === */}
+        {!isOnboarding && <OpenModelsFolderButton />}
+        {/* === CUSTOM FORK END === */}
 
         {!isOnboarding && (
           <ScopeToggle

@@ -16,7 +16,6 @@ import DownloadIcon from "@mui/icons-material/Download";
 
 import {
   HuggingFaceLink,
-  ModelShowInExplorerButton,
   OllamaLink
 } from "../ModelActionsCommon";
 import { UnifiedModel } from "../../../stores/ApiTypes";
@@ -24,8 +23,14 @@ import {
   TOOLTIP_ENTER_DELAY,
   TOOLTIP_ENTER_NEXT_DELAY
 } from "../../../config/constants";
-import { isProduction } from "../../../lib/env";
 import { isElectron } from "../../../utils/browser";
+// === CUSTOM FORK START: model-manager ===
+import {
+  hubRepoIdForModel,
+  ModelShowInExplorerIconButton
+} from "../../../custom/model-manager";
+import { isFileExplorerAvailable } from "../../../utils/fileExplorer";
+// === CUSTOM FORK END ===
 
 interface ModelListItemActionsProps {
   model: UnifiedModel;
@@ -49,10 +54,17 @@ export const ModelListItemActions: React.FC<ModelListItemActionsProps> = ({
   const isHuggingFace = model.type?.startsWith("hf") ?? false;
   const isOllama = model.type === "llama_model";
   const downloaded = model.downloaded ?? false;
+  // === CUSTOM FORK START: model-manager ===
+  const hubRepoId = hubRepoIdForModel(model);
+  // Show folder actions whenever the desktop bridge is present (including
+  // packaged builds). Upstream hid this behind !isProduction.
+  const canOpenFolder =
+    isFileExplorerAvailable() || (isElectron && Boolean(handleShowInExplorer));
+  // === CUSTOM FORK END ===
   const canShowExplorerButton = Boolean(
-    handleShowInExplorer && showFileExplorerButton
+    handleShowInExplorer && showFileExplorerButton && canOpenFolder
   );
-  const explorerButtonDisabled = !isOllama && !model.path;
+  const explorerButtonDisabled = !isOllama && !model.path && !model.cache_path;
 
   const handleChipClick = useCallback(() => {
     if (handleShowInExplorer) {
@@ -123,9 +135,9 @@ export const ModelListItemActions: React.FC<ModelListItemActionsProps> = ({
       {downloaded && !onSelect && (
         <Tooltip
           title={
-            handleShowInExplorer && !isProduction && isElectron
-              ? "Show in Explorer"
-              : "Downloaded"
+            // === CUSTOM FORK START: model-manager ===
+            canShowExplorerButton ? "Show in Explorer" : "Downloaded"
+            // === CUSTOM FORK END ===
           }
           delay={TOOLTIP_ENTER_DELAY * 2}
           nextDelay={TOOLTIP_ENTER_NEXT_DELAY}
@@ -138,26 +150,32 @@ export const ModelListItemActions: React.FC<ModelListItemActionsProps> = ({
             icon={<Check fontSize="small" />}
             sx={{
               fontWeight: 600,
-              cursor: handleShowInExplorer ? "pointer" : "default"
+              cursor: canShowExplorerButton ? "pointer" : "default"
             }}
-            onClick={handleShowInExplorer ? handleChipClick : undefined}
-            clickable={!!handleShowInExplorer}
+            onClick={canShowExplorerButton ? handleChipClick : undefined}
+            clickable={canShowExplorerButton}
           />
         </Tooltip>
       )}
 
       <div className="model-actions">
         <CopyButton
-          value={model.repo_id || model.id}
+          value={
+            // === CUSTOM FORK START: model-manager ===
+            hubRepoId ?? model.id
+            // === CUSTOM FORK END ===
+          }
           tooltip={isOllama ? "Copy model name" : "Copy repo ID"}
           nodrag={false}
         />
-        {canShowExplorerButton && !isProduction && isElectron && (
-          <ModelShowInExplorerButton
+        {/* === CUSTOM FORK START: model-manager === */}
+        {canShowExplorerButton && (
+          <ModelShowInExplorerIconButton
             onClick={handleShowInExplorerClick}
             disabled={explorerButtonDisabled}
           />
         )}
+        {/* === CUSTOM FORK END === */}
         {handleModelDelete && (
           <DeleteButton
             onClick={handleDeleteClick}
@@ -166,9 +184,11 @@ export const ModelListItemActions: React.FC<ModelListItemActionsProps> = ({
         )}
       </div>
       <div className="model-link">
-        {isHuggingFace && (
-          <HuggingFaceLink modelId={model.repo_id || model.id} />
+        {/* === CUSTOM FORK START: model-manager === */}
+        {isHuggingFace && hubRepoId && (
+          <HuggingFaceLink modelId={hubRepoId} />
         )}
+        {/* === CUSTOM FORK END === */}
         {isOllama && <OllamaLink modelId={model.id} />}
       </div>
     </div>

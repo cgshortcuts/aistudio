@@ -86,4 +86,47 @@ describe("SearchInput", () => {
 
     expect(onEscape).toHaveBeenCalled();
   });
+
+  it("focuses and starts the query when focusOnTyping is on", async () => {
+    const user = userEvent.setup();
+    const onChange = jest.fn();
+    renderWithTheme(
+      <SearchInput
+        value=""
+        onChange={onChange}
+        placeholder="Search providers..."
+        focusOnTyping
+      />
+    );
+
+    document.body.focus();
+    await user.keyboard("o");
+
+    expect(onChange).toHaveBeenCalledWith("o");
+    expect(screen.getByRole("textbox")).toHaveFocus();
+  });
+
+  it("does not steal focus from another editable when focusOnTyping is on", async () => {
+    const user = userEvent.setup();
+    const onChange = jest.fn();
+    renderWithTheme(
+      <div>
+        <input aria-label="Other field" defaultValue="" />
+        <SearchInput
+          value=""
+          onChange={onChange}
+          placeholder="Search providers..."
+          focusOnTyping
+        />
+      </div>
+    );
+
+    await user.click(screen.getByRole("textbox", { name: "Other field" }));
+    await user.keyboard("x");
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Other field" })).toHaveValue(
+      "x"
+    );
+  });
 });

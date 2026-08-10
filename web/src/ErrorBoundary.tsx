@@ -7,6 +7,9 @@ import { ThemeProvider } from "@mui/material";
 import { CopyButton, Text, EditorButton, Box, MOTION, BORDER_RADIUS, Z_INDEX } from "./components/ui_primitives";
 import { useTheme } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME, APP_LOGO_SRC } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 const errorBoundaryStyles = (theme: Theme) =>
   css({
@@ -197,7 +200,10 @@ const ErrorBoundary: React.FC = () => {
     <ThemeProvider theme={theme}>
       <Box css={errorBoundaryStyles(theme)}>
         <Box className="hero">
-          <img src="/logo192.png" alt="NodeTool Logo" className="logo" />
+          {/* === CUSTOM FORK START: AiStudio Branding === */}
+          <img src={APP_LOGO_SRC} alt={`${APP_DISPLAY_NAME} Logo`} className="logo" />
+          {/* === CUSTOM FORK END === */}
+
           <Text className="heading">Something went wrong</Text>
           <Text className="subtext">
             An unexpected error occurred. You can try reloading the page. If

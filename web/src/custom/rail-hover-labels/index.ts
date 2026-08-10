@@ -5,6 +5,5 @@ export type { ExpandableQuickAccessSidebarProps } from "./ExpandableQuickAccessS
 export { useRailExpand } from "./useRailExpand";
 export {
   TOOLBAR_EXPANDED_WIDTH,
-  RAIL_LEAVE_DELAY_MS,
   RAIL_EXPAND_MOTION
 } from "./constants";

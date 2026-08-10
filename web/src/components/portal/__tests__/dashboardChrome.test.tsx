@@ -17,6 +17,7 @@ const renderBox = (
         placeholder={props.placeholder ?? "Search…"}
         aria-label={props["aria-label"] ?? "Search"}
         kbd={props.kbd}
+        focusOnTyping={props.focusOnTyping}
       />
     </ThemeProvider>
   );
@@ -79,5 +80,20 @@ describe("DashboardSearchBox", () => {
     );
     screen.getByText("focus").click();
     expect(screen.getByLabelText("Search")).toHaveFocus();
+  });
+
+  it("focuses and starts the query when focusOnTyping is on", async () => {
+    const user = userEvent.setup();
+    const { onChange } = renderBox({
+      value: "",
+      focusOnTyping: true,
+      "aria-label": "Search templates"
+    });
+
+    document.body.focus();
+    await user.keyboard("t");
+
+    expect(onChange).toHaveBeenCalledWith("t");
+    expect(screen.getByLabelText("Search templates")).toHaveFocus();
   });
 });

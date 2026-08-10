@@ -243,6 +243,7 @@ const DashboardWorkflows: React.FC<DashboardWorkflowsProps> = ({
             onChange={setQuery}
             placeholder="Search workflows…"
             aria-label="Search workflows"
+            focusOnTyping
           />
           <div className="viewtog" role="group" aria-label="View mode">
             <button

@@ -1,5 +1,8 @@
 import type { HfCacheStatusRequestItem } from "../serverState/checkHfCacheStatus";
 import type { UnifiedModel } from "../stores/ApiTypes";
+// === CUSTOM FORK START: model-manager ===
+import { isFilesystemModelId } from "../custom/model-manager";
+// === CUSTOM FORK END ===
 
 export const isHfModel = (model: UnifiedModel): boolean => {
   const type = model.type ?? "";
@@ -13,7 +16,13 @@ export const isHfModel = (model: UnifiedModel): boolean => {
 };
 
 export const canCheckHfCache = (model: UnifiedModel): boolean => {
-  return isHfModel(model) && Boolean(model.repo_id || model.id);
+  const repoId = model.repo_id || model.id;
+  // === CUSTOM FORK START: model-manager ===
+  if (!repoId || isFilesystemModelId(repoId)) {
+    return false;
+  }
+  // === CUSTOM FORK END ===
+  return isHfModel(model);
 };
 
 export const getHfCacheKey = (model: UnifiedModel): string => {
@@ -27,9 +36,15 @@ export const buildHfCacheRequest = (
   if (!canCheckHfCache(model)) {
     return null;
   }
+  const repoId = model.repo_id || model.id;
+  // === CUSTOM FORK START: model-manager ===
+  if (isFilesystemModelId(repoId)) {
+    return null;
+  }
+  // === CUSTOM FORK END ===
   return {
     key: getHfCacheKey(model),
-    repo_id: model.repo_id || model.id,
+    repo_id: repoId,
     model_type: model.type ?? null,
     path: model.path ?? null,
     allow_patterns: model.path ? null : model.allow_patterns ?? null,
