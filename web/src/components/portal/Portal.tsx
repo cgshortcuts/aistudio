@@ -22,6 +22,7 @@ import DashboardFooter from "./DashboardFooter";
 import { useStartTrackChat } from "../../hooks/useStartTrackChat";
 import { WELCOME_TRACKS, type WelcomeTrackId } from "./welcomeTracks";
 import { Box, SPACING, getSpacingPx } from "../ui_primitives";
+import { openSettingsPage } from "../../utils/openSettingsPage";
 
 const styles = (theme: Theme) =>
   css({
@@ -103,7 +104,7 @@ const Portal: React.FC = () => {
   );
 
   const handleOpenSettings = useCallback(() => {
-    navigate("/settings");
+    openSettingsPage({ navigate });
   }, [navigate]);
 
   // Already on the dashboard, so "browse templates" is a scroll, not a route

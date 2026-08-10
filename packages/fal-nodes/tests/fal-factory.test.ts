@@ -470,3 +470,41 @@ describe("FAL factory argument building", () => {
     );
   });
 });
+
+describe("FAL factory title", () => {
+  it("uses an explicit title override when set", () => {
+    const NodeClass = createFalNodeClass({
+      endpointId: "bytedance/seedance-2.0/reference-to-video",
+      className: "BytedanceSeedance20ReferenceToVideo",
+      title: "Bytedance Seedance 2.0 Reference To Video",
+      moduleName: "image_to_video",
+      docstring: "test",
+      tags: [],
+      useCases: [],
+      outputType: "video",
+      outputFields: [],
+      enums: [],
+      inputFields: []
+    });
+    expect(NodeClass.title).toBe("Bytedance Seedance 2.0 Reference To Video");
+    expect(NodeClass.nodeType).toBe(
+      "fal.image_to_video.BytedanceSeedance20ReferenceToVideo"
+    );
+  });
+
+  it("falls back to classNameToTitle when title is omitted", () => {
+    const NodeClass = createFalNodeClass({
+      endpointId: "fal-ai/flux/dev",
+      className: "FluxDev",
+      moduleName: "text_to_image",
+      docstring: "test",
+      tags: [],
+      useCases: [],
+      outputType: "image",
+      outputFields: [],
+      enums: [],
+      inputFields: []
+    });
+    expect(NodeClass.title).toBe("Flux Dev");
+  });
+});

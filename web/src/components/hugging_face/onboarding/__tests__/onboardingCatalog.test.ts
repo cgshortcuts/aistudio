@@ -54,10 +54,16 @@ describe("onboardingCatalog data", () => {
     ).toBe(true);
   });
 
-  it("marks exactly one bundled engine (Ollama)", () => {
-    const bundled = ONBOARDING_ENGINES.filter((e) => e.bundled);
-    expect(bundled).toHaveLength(1);
-    expect(bundled[0].id).toBe("ollama");
+  it("does not mark Ollama as bundled — it is a separate install", () => {
+    const ollama = ONBOARDING_ENGINES.find((e) => e.id === "ollama");
+    expect(ollama).toBeDefined();
+    expect(ollama?.bundled).toBeFalsy();
+    expect(ONBOARDING_ENGINES.filter((e) => e.bundled)).toHaveLength(0);
+  });
+
+  it("points llama.cpp at the Package Manager runtime id", () => {
+    const llama = ONBOARDING_ENGINES.find((e) => e.id === "node-llama-cpp");
+    expect(llama?.runtimeId).toBe("node-llama-cpp");
   });
 });
 

@@ -45,6 +45,7 @@
     "packages/topaz-nodes",
     "packages/reve-nodes",
     "packages/atlascloud-nodes",
+    "packages/byteplus-nodes",
     "packages/together-nodes",
     "packages/sandbox",
     "packages/sandbox-agent",

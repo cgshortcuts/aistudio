@@ -38,6 +38,7 @@ import {
 } from "../ui_primitives";
 import { OPTIONAL_NODE_PACKS } from "../../config/optionalNodePacks";
 import useOptionalNodePacksStore from "../../stores/OptionalNodePacksStore";
+import { openSettingsPage } from "../../utils/openSettingsPage";
 import usePacksStore from "../../stores/PacksStore";
 import useNodeMenuStore from "../../stores/NodeMenuStore";
 import { useSecrets } from "../../hooks/useSecrets";
@@ -196,7 +197,7 @@ const OptionalPacksSection = () => {
   const openApiKeys = useCallback(() => {
     setAnchorEl(null);
     closeNodeMenu();
-    navigate("/settings?tab=1");
+    openSettingsPage({ tab: 1, navigate });
   }, [navigate, closeNodeMenu]);
 
   const handleManagePacks = useCallback(() => {

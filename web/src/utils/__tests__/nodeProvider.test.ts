@@ -19,6 +19,12 @@ describe("nodeProvider", () => {
       );
       expect(getRequiredSecretKeyForNamespace("huggingface")).toBe("HF_TOKEN");
       expect(getRequiredSecretKeyForNamespace("fal")).toBe("FAL_API_KEY");
+      expect(getRequiredSecretKeyForNamespace("byteplus")).toBe(
+        "BYTEPLUS_API_KEY"
+      );
+      expect(getRequiredSecretKeyForNamespace("byteplus.video.Seedance")).toBe(
+        "BYTEPLUS_API_KEY"
+      );
     });
 
     it("works with dotted namespaces", () => {
@@ -55,6 +61,9 @@ describe("nodeProvider", () => {
       expect(getSecretDisplayName("REPLICATE_API_TOKEN")).toBe(
         "Replicate API Token"
       );
+      expect(getSecretDisplayName("BYTEPLUS_API_KEY")).toBe(
+        "BytePlus ModelArk API Key"
+      );
     });
 
     it("returns the key itself for unknown keys", () => {
@@ -72,6 +81,8 @@ describe("nodeProvider", () => {
       expect(getProviderKindForNamespace("xai")).toBe("api");
       expect(getProviderKindForNamespace("together")).toBe("api");
       expect(getProviderKindForNamespace("minimax")).toBe("api");
+      expect(getProviderKindForNamespace("byteplus")).toBe("api");
+      expect(getProviderKindForNamespace("byteplus.video")).toBe("api");
     });
 
     it('returns "local" for local-only namespaces', () => {

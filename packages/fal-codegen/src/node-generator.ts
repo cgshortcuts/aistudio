@@ -172,6 +172,7 @@ export class NodeGenerator {
     };
 
     if (config.className !== undefined) spec.className = config.className;
+    if (config.title !== undefined) spec.title = config.title;
     if (config.docstring !== undefined) spec.docstring = config.docstring;
     if (config.tags !== undefined) spec.tags = config.tags;
     if (config.useCases !== undefined) spec.useCases = config.useCases;
@@ -238,7 +239,7 @@ export class NodeGenerator {
   private _renderClass(spec: NodeSpec, moduleName: string): string {
     const moduleId = moduleNameToId(moduleName);
     const nodeType = `fal.${moduleId}.${spec.className}`;
-    const title = classNameToTitle(spec.className);
+    const title = spec.title ?? classNameToTitle(spec.className);
 
     // Description: first line docstring, second line tags
     const descFirstLine = spec.docstring || `${spec.className} node`;

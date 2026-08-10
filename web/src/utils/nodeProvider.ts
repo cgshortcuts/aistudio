@@ -28,7 +28,10 @@ const namespaceToSecretKey: Record<string, string> = {
   atlascloud: "ATLASCLOUD_API_KEY",
   xai: "XAI_API_KEY",
   together: "TOGETHER_API_KEY",
-  minimax: "MINIMAX_API_KEY"
+  minimax: "MINIMAX_API_KEY",
+  // === CUSTOM FORK START: BytePlus ===
+  byteplus: "BYTEPLUS_API_KEY",
+  // === CUSTOM FORK END ===
 };
 
 // API-backed namespaces that currently do not require a dedicated key in this map.
@@ -63,7 +66,10 @@ const secretKeyToDisplayName: Record<string, string> = {
   ATLASCLOUD_API_KEY: "AtlasCloud API Key",
   XAI_API_KEY: "xAI API Key",
   TOGETHER_API_KEY: "Together API Key",
-  MINIMAX_API_KEY: "MiniMax API Key"
+  MINIMAX_API_KEY: "MiniMax API Key",
+  // === CUSTOM FORK START: BytePlus ===
+  BYTEPLUS_API_KEY: "BytePlus ModelArk API Key",
+  // === CUSTOM FORK END ===
 };
 
 const getRootNamespace = (namespace: string): string =>

@@ -1553,6 +1553,7 @@ export const config: ModuleConfig = {
     },
     "bytedance/seedance-2.0/text-to-video": {
       className: "BytedanceSeedance20TextToVideo",
+      title: "Bytedance Seedance 2.0 Text To Video",
       docstring: "Generate videos from text using ByteDance Seedance 2.0.",
       tags: ["generation", "text-to-video", "txt2vid", "seedance", "bytedance"],
       useCases: [
@@ -1565,6 +1566,7 @@ export const config: ModuleConfig = {
     },
     "bytedance/seedance-2.0/fast/text-to-video": {
       className: "BytedanceSeedance20FastTextToVideo",
+      title: "Bytedance Seedance 2.0 Fast Text To Video",
       docstring: "Fast text-to-video with ByteDance Seedance 2.0.",
       tags: [
         "generation",
@@ -1658,6 +1660,7 @@ export const config: ModuleConfig = {
     },
     "bytedance/seedance-2.0/mini/text-to-video": {
       className: "Seedance20MiniTextToVideo",
+      title: "Seedance 2.0 Mini Text To Video",
       docstring:
         "Seedance 2.0 Mini is a faster version of Seedance 2.0 that brings great performance and high generation speed at a lower cost.",
       tags: [

@@ -159,10 +159,14 @@ export class NpmRuntimePackage implements RuntimePackage {
     ];
     return new Promise<void>((resolve, reject) => {
       logMessage(`Running npm command: ${command.join(" ")}`);
+      // On Windows, `npm.cmd` (and `.bat`) cannot be launched with spawn()
+      // unless shell is true — without it the child emits ENOENT/EINVAL
+      // immediately and Package Manager shows a useless generic failure.
       const child = spawn(command[0], command.slice(1), {
         env: getProcessEnv(),
         stdio: "pipe",
         windowsHide: true,
+        shell: process.platform === "win32",
       });
 
       const onAbort = () => {
@@ -206,17 +210,29 @@ export class NpmRuntimePackage implements RuntimePackage {
   }
 
   async *install(ctx: RuntimeContext, signal: AbortSignal): AsyncIterable<RuntimeProgress> {
-    yield { type: "stage", label: `Installing ${this.name}` };
+    const startLabel = `Installing ${this.name}`;
+    yield { type: "stage", label: startLabel };
+    // Surface progress immediately in the Package Manager console (SERVER_LOG),
+    // not only after npm finishes — otherwise a multi-minute download looks dead.
+    emitServerLog(startLabel);
+    if (this.approxSizeMB) {
+      emitServerLog(
+        `Downloading ${this.name} (~${this.approxSizeMB} MB). This can take several minutes.`
+      );
+    }
     const queue: RuntimeProgress[] = [];
     try {
       await this.runNpm(ctx, ["install", ...this.npmPackages], signal, (level, line) => {
         queue.push({ type: "log", level, line });
       });
       for (const item of queue) yield item;
+      emitServerLog(`${this.name} installed successfully.`);
       yield { type: "done" };
     } catch (error) {
       for (const item of queue) yield item;
-      yield { type: "error", message: error instanceof Error ? error.message : String(error) };
+      const message = error instanceof Error ? error.message : String(error);
+      emitServerLog(`Failed to install ${this.name}: ${message}`);
+      yield { type: "error", message };
     }
   }
 
@@ -266,6 +282,7 @@ export class NpmRuntimePackage implements RuntimePackage {
         env: getProcessEnv(),
         stdio: "pipe",
         windowsHide: true,
+        shell: process.platform === "win32",
       });
       let stderr = "";
       child.stderr?.on("data", (data: Buffer) => {

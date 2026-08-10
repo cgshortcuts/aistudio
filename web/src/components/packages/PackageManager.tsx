@@ -372,6 +372,22 @@ function PackageManager() {
             </AlertBanner>
           )}
 
+          {model.busyBanner && (
+            <AlertBanner severity="info" compact>
+              {model.busyBanner}
+            </AlertBanner>
+          )}
+
+          {/* Console sits above the list so install progress is visible without
+              scrolling past every runtime row. */}
+          {model.console && (
+            <ConsolePanel
+              lines={model.console.lines}
+              onClear={model.console.onClear}
+              busy={model.console.busy}
+            />
+          )}
+
           {model.notice ? (
             <AlertBanner severity="info">{model.notice}</AlertBanner>
           ) : model.isThirdParty ? (
@@ -412,14 +428,6 @@ function PackageManager() {
                 All.
               </Text>
             </FlexColumn>
-          )}
-
-          {model.console && (
-            <ConsolePanel
-              lines={model.console.lines}
-              onClear={model.console.onClear}
-              busy={model.console.busy}
-            />
           )}
         </FlexColumn>
       </FlexColumn>

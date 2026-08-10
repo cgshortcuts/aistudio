@@ -18,6 +18,7 @@ import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useMenuHandler } from "./hooks/useIpcRenderer";
 import type { MenuEventData } from "./window";
+import { openSettingsPage } from "./utils/openSettingsPage";
 import ReactDOM from "react-dom/client";
 
 import {
@@ -551,7 +552,13 @@ const root = ReactDOM.createRoot(rootElement);
 const MenuNavigationBridge = () => {
   const handleMenuEvent = useCallback((data: MenuEventData) => {
     if (data.type === "openSettings") {
-      void router.navigate("/settings");
+      // Keep the workspace chrome (left rail) — bare /settings is a full-page
+      // Settings-only route.
+      openSettingsPage({
+        navigate: (to) => {
+          void router.navigate(to);
+        }
+      });
     }
   }, []);
   useMenuHandler(handleMenuEvent);

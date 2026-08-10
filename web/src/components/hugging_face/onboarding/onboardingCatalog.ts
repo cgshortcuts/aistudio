@@ -56,8 +56,9 @@ export interface OnboardingEngine {
 }
 
 /**
- * The local engines, roughly ordered easiest-first. Ollama ships with the
- * desktop app; the rest are installed from the Package Manager.
+ * The local engines, roughly ordered easiest-first. Ollama is a separate
+ * install from ollama.com; llama.cpp and Transformers.js install from the
+ * desktop Package Manager.
  */
 export const ONBOARDING_ENGINES: readonly OnboardingEngine[] = [
   {
@@ -66,8 +67,7 @@ export const ONBOARDING_ENGINES: readonly OnboardingEngine[] = [
     tagline: "One-click local LLMs",
     formats: ["GGUF"],
     description:
-      "The simplest way to run chat and reasoning models locally. Pull a model by name and it runs on your GPU or CPU. Bundled with the desktop app.",
-    bundled: true,
+      "Run chat and reasoning models locally after installing Ollama from ollama.com. NodeTool talks to it at localhost:11434 — it is not shipped inside the desktop app.",
     docsUrl: "https://ollama.com"
   },
   {
@@ -76,7 +76,7 @@ export const ONBOARDING_ENGINES: readonly OnboardingEngine[] = [
     tagline: "GGUF models in-process",
     formats: ["GGUF"],
     description:
-      "Runs GGUF language models directly inside the NodeTool backend — no separate server. Great for GGUF weights pulled straight from Hugging Face.",
+      "Runs GGUF language models directly inside the NodeTool backend — no separate server. Install from Package Manager → Software → AI libraries. On Windows the download is large (~640 MB).",
     runtimeId: "node-llama-cpp",
     docsUrl: "https://github.com/withcatai/node-llama-cpp"
   },

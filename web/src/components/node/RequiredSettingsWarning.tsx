@@ -2,6 +2,7 @@ import React, { useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { Text, EditorButton } from "../ui_primitives";
 import { useRequiredSettings } from "../../hooks/useRequiredSettings";
+import { openSettingsPage } from "../../utils/openSettingsPage";
 
 interface RequiredSettingsWarningProps {
   nodeType: string;
@@ -14,10 +15,11 @@ const RequiredSettingsWarning: React.FC<RequiredSettingsWarningProps> = React.me
 
     const handleOpenSettings = useCallback(() => {
       const searchKey = missingSettings.length > 0 ? missingSettings[0] : undefined;
-      const qs = searchKey
-        ? `?tab=1&q=${encodeURIComponent(searchKey)}`
-        : "?tab=1";
-      navigate(`/settings${qs}`);
+      openSettingsPage({
+        tab: 1,
+        q: searchKey,
+        navigate
+      });
     }, [navigate, missingSettings]);
 
     const content = useMemo(() => {

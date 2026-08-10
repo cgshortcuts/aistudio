@@ -14,7 +14,7 @@
 import { create } from "zustand";
 import type { StoreApi } from "zustand";
 
-import { createErrorMessage } from "../utils/errorHandling";
+import { formatErrorMessage } from "../utils/errorHandling";
 
 /** A pack offered by the registry (may or may not be installed). */
 export interface PackageInfo {
@@ -101,7 +101,7 @@ async function runPackOp(
     success = res.success;
     message = res.message;
   } catch (err: unknown) {
-    message = createErrorMessage(err, `Failed to ${verb} pack`).message;
+    message = formatErrorMessage(err, `Failed to ${verb} pack`);
   }
   await get().refresh();
   set((s) => ({
@@ -148,7 +148,7 @@ const useNodePacksStore = create<NodePacksStore>((set, get) => ({
     } catch (err: unknown) {
       set({
         isLoading: false,
-        error: createErrorMessage(err, "Failed to load node packs").message
+        error: formatErrorMessage(err, "Failed to load node packs")
       });
     }
   },
@@ -198,7 +198,7 @@ const useNodePacksStore = create<NodePacksStore>((set, get) => ({
         }
       } catch (err: unknown) {
         allOk = false;
-        lastMessage = createErrorMessage(err, "Failed to update pack").message;
+        lastMessage = formatErrorMessage(err, "Failed to update pack");
       }
     }
     await get().refresh();

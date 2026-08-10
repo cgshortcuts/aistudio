@@ -36,6 +36,9 @@ import { registerKieNodes } from "@nodetool-ai/kie-nodes";
 import { registerTopazNodes } from "@nodetool-ai/topaz-nodes";
 import { registerReveNodes } from "@nodetool-ai/reve-nodes";
 import { registerAtlasCloudNodes } from "@nodetool-ai/atlascloud-nodes";
+// === CUSTOM FORK START: BytePlus ===
+import { registerBytePlusNodes } from "@nodetool-ai/byteplus-nodes";
+// === CUSTOM FORK END ===
 import { registerTogetherNodes } from "@nodetool-ai/together-nodes";
 import { registerReplicateNodes } from "@nodetool-ai/replicate-nodes";
 import { registerHuggingFaceNodes } from "@nodetool-ai/huggingface-nodes";
@@ -105,6 +108,9 @@ const BUILTIN_PACK_REGISTRARS: Record<string, (registry: NodeRegistry) => void> 
     topaz: registerTopazNodes,
     reve: registerReveNodes,
     atlascloud: registerAtlasCloudNodes,
+    // === CUSTOM FORK START: BytePlus ===
+    byteplus: registerBytePlusNodes,
+    // === CUSTOM FORK END ===
     together: registerTogetherNodes,
     replicate: registerReplicateNodes,
     huggingface: registerHuggingFaceNodes

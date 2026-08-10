@@ -21,6 +21,9 @@ import {
   loadEnvironment
 } from "@nodetool-ai/config";
 import { registerTransformersJsProvider } from "@nodetool-ai/transformers-js-provider";
+// === CUSTOM FORK START: BytePlus ===
+import { registerBytePlusProvider } from "@nodetool-ai/byteplus-nodes";
+// === CUSTOM FORK END ===
 import {
   bootstrapNodeRegistry,
   mergePythonBridgeMetadata
@@ -414,6 +417,9 @@ setLlmAgentGraphPlannerRegistry(registry);
 if (process.env["NODETOOL_ENV"] !== "production") {
   registerTransformersJsProvider();
 }
+// === CUSTOM FORK START: BytePlus ===
+registerBytePlusProvider();
+// === CUSTOM FORK END ===
 
 // ---------------------------------------------------------------------------
 // Python bridge

@@ -101,11 +101,37 @@ describe("ProviderCard OAuth variant", () => {
     renderCard(oauthMeta);
 
     expect(screen.getByText(/connected via oauth/i)).toBeInTheDocument();
+    expect(screen.queryByText(/^not connected$/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/add your api key to get started/i)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /add api key/i })
+    ).toBeInTheDocument();
     const disconnectButton = screen.getByRole("button", {
       name: /disconnect/i
     });
     await userEvent.click(disconnectButton);
     expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps API-key manage actions when both OAuth and a key are present", () => {
+    mockUseOAuthConnection.mockReturnValue(
+      oauthState({
+        label: "OpenAI",
+        isConnected: true,
+        canDisconnect: true
+      })
+    );
+
+    renderCard(oauthMeta, true);
+
+    expect(screen.getByText(/^connected$/i)).toBeInTheDocument();
+    expect(screen.getByText(/also signed in via oauth/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /manage/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /add api key/i })
+    ).not.toBeInTheDocument();
   });
 
   it("hides disconnect for a connected provider that does not support it", () => {

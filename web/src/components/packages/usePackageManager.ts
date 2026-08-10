@@ -16,8 +16,36 @@ import useNodePacksStore, {
   type PackageInfo
 } from "../../stores/NodePacksStore";
 import useOptionalNodePacksStore from "../../stores/OptionalNodePacksStore";
+import { useNotificationStore } from "../../stores/NotificationStore";
 import { OPTIONAL_NODE_PACKS } from "../../config/optionalNodePacks";
 import { getRequiredKeyForBuiltinPack } from "../../utils/providerPacks";
+
+/** Fire a toast so Install feedback is visible even when the console is below the fold. */
+function notifyInstall(content: string, type: "info" | "success" | "error") {
+  useNotificationStore.getState().addNotification({
+    type,
+    content,
+    alert: true,
+    dismissable: true
+  });
+}
+
+/** Wrap a runtime install so the user always sees start + outcome feedback. */
+function runSoftwareInstall(id: string, name: string, install: (id: string) => Promise<boolean>) {
+  const sizeHint =
+    id === "node-llama-cpp"
+      ? " ~640 MB on Windows/Linux — watch the install console."
+      : " Watch the install console for progress.";
+  notifyInstall(`Installing ${name}…${sizeHint}`, "info");
+  void install(id).then((ok) => {
+    const err = useRuntimePackagesStore.getState().error;
+    if (ok) {
+      notifyInstall(`${name} installed.`, "success");
+    } else {
+      notifyInstall(err || `Failed to install ${name}.`, "error");
+    }
+  });
+}
 
 export type PMTab = "software" | "packs";
 
@@ -109,6 +137,8 @@ export interface PackageManagerModel {
   onChangeLocation: () => void;
   /** Desktop-only notice when the active install surface needs Electron. */
   notice: string | null;
+  /** Shown while a software/runtime install is in flight. */
+  busyBanner: string | null;
   error: string | null;
   console: { lines: string[]; onClear: () => void; busy: boolean } | null;
   thirdPartyCount: number;
@@ -419,7 +449,7 @@ export function usePackageManager(params: {
                   update: false,
                   uninstall: rt.installed,
                   busy,
-                  onInstall: () => void rtInstall(rt.id),
+                  onInstall: () => runSoftwareInstall(rt.id, rt.name, rtInstall),
                   onUpdate: () => {},
                   onUninstall: () => void rtUninstall(rt.id)
                 }
@@ -496,13 +526,21 @@ export function usePackageManager(params: {
 
     const notice =
       isSoftware && !rtAvailable
-        ? "Software installation runs in the NodeTool desktop app. Open the desktop app to install Python, FFmpeg, and other runtimes."
+        ? "Software installation runs in the desktop app (start-desktop.bat), not the browser. Open the desktop app to install Python, FFmpeg, llama.cpp, and other runtimes."
         : cat === "python" && !pyAvailable
           ? "Installing node packs runs in the NodeTool desktop app. Open the desktop app to install, update, and remove Python node packs."
           : null;
 
+    const busyName = statuses.find(
+      (s) => rtBusy.includes(s.id) || s.installing
+    )?.name;
+    const busyBanner =
+      isSoftware && (rtBusy.length > 0 || statuses.some((s) => s.installing))
+        ? `Installing ${busyName ?? "runtime"}… Large downloads (llama.cpp ~640 MB on Windows) can take several minutes. Live output is in the console below this banner.`
+        : null;
+
     const consoleModel = isSoftware
-      ? rtAvailable
+      ? rtAvailable || rtConsole.length > 0 || Boolean(busyBanner)
         ? {
             lines: rtConsole,
             onClear: rtClear,
@@ -540,6 +578,7 @@ export function usePackageManager(params: {
       installLocation,
       onChangeLocation: () => void selectInstallLocation(),
       notice,
+      busyBanner,
       error: isSoftware ? rtError : cat === "python" ? pyError : builtinsError,
       console: consoleModel,
       thirdPartyCount: thirdPartyPacks.length,

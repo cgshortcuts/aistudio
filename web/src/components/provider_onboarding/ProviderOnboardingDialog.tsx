@@ -22,7 +22,7 @@ import {
 } from "../ui_primitives";
 import { useSecrets } from "../../hooks/useSecrets";
 import useProviderOnboardingStore from "../../stores/ProviderOnboardingStore";
-import { navigateTo } from "../../lib/appNavigation";
+import { openSettingsPage } from "../../utils/openSettingsPage";
 import ollamaIcon from "../../icons/providers/ollama.svg";
 import ProviderOnboardingCard from "./ProviderOnboardingCard";
 import CostGuide from "./CostGuide";
@@ -106,7 +106,7 @@ const ProviderOnboardingDialog: React.FC = () => {
 
   const handleOpenSettings = useCallback(() => {
     dismiss();
-    navigateTo("/settings?tab=1");
+    openSettingsPage({ tab: 1 });
   }, [dismiss]);
 
   if (!open) {

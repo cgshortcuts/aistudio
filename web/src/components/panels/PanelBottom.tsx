@@ -19,7 +19,7 @@ import {
   BottomPanelView,
   useBottomPanelStore
 } from "../../stores/BottomPanelStore";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useLocation } from "react-router-dom";
 import isEqual from "../../utils/isEqual";
 import TracePanel from "./TracePanel";
@@ -44,6 +44,9 @@ import { useSystemStatsStore } from "../../stores/systemStatsHandler";
 import { globalWebSocketManager } from "../../lib/websocket/GlobalWebSocketManager";
 import { BASE_URL } from "../../stores/BASE_URL";
 import type { NodeStoreState } from "../../stores/NodeStore";
+// === CUSTOM FORK START: Bottom Panel Clickaway ===
+import { useCloseBottomPanelOnClickAway } from "../../custom/bottom-panel-clickaway";
+// === CUSTOM FORK END ===
 
 // icons
 import TimelineIcon from "@mui/icons-material/Timeline";
@@ -547,6 +550,11 @@ const PanelBottom: React.FC = () => {
     }
   }, [activeView, setActiveView]);
 
+  // === CUSTOM FORK START: Bottom Panel Clickaway ===
+  const panelContainerRef = useRef<HTMLDivElement>(null);
+  useCloseBottomPanelOnClickAway(panelContainerRef);
+  // === CUSTOM FORK END ===
+
   // Shown in the legacy editor (/editor) and the unified workspace (/workspace).
   if (!path.startsWith("/editor") && !path.startsWith("/workspace")) {
     return null;
@@ -565,6 +573,7 @@ const PanelBottom: React.FC = () => {
 
   return (
     <div
+      ref={panelContainerRef}
       css={cssStyles}
       className="panel-container"
       style={{

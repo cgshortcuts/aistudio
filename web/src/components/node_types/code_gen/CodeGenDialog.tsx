@@ -12,6 +12,7 @@
  */
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { openSettingsPage } from "../../../utils/openSettingsPage";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import type { codeGen } from "@nodetool-ai/protocol/api-schemas";
 import { MAX_INSTRUCTION_LENGTH } from "@nodetool-ai/protocol/api-schemas/code-gen.js";
@@ -50,9 +51,6 @@ import CodeGenPreviewPanel from "./CodeGenPreviewPanel";
 import CodeGenSamplesSection from "./CodeGenSamplesSection";
 import { sampleValuesOf, serializeSampleValues } from "./codeGenSamples";
 import { useCodeGenSamples } from "./useCodeGenSamples";
-
-/** Settings tab holding the Default Models section. */
-const DEFAULT_MODELS_SETTINGS_PATH = "/settings?tab=0";
 
 export interface CodeGenDialogProps {
   open: boolean;
@@ -346,7 +344,7 @@ const CodeGenDialogInner = ({
           </Text>
           <TextLink
             asButton
-            onClick={() => navigate(DEFAULT_MODELS_SETTINGS_PATH)}
+            onClick={() => openSettingsPage({ tab: 0, navigate })}
           >
             Change
           </TextLink>

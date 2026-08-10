@@ -109,9 +109,15 @@ export const ProviderCard = memo(function ProviderCard({
   const validateSecret = useSecretsStore((s) => s.validateSecret);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<SecretValidation | null>(null);
-  // OAuth-only providers have no stored secret — the sign-in itself is the
-  // connection.
-  const isConnected = meta.oauthOnly ? oauth.isConnected : secret.is_configured;
+  // Dual-auth providers (OpenAI, Hugging Face) can connect via API key *or*
+  // OAuth. The status pill reflects either; API-key actions still gate on the
+  // stored secret so Manage/Test/Delete don't appear for an OAuth-only login.
+  const hasApiKey = secret.is_configured;
+  const isConnected = meta.oauthOnly
+    ? oauth.isConnected
+    : hasApiKey || oauth.isConnected;
+  const connectedViaOAuthOnly =
+    !meta.oauthOnly && oauth.isConnected && !hasApiKey;
 
   const handleConnect = useCallback(() => {
     onConnect(secret);
@@ -279,10 +285,14 @@ export const ProviderCard = memo(function ProviderCard({
                 whiteSpace: "nowrap"
               }}
             >
-              {isConnected ? "Connected" : "Not connected"}
+              {connectedViaOAuthOnly
+                ? "Connected via OAuth"
+                : isConnected
+                  ? "Connected"
+                  : "Not connected"}
             </Caption>
           </FlexRow>
-          {oauth.isConnected && !meta.oauthOnly && (
+          {oauth.isConnected && !meta.oauthOnly && hasApiKey && (
             <FlexRow
               align="center"
               gap={1}
@@ -301,11 +311,11 @@ export const ProviderCard = memo(function ProviderCard({
                   whiteSpace: "nowrap"
                 }}
               >
-                Connected via OAuth
+                Also signed in via OAuth
               </Caption>
             </FlexRow>
           )}
-          {isConnected && secret.updated_at && (
+          {hasApiKey && secret.updated_at && (
             <Caption size="smaller" sx={{ opacity: 0.45, whiteSpace: "nowrap" }}>
               Last used{" "}
               {new Date(secret.updated_at).toLocaleDateString()}
@@ -378,7 +388,7 @@ export const ProviderCard = memo(function ProviderCard({
                   </EditorButton>
                 ))}
 
-          {meta.oauthOnly ? null : isConnected ? (
+          {meta.oauthOnly ? null : hasApiKey ? (
             <>
               <EditorButton
                 density="compact"
@@ -414,7 +424,7 @@ export const ProviderCard = memo(function ProviderCard({
               size="small"
               onClick={handleConnect}
             >
-              Connect
+              {connectedViaOAuthOnly ? "Add API key" : "Connect"}
             </EditorButton>
           )}
         </FlexRow>

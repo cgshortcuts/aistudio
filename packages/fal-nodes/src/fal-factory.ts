@@ -36,6 +36,8 @@ export interface FalManifestEntry {
   endpointId: string;
   className: string;
   moduleName: string;
+  /** When set, used as the node menu title instead of classNameToTitle. */
+  title?: string;
   docstring: string;
   tags: string[];
   useCases: string[];
@@ -478,7 +480,7 @@ function mapOutput(
 
 export function createFalNodeClass(spec: FalManifestEntry): NodeClass {
   const nodeType = `fal.${spec.moduleName}.${spec.className}`;
-  const title = classNameToTitle(spec.className);
+  const title = spec.title ?? classNameToTitle(spec.className);
   const descFirstLine = spec.docstring || `${spec.className} node`;
   const descSecondLine =
     spec.tags.length > 0 ? spec.tags.join(", ") : "fal, ai";

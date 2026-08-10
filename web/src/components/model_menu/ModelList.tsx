@@ -33,6 +33,7 @@ import type { UnifiedModel } from "../../stores/ApiTypes";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useModelAvailability } from "../../hooks/useModelAvailability";
 import { useNavigate } from "react-router-dom";
+import { openSettingsPage } from "../../utils/openSettingsPage";
 
 import type { Theme } from "@mui/material/styles";
 
@@ -185,7 +186,7 @@ function ModelList<TModel extends ModelSelectorModel>({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const handleOpenSettings = useCallback(() => {
-    navigate("/settings?tab=1");
+    openSettingsPage({ tab: 1, navigate });
   }, [navigate]);
 
   const badgeStyle = useMemo<React.CSSProperties>(() => ({

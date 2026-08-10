@@ -1,0 +1,630 @@
+[
+  {
+    "className": "Seedance20TextToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-0-260128",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.0 — Text to Video",
+    "description": "ModelArk Seedance 2.0 Standard — text-to-video billed to your BytePlus project (resource packs / balance).",
+    "pollInterval": 5000,
+    "maxAttempts": 600,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt",
+        "description": "Text prompt describing the desired video.",
+        "required": true
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "description": "Video duration in seconds. -1 lets the model choose.",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p", "1080p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      },
+      {
+        "name": "seed",
+        "type": "int",
+        "default": -1,
+        "title": "Seed",
+        "min": -1,
+        "max": 4294967295
+      }
+    ]
+  },
+  {
+    "className": "Seedance20FastTextToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-0-fast-260128",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.0 Fast — Text to Video",
+    "description": "ModelArk Seedance 2.0 Fast — accelerated T2V (no 1080p).",
+    "pollInterval": 5000,
+    "maxAttempts": 600,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt",
+        "required": true
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      }
+    ]
+  },
+  {
+    "className": "Seedance20MiniTextToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-0-mini-260615",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.0 Mini — Text to Video",
+    "description": "ModelArk Seedance 2.0 Mini — lightweight T2V (no 1080p).",
+    "pollInterval": 5000,
+    "maxAttempts": 600,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt",
+        "required": true
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      }
+    ]
+  },
+  {
+    "className": "Seedance25TextToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-5-260628",
+    "modelIdEnv": "BYTEPLUS_SEEDANCE_25_MODEL",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.5 — Text to Video",
+    "description": "ModelArk Seedance 2.5 T2V. Override model id with BYTEPLUS_SEEDANCE_25_MODEL if your console lists a different id.",
+    "pollInterval": 5000,
+    "maxAttempts": 720,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt",
+        "required": true
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 30]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p", "1080p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      }
+    ]
+  },
+  {
+    "className": "Seedance20ImageToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-0-260128",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.0 — Image to Video",
+    "description": "ModelArk Seedance 2.0 Standard — animate a first frame (optional last frame).",
+    "pollInterval": 5000,
+    "maxAttempts": 600,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt",
+        "description": "Optional motion guidance."
+      },
+      {
+        "name": "image",
+        "type": "image",
+        "default": null,
+        "title": "First Frame",
+        "required": true
+      },
+      {
+        "name": "last_image",
+        "type": "image",
+        "default": null,
+        "title": "Last Frame (optional)"
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p", "1080p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      }
+    ]
+  },
+  {
+    "className": "Seedance20FastImageToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-0-fast-260128",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.0 Fast — Image to Video",
+    "description": "ModelArk Seedance 2.0 Fast I2V (no 1080p).",
+    "pollInterval": 5000,
+    "maxAttempts": 600,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt"
+      },
+      {
+        "name": "image",
+        "type": "image",
+        "default": null,
+        "title": "First Frame",
+        "required": true
+      },
+      {
+        "name": "last_image",
+        "type": "image",
+        "default": null,
+        "title": "Last Frame (optional)"
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      }
+    ]
+  },
+  {
+    "className": "Seedance20MiniImageToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-0-mini-260615",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.0 Mini — Image to Video",
+    "description": "ModelArk Seedance 2.0 Mini I2V (no 1080p).",
+    "pollInterval": 5000,
+    "maxAttempts": 600,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt"
+      },
+      {
+        "name": "image",
+        "type": "image",
+        "default": null,
+        "title": "First Frame",
+        "required": true
+      },
+      {
+        "name": "last_image",
+        "type": "image",
+        "default": null,
+        "title": "Last Frame (optional)"
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      }
+    ]
+  },
+  {
+    "className": "Seedance25ImageToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-5-260628",
+    "modelIdEnv": "BYTEPLUS_SEEDANCE_25_MODEL",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.5 — Image to Video",
+    "description": "ModelArk Seedance 2.5 I2V. Override model id with BYTEPLUS_SEEDANCE_25_MODEL if needed.",
+    "pollInterval": 5000,
+    "maxAttempts": 720,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt"
+      },
+      {
+        "name": "image",
+        "type": "image",
+        "default": null,
+        "title": "First Frame",
+        "required": true
+      },
+      {
+        "name": "last_image",
+        "type": "image",
+        "default": null,
+        "title": "Last Frame (optional)"
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 30]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p", "1080p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      }
+    ]
+  },
+  {
+    "className": "Seedance20ReferenceToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-0-260128",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.0 — Reference to Video",
+    "description": "ModelArk Seedance 2.0 multimodal — reference images/videos/audio. Cite them in the prompt as Image 1, Video 1, Audio 1.",
+    "pollInterval": 5000,
+    "maxAttempts": 600,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt",
+        "description": "Reference media as Image 1, Video 1, Audio 1, etc."
+      },
+      {
+        "name": "reference_images",
+        "type": "list[image]",
+        "default": null,
+        "title": "Reference Images"
+      },
+      {
+        "name": "reference_videos",
+        "type": "list[video]",
+        "default": null,
+        "title": "Reference Videos"
+      },
+      {
+        "name": "reference_audios",
+        "type": "list[audio]",
+        "default": null,
+        "title": "Reference Audios"
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p", "1080p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      }
+    ]
+  },
+  {
+    "className": "Seedance25ReferenceToVideo",
+    "moduleName": "video",
+    "modality": "video",
+    "modelId": "dreamina-seedance-2-5-260628",
+    "modelIdEnv": "BYTEPLUS_SEEDANCE_25_MODEL",
+    "outputType": "video",
+    "title": "BytePlus Seedance 2.5 — Reference to Video",
+    "description": "ModelArk Seedance 2.5 multimodal reference-to-video. Override model id with BYTEPLUS_SEEDANCE_25_MODEL if needed.",
+    "pollInterval": 5000,
+    "maxAttempts": 720,
+    "fields": [
+      {
+        "name": "prompt",
+        "type": "str",
+        "default": "",
+        "title": "Prompt",
+        "description": "Reference media as Image 1, Video 1, Audio 1, etc."
+      },
+      {
+        "name": "reference_images",
+        "type": "list[image]",
+        "default": null,
+        "title": "Reference Images"
+      },
+      {
+        "name": "reference_videos",
+        "type": "list[video]",
+        "default": null,
+        "title": "Reference Videos"
+      },
+      {
+        "name": "reference_audios",
+        "type": "list[audio]",
+        "default": null,
+        "title": "Reference Audios"
+      },
+      {
+        "name": "duration",
+        "type": "int",
+        "default": 5,
+        "title": "Duration (seconds)",
+        "values": [-1, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 20, 25, 30]
+      },
+      {
+        "name": "resolution",
+        "type": "enum",
+        "default": "720p",
+        "title": "Resolution",
+        "values": ["480p", "720p", "1080p"]
+      },
+      {
+        "name": "ratio",
+        "type": "enum",
+        "default": "adaptive",
+        "title": "Aspect Ratio",
+        "values": ["16:9", "4:3", "1:1", "3:4", "9:16", "21:9", "adaptive"]
+      },
+      {
+        "name": "generate_audio",
+        "type": "bool",
+        "default": true,
+        "title": "Generate Audio"
+      },
+      {
+        "name": "watermark",
+        "type": "bool",
+        "default": false,
+        "title": "Watermark"
+      }
+    ]
+  }
+]

@@ -24,6 +24,8 @@ export interface FieldDef {
 export interface NodeSpec {
   endpointId: string;
   className: string;
+  /** Human-readable menu title. When omitted, derived from className. */
+  title?: string;
   docstring: string;
   tags: string[];
   useCases: string[];
@@ -35,6 +37,11 @@ export interface NodeSpec {
 
 export interface NodeConfig {
   className?: string;
+  /**
+   * Override the menu title. Use when className cannot round-trip a version
+   * (e.g. seedance-2.0 → Seedance20 → "Seedance20"; set title to keep "2.0").
+   */
+  title?: string;
   docstring?: string;
   tags?: string[];
   useCases?: string[];

@@ -66,6 +66,6 @@ describe("CodeAuthoringModelNotice", () => {
 
     await user.click(screen.getByRole("button", { name: /open settings/i }));
 
-    expect(mockNavigate).toHaveBeenCalledWith("/settings?tab=0");
+    expect(mockNavigate).toHaveBeenCalledWith("/workspace");
   });
 });

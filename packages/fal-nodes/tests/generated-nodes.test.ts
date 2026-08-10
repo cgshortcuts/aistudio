@@ -42,6 +42,18 @@ describe("FAL_NODES from manifest", () => {
     }
   });
 
+  it("Seedance 2.0 titles keep the decimal (not Seedance20)", () => {
+    const seedance = FAL_NODES.filter((n) =>
+      (n.nodeType as string).includes("Seedance20")
+    );
+    expect(seedance.length).toBeGreaterThanOrEqual(9);
+    for (const NodeCls of seedance) {
+      const title = (NodeCls as Record<string, unknown>).title as string;
+      expect(title).toMatch(/Seedance 2\.0/);
+      expect(title).not.toMatch(/Seedance20/);
+    }
+  });
+
   it("every node has a non-empty description", () => {
     for (const NodeCls of FAL_NODES) {
       expect(typeof (NodeCls as Record<string, unknown>).description).toBe("string");

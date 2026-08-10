@@ -64,6 +64,9 @@ describe("RuntimePackagesStore", () => {
     // refresh runs in the finally block
     expect(api.getRuntimeStatuses).toHaveBeenCalled();
     expect(useRuntimePackagesStore.getState().busyIds).toEqual([]);
+    expect(useRuntimePackagesStore.getState().consoleLines.some((l) =>
+      l.includes("Starting install")
+    )).toBe(true);
   });
 
   it("uninstall calls IPC", async () => {
@@ -77,14 +80,27 @@ describe("RuntimePackagesStore", () => {
     const ok = await useRuntimePackagesStore.getState().install("python");
     expect(ok).toBe(false);
     expect(useRuntimePackagesStore.getState().error).toBe("boom");
+    expect(
+      useRuntimePackagesStore.getState().consoleLines.some((l) => l.includes("boom"))
+    ).toBe(true);
   });
 
-  it("is unavailable and no-ops without the Electron IPC", async () => {
+  it("sets a desktop-required error instead of silently no-opping without IPC", async () => {
     (window as unknown as WindowWithApi).api = undefined;
     await useRuntimePackagesStore.getState().refresh();
     expect(useRuntimePackagesStore.getState().available).toBe(false);
     expect(await useRuntimePackagesStore.getState().install("python")).toBe(
       false
     );
+    expect(useRuntimePackagesStore.getState().error).toMatch(/desktop app/i);
+  });
+
+  it("mentions download size when installing node-llama-cpp", async () => {
+    await useRuntimePackagesStore.getState().install("node-llama-cpp");
+    expect(
+      useRuntimePackagesStore
+        .getState()
+        .consoleLines.some((l) => l.includes("640 MB"))
+    ).toBe(true);
   });
 });

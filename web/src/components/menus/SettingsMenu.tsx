@@ -208,7 +208,10 @@ function SettingsPage() {
   );
   const updateSettings = useSettingsStore((state) => state.updateSettings);
   const settings = useSettingsStore((state) => state.settings);
-  const [apiSearchTerm, setApiSearchTerm] = useState("");
+  const [apiSearchTerm, setApiSearchTerm] = useState(() => {
+    const q = searchParams.get("q");
+    return q ?? "";
+  });
   const [generalSearchTerm, setGeneralSearchTerm] = useState("");
   const generalSearch = generalSearchTerm.toLowerCase().trim();
   // Sections/components that aren't individual settings rows still need to hide

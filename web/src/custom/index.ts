@@ -5,3 +5,7 @@
 export * from "./rail-hover-labels";
 export * from "./branding";
 export * from "./model-manager";
+export * from "./panel-clickaway";
+export * from "./left-panel-clickaway";
+export * from "./bottom-panel-clickaway";
+export * from "./byteplus";

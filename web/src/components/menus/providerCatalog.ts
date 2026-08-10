@@ -38,6 +38,10 @@ import voyageColorIcon from "../../icons/providers/voyage-color.svg";
 import evolinkIcon from "../../icons/evolink.svg";
 import gmiIcon from "../../icons/gmi.svg";
 
+// === CUSTOM FORK START: BytePlus ===
+import { BYTEPLUS_PROVIDER_META } from "../../custom/byteplus";
+// === CUSTOM FORK END ===
+
 
 export interface ProviderMeta {
   key: string;
@@ -276,6 +280,9 @@ export const PROVIDER_META: ProviderMeta[] = [
     icon: topazlabsIcon,
     mono: true
   },
+  // === CUSTOM FORK START: BytePlus ===
+  BYTEPLUS_PROVIDER_META,
+  // === CUSTOM FORK END ===
   {
     key: "ATLASCLOUD_API_KEY",
     name: "AtlasCloud",

@@ -18,6 +18,7 @@ import { RefreshButton, SettingsButton } from "../ui_primitives";
 import { useWorkflowManager } from "../../contexts/WorkflowManagerContext";
 import { useNavigate } from "react-router-dom";
 import { useCurrentWorkspace } from "../../hooks/useCurrentWorkspace";
+import { openSettingsPage } from "../../utils/openSettingsPage";
 import WorkspaceSelect from "./WorkspaceSelect";
 import PanelHeadline from "../ui/PanelHeadline";
 
@@ -382,7 +383,8 @@ const WorkspaceTree: React.FC = () => {
   }, [refetchFiles]);
 
   const handleManageWorkspace = useCallback(() => {
-    navigate("/settings?tab=5");
+    // Folders / workspace paths live under Integrations (tab 2).
+    openSettingsPage({ tab: 2, navigate });
   }, [navigate]);
 
   const handleTreeDoubleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {

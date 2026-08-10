@@ -43,12 +43,21 @@ const ConsolePanel = ({ lines, onClear, busy = false }: ConsolePanelProps) => {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const preRef = useRef<HTMLPreElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   // Auto-open when an operation begins so its live output is visible without a
   // manual toggle; the user can still hide it mid-run.
   useEffect(() => {
-    if (busy) setOpen(true);
+    if (busy) {
+      setOpen(true);
+      rootRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
   }, [busy]);
+
+  // Also open once the first log line arrives (npm can be quiet until then).
+  useEffect(() => {
+    if (lines.length > 0) setOpen(true);
+  }, [lines.length]);
 
   // Follow the tail as new lines stream in while the console is open.
   useEffect(() => {
@@ -68,7 +77,7 @@ const ConsolePanel = ({ lines, onClear, busy = false }: ConsolePanelProps) => {
   };
 
   return (
-    <FlexColumn gap={1}>
+    <FlexColumn gap={1} ref={rootRef}>
       <FlexRow gap={1.5} align="center" justify="space-between">
         <EditorButton
           variant="text"
@@ -77,6 +86,7 @@ const ConsolePanel = ({ lines, onClear, busy = false }: ConsolePanelProps) => {
           aria-expanded={open}
         >
           {open ? "Hide console" : "Show console"}
+          {busy ? " · installing…" : ""}
           {lines.length > 0 ? ` (${lines.length})` : ""}
         </EditorButton>
         {open && lines.length > 0 && (
@@ -94,7 +104,9 @@ const ConsolePanel = ({ lines, onClear, busy = false }: ConsolePanelProps) => {
         <pre ref={preRef} css={consoleStyles(theme)}>
           {lines.length > 0
             ? lines.join("\n")
-            : "No output yet. Logs appear here during install."}
+            : busy
+              ? "Waiting for installer output…"
+              : "No output yet. Logs appear here during install."}
         </pre>
       )}
     </FlexColumn>

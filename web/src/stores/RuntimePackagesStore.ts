@@ -13,7 +13,7 @@
 import { create } from "zustand";
 import type { StoreApi } from "zustand";
 
-import { createErrorMessage } from "../utils/errorHandling";
+import { formatErrorMessage } from "../utils/errorHandling";
 import { trpcClient } from "../trpc/client";
 
 /** Display names for the runtimes the server reports (it sends bare ids). */
@@ -73,10 +73,21 @@ const runtimeApi = () =>
 type SetState = StoreApi<RuntimePackagesStore>["setState"];
 type GetState = StoreApi<RuntimePackagesStore>["getState"];
 
+const DESKTOP_REQUIRED_MSG =
+  "Software installs need the AiStudio / NodeTool desktop app (not the browser). Use start-desktop.bat, then try Install again.";
+
+/** Human-readable size hint for long npm runtime installs. */
+function installSizeHint(id: string): string {
+  if (id === "node-llama-cpp") {
+    return " On Windows/Linux this download is ~640 MB and can take several minutes.";
+  }
+  return "";
+}
+
 /**
- * Run an install/uninstall: flag the row busy, run the op, refresh statuses,
- * then apply the outcome. The outcome is set *after* refresh so a failure
- * message survives (refresh clears `error`).
+ * Run an install/uninstall: flag the row busy, seed the console, run the op,
+ * refresh statuses, then apply the outcome. The outcome is set *after* refresh
+ * so a failure message survives (refresh clears `error`).
  */
 async function runRuntimeOp(
   set: SetState,
@@ -85,7 +96,15 @@ async function runRuntimeOp(
   op: () => Promise<{ success: boolean; message: string }>,
   verb: "install" | "uninstall"
 ): Promise<boolean> {
-  set((s) => ({ busyIds: [...new Set([...s.busyIds, id])] }));
+  const startLine =
+    verb === "install"
+      ? `Starting install of ${id}…${installSizeHint(id)} Progress appears below.`
+      : `Starting uninstall of ${id}…`;
+  set((s) => ({
+    busyIds: [...new Set([...s.busyIds, id])],
+    error: null,
+    consoleLines: [...s.consoleLines, startLine].slice(-MAX_CONSOLE_LINES)
+  }));
   let success = false;
   let message = "";
   try {
@@ -93,12 +112,16 @@ async function runRuntimeOp(
     success = res.success;
     message = res.message;
   } catch (err: unknown) {
-    message = createErrorMessage(err, `Failed to ${verb} runtime`).message;
+    message = formatErrorMessage(err, `Failed to ${verb} runtime`);
   }
   await get().refresh();
+  const endLine = success
+    ? message || `${id} ${verb} finished.`
+    : message || `Failed to ${verb} ${id}.`;
   set((s) => ({
     busyIds: s.busyIds.filter((p) => p !== id),
-    error: success ? s.error : message
+    error: success ? null : message,
+    consoleLines: [...s.consoleLines, endLine].slice(-MAX_CONSOLE_LINES)
   }));
   return success;
 }
@@ -137,8 +160,7 @@ const useRuntimePackagesStore = create<RuntimePackagesStore>((set, get) => ({
       } catch (err: unknown) {
         set({
           isLoading: false,
-          error: createErrorMessage(err, "Failed to load runtime packages")
-            .message
+          error: formatErrorMessage(err, "Failed to load runtime packages")
         });
       }
       return;
@@ -153,21 +175,40 @@ const useRuntimePackagesStore = create<RuntimePackagesStore>((set, get) => ({
     } catch (err: unknown) {
       set({
         isLoading: false,
-        error: createErrorMessage(err, "Failed to load runtime packages")
-          .message
+        error: formatErrorMessage(err, "Failed to load runtime packages")
       });
     }
   },
 
   install: async (id) => {
     const api = runtimeApi();
-    if (!api) return false;
+    if (!api?.installRuntime) {
+      set({
+        available: false,
+        error: DESKTOP_REQUIRED_MSG,
+        consoleLines: [
+          ...get().consoleLines,
+          DESKTOP_REQUIRED_MSG
+        ].slice(-MAX_CONSOLE_LINES)
+      });
+      return false;
+    }
     return runRuntimeOp(set, get, id, () => api.installRuntime(id), "install");
   },
 
   uninstall: async (id) => {
     const api = runtimeApi();
-    if (!api?.uninstallRuntime) return false;
+    if (!api?.uninstallRuntime) {
+      set({
+        available: false,
+        error: DESKTOP_REQUIRED_MSG,
+        consoleLines: [
+          ...get().consoleLines,
+          DESKTOP_REQUIRED_MSG
+        ].slice(-MAX_CONSOLE_LINES)
+      });
+      return false;
+    }
     return runRuntimeOp(
       set,
       get,
@@ -185,7 +226,7 @@ const useRuntimePackagesStore = create<RuntimePackagesStore>((set, get) => ({
       if (next) set({ installLocation: next });
     } catch (err: unknown) {
       set({
-        error: createErrorMessage(err, "Failed to set install location").message
+        error: formatErrorMessage(err, "Failed to set install location")
       });
     }
   },

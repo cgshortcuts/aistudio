@@ -8,14 +8,14 @@ import mockTheme from "../../../__mocks__/themeMock";
 import ProviderOnboardingDialog from "../ProviderOnboardingDialog";
 import useProviderOnboardingStore from "../../../stores/ProviderOnboardingStore";
 import { useSecrets } from "../../../hooks/useSecrets";
-import { navigateTo } from "../../../lib/appNavigation";
+import { openSettingsPage } from "../../../utils/openSettingsPage";
 import { useOAuthConnection } from "../../../hooks/useOAuthConnection";
 import useSecretsStore from "../../../stores/SecretsStore";
 import { useNotificationStore } from "../../../stores/NotificationStore";
 
 jest.mock("../../../stores/ProviderOnboardingStore");
 jest.mock("../../../hooks/useSecrets");
-jest.mock("../../../lib/appNavigation");
+jest.mock("../../../utils/openSettingsPage");
 jest.mock("../../../hooks/useOAuthConnection");
 jest.mock("../../../stores/SecretsStore");
 jest.mock("../../../stores/NotificationStore");
@@ -23,7 +23,9 @@ jest.mock("../../../stores/NotificationStore");
 const mockUseProviderOnboardingStore =
   useProviderOnboardingStore as unknown as jest.Mock;
 const mockUseSecrets = useSecrets as jest.MockedFunction<typeof useSecrets>;
-const mockNavigateTo = navigateTo as jest.MockedFunction<typeof navigateTo>;
+const mockOpenSettingsPage = openSettingsPage as jest.MockedFunction<
+  typeof openSettingsPage
+>;
 const mockUseOAuthConnection = useOAuthConnection as jest.MockedFunction<
   typeof useOAuthConnection
 >;
@@ -82,12 +84,12 @@ describe("ProviderOnboardingDialog", () => {
     expect(screen.getByText("Connect an AI provider")).toBeInTheDocument();
   });
 
-  it("navigates to settings via the router singleton, not useNavigate", async () => {
+  it("opens Models & Providers settings as a workspace tab", async () => {
     renderDialog();
     await userEvent.click(
       screen.getByRole("button", { name: /see all providers in settings/i })
     );
     expect(dismiss).toHaveBeenCalledTimes(1);
-    expect(mockNavigateTo).toHaveBeenCalledWith("/settings?tab=1");
+    expect(mockOpenSettingsPage).toHaveBeenCalledWith({ tab: 1 });
   });
 });

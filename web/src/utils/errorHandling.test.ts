@@ -1,4 +1,4 @@
-import { AppError, createErrorMessage } from "./errorHandling";
+import { AppError, createErrorMessage, formatErrorMessage } from "./errorHandling";
 
 describe("errorHandling", () => {
   describe("AppError", () => {
@@ -66,6 +66,20 @@ describe("errorHandling", () => {
       } as any;
       const result = createErrorMessage(error, "Default message");
       expect((result as AppError).detail).toBe("Object detail");
+    });
+  });
+
+  describe("formatErrorMessage", () => {
+    it("joins message and detail for UI banners", () => {
+      expect(
+        formatErrorMessage(new Error("ENOENT npm.cmd"), "Failed to install pack")
+      ).toBe("Failed to install pack: ENOENT npm.cmd");
+    });
+
+    it("returns the fallback alone when there is no detail", () => {
+      expect(formatErrorMessage(null, "Failed to install pack")).toBe(
+        "Failed to install pack"
+      );
     });
   });
 });

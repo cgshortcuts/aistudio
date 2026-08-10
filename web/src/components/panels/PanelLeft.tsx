@@ -16,7 +16,7 @@ import {
 } from "../ui_primitives";
 import { useResizePanel } from "../../hooks/handlers/useResizePanel";
 import isEqual from "../../utils/isEqual";
-import { memo, useCallback, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import AssetGrid from "../assets/AssetGrid";
 import {
@@ -42,6 +42,9 @@ import FavoritesTiles from "../node_menu/FavoritesTiles";
 import NodeLibrary from "../node_menu/NodeLibrary";
 // === CUSTOM FORK START: Rail Hover Labels ===
 import { ExpandableRailToolbar } from "../../custom/rail-hover-labels";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: Left Panel Clickaway ===
+import { useCloseLeftPanelOnClickAway } from "../../custom/left-panel-clickaway";
 // === CUSTOM FORK END ===
 
 import {
@@ -818,6 +821,11 @@ const PanelLeft: React.FC = () => {
     }
   }, [activeView, isWorkflowEditActive, setActiveView]);
 
+  // === CUSTOM FORK START: Left Panel Clickaway ===
+  const panelContainerRef = useRef<HTMLDivElement>(null);
+  useCloseLeftPanelOnClickAway(panelContainerRef);
+  // === CUSTOM FORK END ===
+
   if (isMobile) {
     return (
       <MobilePanelLeft
@@ -838,6 +846,7 @@ const PanelLeft: React.FC = () => {
 
   return (
     <div
+      ref={panelContainerRef}
       css={panelLeftStyles}
       className={`panel-left-container ${
         displayActiveView === "nodes" ? "is-nodes" : ""

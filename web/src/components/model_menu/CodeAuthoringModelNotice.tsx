@@ -5,9 +5,7 @@ import {
   CODE_AUTHORING_SOURCE_LABEL,
   type SkippedCodeAuthoringCandidate
 } from "../../hooks/useCodeAuthoringModel";
-
-/** Settings tab holding the Default Models section. */
-const DEFAULT_MODELS_SETTINGS_PATH = "/settings?tab=0";
+import { openSettingsPage } from "../../utils/openSettingsPage";
 
 export interface CodeAuthoringModelNoticeProps {
   /** Candidates the resolver passed over, for the explanation line. */
@@ -36,7 +34,7 @@ function CodeAuthoringModelNotice({
   const navigate = useNavigate();
 
   const handleOpenSettings = useCallback(() => {
-    navigate(DEFAULT_MODELS_SETTINGS_PATH);
+    openSettingsPage({ tab: 0, navigate });
   }, [navigate]);
 
   return (

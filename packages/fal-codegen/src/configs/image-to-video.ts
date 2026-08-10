@@ -2372,6 +2372,7 @@ export const config: ModuleConfig = {
     },
     "bytedance/seedance-2.0/image-to-video": {
       className: "BytedanceSeedance20ImageToVideo",
+      title: "Bytedance Seedance 2.0 Image To Video",
       docstring: "Animate images with ByteDance Seedance 2.0.",
       tags: [
         "generation",
@@ -2390,6 +2391,7 @@ export const config: ModuleConfig = {
     },
     "bytedance/seedance-2.0/reference-to-video": {
       className: "BytedanceSeedance20ReferenceToVideo",
+      title: "Bytedance Seedance 2.0 Reference To Video",
       docstring: "Reference-image-to-video with ByteDance Seedance 2.0.",
       tags: [
         "generation",
@@ -2409,6 +2411,7 @@ export const config: ModuleConfig = {
     },
     "bytedance/seedance-2.0/fast/image-to-video": {
       className: "BytedanceSeedance20FastImageToVideo",
+      title: "Bytedance Seedance 2.0 Fast Image To Video",
       docstring: "Fast image-to-video with ByteDance Seedance 2.0.",
       tags: [
         "generation",
@@ -2428,6 +2431,7 @@ export const config: ModuleConfig = {
     },
     "bytedance/seedance-2.0/fast/reference-to-video": {
       className: "BytedanceSeedance20FastReferenceToVideo",
+      title: "Bytedance Seedance 2.0 Fast Reference To Video",
       docstring: "Fast reference-image-to-video with ByteDance Seedance 2.0.",
       tags: [
         "generation",
@@ -2642,6 +2646,7 @@ export const config: ModuleConfig = {
     },
     "bytedance/seedance-2.0/mini/image-to-video": {
       className: "Seedance20MiniImageToVideo",
+      title: "Seedance 2.0 Mini Image To Video",
       docstring:
         "Seedance 2.0 Mini is a faster version of Seedance 2.0 that brings great performance and high generation speed at a lower cost.",
       tags: [
@@ -2662,6 +2667,7 @@ export const config: ModuleConfig = {
     },
     "bytedance/seedance-2.0/mini/reference-to-video": {
       className: "Seedance20MiniReferenceToVideo",
+      title: "Seedance 2.0 Mini Reference To Video",
       docstring:
         "Seedance 2.0 Mini is a faster version of Seedance 2.0 that brings great performance and high generation speed at a lower cost.",
       tags: [

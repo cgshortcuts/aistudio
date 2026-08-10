@@ -68,6 +68,18 @@ describe("NodeGenerator.generate()", () => {
     expect(code).toContain(`static readonly title = "Stable Diffusion XL"`);
   });
 
+  it("uses an explicit title override when set", () => {
+    const spec = makeSpec({
+      className: "BytedanceSeedance20TextToVideo",
+      title: "Bytedance Seedance 2.0 Text To Video"
+    });
+    const code = gen.generate(spec, "text_to_video");
+    expect(code).toContain(
+      `static readonly title = "Bytedance Seedance 2.0 Text To Video"`
+    );
+    expect(code).not.toContain(`title = "Bytedance Seedance20 Text To Video"`);
+  });
+
   it("generates description with docstring and tags", () => {
     const spec = makeSpec();
     const code = gen.generate(spec, "text_to_image");
@@ -438,6 +450,14 @@ describe("NodeGenerator.applyConfig()", () => {
     const spec = makeSpec({ className: "Original" });
     const result = gen.applyConfig(spec, { className: "Renamed" });
     expect(result.className).toBe("Renamed");
+  });
+
+  it("overrides title", () => {
+    const spec = makeSpec({ className: "BytedanceSeedance20TextToVideo" });
+    const result = gen.applyConfig(spec, {
+      title: "Bytedance Seedance 2.0 Text To Video"
+    });
+    expect(result.title).toBe("Bytedance Seedance 2.0 Text To Video");
   });
 
   it("overrides docstring", () => {

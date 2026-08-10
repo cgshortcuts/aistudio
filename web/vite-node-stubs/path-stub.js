@@ -49,6 +49,19 @@ export function isAbsolute(p) {
   return typeof p === "string" && p.startsWith("/");
 }
 
+export function relative(from, to) {
+  const fromParts = resolve(from).split("/").filter(Boolean);
+  const toParts = resolve(to).split("/").filter(Boolean);
+  let i = 0;
+  while (i < fromParts.length && i < toParts.length && fromParts[i] === toParts[i]) {
+    i += 1;
+  }
+  const ups = Array(fromParts.length - i).fill("..");
+  const downs = toParts.slice(i);
+  const parts = ups.concat(downs);
+  return parts.length === 0 ? "." : parts.join("/");
+}
+
 export const posix = {
   sep,
   delimiter,
@@ -57,7 +70,8 @@ export const posix = {
   dirname,
   basename,
   extname,
-  isAbsolute
+  isAbsolute,
+  relative
 };
 
 export default {
@@ -69,5 +83,6 @@ export default {
   basename,
   extname,
   isAbsolute,
+  relative,
   posix
 };

@@ -815,7 +815,7 @@ export const providerCatalog: Record<string, ProviderCatalog> = {
       },
       {
         "id": "bytedance/seedance-2.0/fast/image-to-video",
-        "name": "Bytedance Seedance20 Fast Image To Video",
+        "name": "Bytedance Seedance 2.0 Fast Image To Video",
         "kind": "video",
         "desc": "Fast image-to-video with ByteDance Seedance 2.0.",
         "tags": [
@@ -826,7 +826,7 @@ export const providerCatalog: Record<string, ProviderCatalog> = {
       },
       {
         "id": "bytedance/seedance-2.0/fast/reference-to-video",
-        "name": "Bytedance Seedance20 Fast Reference To Video",
+        "name": "Bytedance Seedance 2.0 Fast Reference To Video",
         "kind": "video",
         "desc": "Fast reference-image-to-video with ByteDance Seedance 2.0.",
         "tags": [
@@ -837,7 +837,7 @@ export const providerCatalog: Record<string, ProviderCatalog> = {
       },
       {
         "id": "bytedance/seedance-2.0/fast/text-to-video",
-        "name": "Bytedance Seedance20 Fast Text To Video",
+        "name": "Bytedance Seedance 2.0 Fast Text To Video",
         "kind": "video",
         "desc": "Fast text-to-video with ByteDance Seedance 2.0.",
         "tags": [
@@ -848,7 +848,7 @@ export const providerCatalog: Record<string, ProviderCatalog> = {
       },
       {
         "id": "bytedance/seedance-2.0/image-to-video",
-        "name": "Bytedance Seedance20 Image To Video",
+        "name": "Bytedance Seedance 2.0 Image To Video",
         "kind": "video",
         "desc": "Animate images with ByteDance Seedance 2.0.",
         "tags": [
@@ -859,7 +859,7 @@ export const providerCatalog: Record<string, ProviderCatalog> = {
       },
       {
         "id": "bytedance/seedance-2.0/mini/image-to-video",
-        "name": "Seedance20 Mini Image To Video",
+        "name": "Seedance 2.0 Mini Image To Video",
         "kind": "video",
         "desc": "Seedance 2.0 Mini is a faster version of Seedance 2.0 that brings great performance and high generation speed at a lower cost.",
         "tags": [
@@ -870,7 +870,7 @@ export const providerCatalog: Record<string, ProviderCatalog> = {
       },
       {
         "id": "bytedance/seedance-2.0/mini/reference-to-video",
-        "name": "Seedance20 Mini Reference To Video",
+        "name": "Seedance 2.0 Mini Reference To Video",
         "kind": "video",
         "desc": "Seedance 2.0 Mini is a faster version of Seedance 2.0 that brings great performance and high generation speed at a lower cost.",
         "tags": [
@@ -881,7 +881,7 @@ export const providerCatalog: Record<string, ProviderCatalog> = {
       },
       {
         "id": "bytedance/seedance-2.0/mini/text-to-video",
-        "name": "Seedance20 Mini Text To Video",
+        "name": "Seedance 2.0 Mini Text To Video",
         "kind": "video",
         "desc": "Seedance 2.0 Mini is a faster version of Seedance 2.0 that brings great performance and high generation speed at a lower cost.",
         "tags": [
@@ -892,7 +892,7 @@ export const providerCatalog: Record<string, ProviderCatalog> = {
       },
       {
         "id": "bytedance/seedance-2.0/reference-to-video",
-        "name": "Bytedance Seedance20 Reference To Video",
+        "name": "Bytedance Seedance 2.0 Reference To Video",
         "kind": "video",
         "desc": "Reference-image-to-video with ByteDance Seedance 2.0.",
         "tags": [
@@ -903,7 +903,7 @@ export const providerCatalog: Record<string, ProviderCatalog> = {
       },
       {
         "id": "bytedance/seedance-2.0/text-to-video",
-        "name": "Bytedance Seedance20 Text To Video",
+        "name": "Bytedance Seedance 2.0 Text To Video",
         "kind": "video",
         "desc": "Generate videos from text using ByteDance Seedance 2.0.",
         "tags": [

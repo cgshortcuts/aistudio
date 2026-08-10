@@ -83,7 +83,8 @@ async function runNpm(args: string[]): Promise<void> {
     const child = spawn(npm.command, fullArgs, {
       env: getProcessEnv(),
       stdio: "pipe",
-      windowsHide: true
+      windowsHide: true,
+      shell: process.platform === "win32"
     });
     let stderr = "";
     child.stdout?.on("data", (data: Buffer) => {

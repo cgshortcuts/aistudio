@@ -119,6 +119,16 @@ export const BUILTIN_NODE_PACKS: readonly BuiltinNodePack[] = [
       "Image and video generation on AtlasCloud — GPT Image, Nano Banana, Seedream, Seedance, Veo, Kling, Wan.",
     namespaces: ["atlascloud"]
   },
+  // === CUSTOM FORK START: BytePlus ===
+  {
+    id: "byteplus",
+    name: "BytePlus ModelArk",
+    description:
+      "Seedance 2.0 / 2.5 video generation via BytePlus ModelArk (your API key, resource packs, and balance).",
+    defaultEnabled: true,
+    namespaces: ["byteplus"]
+  },
+  // === CUSTOM FORK END ===
   {
     id: "together",
     name: "Together AI",
