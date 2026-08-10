@@ -25,13 +25,40 @@ jest.mock("@mui/material/styles", () => ({
 
 jest.mock("@mui/material", () => ({
   ...jest.requireActual("@mui/material"),
-  useMediaQuery: jest.fn().mockReturnValue(false),
   Box: ({ children, ...props }: any) => <div {...props}>{children}</div>,
   Typography: ({ children, ...props }: any) => <p {...props}>{children}</p>,
   CircularProgress: ({ ...props }: any) => (
     <div data-testid="circular-progress" {...props} />
   )
 }));
+
+jest.mock("../../../../components/chat/sidebar/ThreadMemorySidebar", () => ({
+  THREAD_MEMORY_SIDEBAR_WIDTH: 300,
+  ThreadMemorySidebar: ({ threadId }: { threadId: string }) => (
+    <aside data-testid="thread-memory-sidebar">Memory for {threadId}</aside>
+  )
+}));
+
+jest.mock("../../../../components/chat/sidebar/TodoSidebar", () => ({
+  TODO_SIDEBAR_WIDTH: 280,
+  TodoSidebar: ({ todos }: { todos: unknown[] }) => (
+    <aside data-testid="todo-sidebar">Todos: {todos.length}</aside>
+  )
+}));
+
+const setMockContainerWidth = (width: number) => {
+  jest.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+    width,
+    height: 800,
+    top: 0,
+    left: 0,
+    bottom: 800,
+    right: width,
+    x: 0,
+    y: 0,
+    toJSON: () => ({})
+  });
+};
 
 // Mock ChatThreadView component
 jest.mock("../../../../components/chat/thread/ChatThreadView", () => ({
@@ -110,6 +137,11 @@ describe("ChatView", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    setMockContainerWidth(1200);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   describe("Initial Rendering", () => {
@@ -391,6 +423,30 @@ describe("ChatView", () => {
       );
 
       expect(screen.getByTestId("chat-thread-view")).toBeInTheDocument();
+    });
+  });
+
+  describe("Side rails vs container width", () => {
+    it("hides Memory when ChatView is narrower than the rail budget (editor panels)", () => {
+      // Storyboard / timeline agent panels are ~320px — a 300px Memory rail
+      // used to crush chat-main into a few-pixel strip.
+      setMockContainerWidth(320);
+      renderWithProviders(
+        <ChatView {...baseProps} threadId="thread-1" />
+      );
+
+      expect(
+        screen.queryByTestId("thread-memory-sidebar")
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows Memory when the container has room for the rail and chat", () => {
+      setMockContainerWidth(800);
+      renderWithProviders(
+        <ChatView {...baseProps} threadId="thread-1" />
+      );
+
+      expect(screen.getByTestId("thread-memory-sidebar")).toBeInTheDocument();
     });
   });
 

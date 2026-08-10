@@ -21,7 +21,8 @@ import { trpc, type RouterOutputs } from "../../../trpc/client";
 import { useNotificationStore } from "../../../stores/NotificationStore";
 import ConfirmDialog from "../../dialogs/ConfirmDialog";
 
-const THREAD_MEMORY_SIDEBAR_WIDTH = 300;
+/** Fixed rail width — ChatView gates mounting on container room for this. */
+export const THREAD_MEMORY_SIDEBAR_WIDTH = 300;
 /** Asset thumbnail edge (px), on the 4px grid — a fixed component dimension. */
 const THUMB_SIZE = 48;
 

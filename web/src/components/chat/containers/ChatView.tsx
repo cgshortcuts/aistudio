@@ -1,9 +1,8 @@
 /** @jsxImportSource @emotion/react */
 import { css } from "@emotion/react";
 import { useTheme } from "@mui/material/styles";
-import useMediaQuery from "@mui/material/useMediaQuery";
 import type { Theme } from "@mui/material/styles";
-import { useCallback, useMemo, memo } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, memo } from "react";
 import {
   Node,
   Edge,
@@ -24,8 +23,11 @@ import {
 } from "../../ui_primitives";
 import ChatThreadView from "../thread/ChatThreadView";
 import ChatInputSection, { type ChatComposerVariant } from "./ChatInputSection";
-import { TodoSidebar } from "../sidebar/TodoSidebar";
-import { ThreadMemorySidebar } from "../sidebar/ThreadMemorySidebar";
+import { TodoSidebar, TODO_SIDEBAR_WIDTH } from "../sidebar/TodoSidebar";
+import {
+  ThreadMemorySidebar,
+  THREAD_MEMORY_SIDEBAR_WIDTH
+} from "../sidebar/ThreadMemorySidebar";
 import useGlobalChatStore from "../../../stores/GlobalChatStore";
 import {
   buildUiContext,
@@ -35,6 +37,15 @@ import type {
   ChatOutgoingMessage,
   MediaGenerationRequest
 } from "../types/media.types";
+
+/**
+ * Minimum width left for the conversation once a side rail mounts. Editor
+ * agent panels (storyboard / timeline / sketch / script) are ~320px wide — a
+ * 300px Memory rail inside them crushed chat-main to a few pixels. Gate on
+ * the ChatView container, not the viewport: `md` is true on a wide monitor
+ * even when ChatView lives in a narrow rail.
+ */
+const MIN_CHAT_MAIN_FOR_RAILS = 360;
 
 const styles = (theme: Theme) =>
   css({
@@ -269,14 +280,39 @@ const ChatView = ({
   const effectiveThreadId = useGlobalChatStore(
     (state) => threadId ?? state.currentThreadId
   );
-  // The two rails are 280px and 300px of fixed width. Below `md` they leave
-  // the conversation itself almost no room, so they drop out entirely on
-  // phones and narrow panels.
-  const railsFit = useMediaQuery(theme.breakpoints.up("md"));
-  const showTodoSidebar = railsFit && todos.length > 0;
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el) {
+      return;
+    }
+    const update = () => {
+      setContainerWidth(el.getBoundingClientRect().width);
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  // Memory alone needs its rail + a usable chat column; Todo needs both rails.
+  const showMemorySidebar =
+    Boolean(effectiveThreadId) &&
+    containerWidth >= THREAD_MEMORY_SIDEBAR_WIDTH + MIN_CHAT_MAIN_FOR_RAILS;
+  const showTodoSidebar =
+    todos.length > 0 &&
+    containerWidth >=
+      THREAD_MEMORY_SIDEBAR_WIDTH +
+        TODO_SIDEBAR_WIDTH +
+        MIN_CHAT_MAIN_FOR_RAILS;
 
   return (
-    <div className="chat-view" css={cssStyles}>
+    <div className="chat-view" css={cssStyles} ref={rootRef}>
       <div className="chat-main">
         {showNewChatButton && onNewChat && (
           <div className="new-chat-overlay">
@@ -327,7 +363,7 @@ const ChatView = ({
         />
       </div>
       {showTodoSidebar && <TodoSidebar todos={todos} />}
-      {railsFit && effectiveThreadId && (
+      {showMemorySidebar && effectiveThreadId && (
         <ThreadMemorySidebar threadId={effectiveThreadId} />
       )}
     </div>

@@ -29,6 +29,9 @@ import groqIcon from "../../icons/providers/groq.svg";
 import deepseekColorIcon from "../../icons/providers/deepseek-color.svg";
 import xaiIcon from "../../icons/providers/xai.svg";
 import elevenlabsIcon from "../../icons/providers/elevenlabs.svg";
+// === CUSTOM FORK START: BytePlus ===
+import byteplusIcon from "../../custom/byteplus/byteplus.png";
+// === CUSTOM FORK END ===
 
 import { useIsDarkMode } from "../../hooks/useIsDarkMode";
 import { MOTION, BORDER_RADIUS } from "../ui_primitives";
@@ -74,7 +77,10 @@ const NAMESPACE_ICONS: Record<string, IconEntry> = {
   replicate: { kind: "svg", src: replicateIcon },
   groq: { kind: "svg", src: groqIcon },
   deepseek: { kind: "svg", src: deepseekColorIcon, preserveInDark: true },
-  xai: { kind: "svg", src: xaiIcon }
+  xai: { kind: "svg", src: xaiIcon },
+  // === CUSTOM FORK START: BytePlus ===
+  byteplus: { kind: "svg", src: byteplusIcon, preserveInDark: true }
+  // === CUSTOM FORK END ===
 };
 
 const FALLBACK_ENTRY: MuiEntry = { kind: "mui", Component: ApiIcon };
