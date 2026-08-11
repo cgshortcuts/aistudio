@@ -47,6 +47,13 @@ import type { NodeStoreState } from "../../stores/NodeStore";
 // === CUSTOM FORK START: Bottom Panel Clickaway ===
 import { useCloseBottomPanelOnClickAway } from "../../custom/bottom-panel-clickaway";
 // === CUSTOM FORK END ===
+// === CUSTOM FORK START: Product Profile ===
+import {
+  isChatAndAgentsHidden,
+  isHiddenBottomPanelView,
+  visibleBottomPanelViews
+} from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 // icons
 import TimelineIcon from "@mui/icons-material/Timeline";
@@ -449,6 +456,12 @@ const PanelBodyContent = memo(function PanelBodyContent({
 
   const closeView = useBottomPanelStore((s) => s.closePanel);
 
+  // === CUSTOM FORK START: Product Profile ===
+  if (isHiddenBottomPanelView(activeView)) {
+    return null;
+  }
+  // === CUSTOM FORK END ===
+
   switch (activeView) {
     case "logs":
       return <LogPanel />;
@@ -479,8 +492,11 @@ const PanelBodyContent = memo(function PanelBodyContent({
           onClose={closeView}
         />
       ) : null;
-    case "workspace":
-      return workspacesEnabled ? (
+    case "workspace": {
+      // === CUSTOM FORK START: Product Profile ===
+      const showWorkspace = workspacesEnabled && !isChatAndAgentsHidden();
+      // === CUSTOM FORK END ===
+      return showWorkspace ? (
         <Box
           className="workspace-panel"
           sx={{ width: "100%", height: "100%", overflow: "hidden" }}
@@ -488,6 +504,7 @@ const PanelBodyContent = memo(function PanelBodyContent({
           <WorkspaceTree />
         </Box>
       ) : null;
+    }
     case "trace":
       return <TracePanel />;
     default:
@@ -533,11 +550,17 @@ const PanelBottom: React.FC = () => {
   );
   const pageTabActive = activeTab?.type === "page";
 
+  // === CUSTOM FORK START: Product Profile ===
+  const hideCustomerSurfaces = isChatAndAgentsHidden();
+  // === CUSTOM FORK END ===
+
   useCombo(
     ["Control", "Shift", "T"],
     () => handlePanelToggle("trace"),
     false,
-    !pageTabActive
+    // === CUSTOM FORK START: Product Profile ===
+    !pageTabActive || hideCustomerSurfaces
+    // === CUSTOM FORK END ===
   );
   useCombo(["l"], () => handlePanelToggle("logs"), false, !pageTabActive);
 
@@ -545,10 +568,15 @@ const PanelBottom: React.FC = () => {
   // gated-off view (workspace/sandboxes), migrate the store to "logs" so the
   // active view and the rendered body stay in sync.
   useEffect(() => {
-    if (!VIEW_SPECS[activeView]?.enabled) {
+    if (
+      !VIEW_SPECS[activeView]?.enabled ||
+      // === CUSTOM FORK START: Product Profile ===
+      isHiddenBottomPanelView(activeView, hideCustomerSurfaces)
+      // === CUSTOM FORK END ===
+    ) {
       setActiveView("logs");
     }
-  }, [activeView, setActiveView]);
+  }, [activeView, hideCustomerSurfaces, setActiveView]);
 
   // === CUSTOM FORK START: Bottom Panel Clickaway ===
   const panelContainerRef = useRef<HTMLDivElement>(null);
@@ -560,7 +588,12 @@ const PanelBottom: React.FC = () => {
     return null;
   }
 
-  const enabledViews = ENABLED_VIEWS;
+  // === CUSTOM FORK START: Product Profile ===
+  const enabledViews = visibleBottomPanelViews(
+    ENABLED_VIEWS,
+    hideCustomerSurfaces
+  );
+  // === CUSTOM FORK END ===
 
   const openHeight = isVisible
     ? Math.min(
@@ -630,7 +663,9 @@ const PanelBottom: React.FC = () => {
               <span>{isConnected ? "connected" : "offline"}</span>
               <span className="sep" aria-hidden>·</span>
               <span>{workerLabel}</span>
-              <WorkerStatusIndicator />
+              {/* === CUSTOM FORK START: Product Profile === */}
+              {!hideCustomerSurfaces && <WorkerStatusIndicator />}
+              {/* === CUSTOM FORK END === */}
             </div>
             <div className="tab-rail" role="tablist">
               {enabledViews.map((view) => (

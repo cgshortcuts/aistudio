@@ -49,7 +49,7 @@ const gotoEditor = async (page: Page): Promise<void> => {
   await seedLocalStorage(page);
   await page.goto(EDITOR_URL);
   const loading = page.locator(
-    '[role="status"][aria-label="Loading NodeTool"]'
+    '[role="status"][aria-label="Loading Ai Studio"]'
   );
   if ((await loading.count()) > 0) {
     await loading.first().waitFor({ state: "hidden", timeout: 30_000 });

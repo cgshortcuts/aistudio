@@ -24,6 +24,7 @@ beforeEach(async () => {
 afterEach(async () => {
   await fs.rm(tmpDir, { recursive: true, force: true });
   delete process.env[LOCAL_FILE_ROOTS_ENV];
+  delete process.env["NODETOOL_ELECTRON"];
 });
 
 /**
@@ -166,6 +167,28 @@ describe("resolveLocalPath", () => {
       tmpDir
     ]);
     expect(result).toEqual({ ok: false, reason: "outside_roots" });
+  });
+
+  it("allows paths outside roots in the Electron desktop app", async () => {
+    process.env["NODETOOL_ELECTRON"] = "1";
+    const outside = path.join(tmpDir, "outside-root", "clip.mp4");
+    // Root is a different folder; path is still absolute and non-sensitive.
+    const otherRoot = path.join(tmpDir, "allowed-root-only");
+    await fs.mkdir(otherRoot);
+    await fs.mkdir(path.dirname(outside), { recursive: true });
+    await fs.writeFile(outside, "x");
+
+    const result = await resolveLocalPath(outside, [otherRoot]);
+    expect(result).toEqual({ ok: true, path: path.resolve(outside) });
+  });
+
+  it("still rejects sensitive paths in Electron", async () => {
+    process.env["NODETOOL_ELECTRON"] = "1";
+    const home = os.homedir();
+    const result = await resolveLocalPath(path.join(home, ".ssh", "id_rsa"), [
+      tmpDir
+    ]);
+    expect(result).toEqual({ ok: false, reason: "sensitive" });
   });
 });
 

@@ -36,6 +36,9 @@ const styles = (theme: Theme) =>
     "&": {
       position: "relative",
       height: "100%",
+      flex: 1,
+      minHeight: 0,
+      minWidth: 0,
       overflow: "hidden",
       paddingBottom: ".5em",
       display: "flex",
@@ -43,8 +46,12 @@ const styles = (theme: Theme) =>
     },
     ".asset-list": {
       flex: 1,
+      minHeight: 0,
+      minWidth: 0,
       marginTop: "1em",
-      overflow: "hidden"
+      overflowX: "hidden",
+      overflowY: "auto",
+      overscrollBehavior: "contain"
     },
     ".autosizer-list": {
       paddingBottom: "14em"
@@ -127,6 +134,19 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
 
   const theme = useTheme();
   const cssStyles = useMemo(() => styles(theme), [theme]);
+  const contentShellStyle = useMemo(
+    (): React.CSSProperties => ({
+      width: "100%",
+      height: "100%",
+      flex: 1,
+      minHeight: 0,
+      borderLeft: isHorizontal
+        ? "1px solid" + theme.vars.palette.grey[600]
+        : "none",
+      paddingLeft: isHorizontal ? ".5em" : "0"
+    }),
+    [isHorizontal, theme]
+  );
 
   const [gridDimensions, setGridDimensions] = useState({
     columns: 1,
@@ -328,14 +348,7 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
         css={cssStyles}
         ref={containerRef}
         onContextMenu={handleContextMenu}
-        style={{
-          width: "100%",
-          height: "100%",
-          borderLeft: isHorizontal
-            ? "1px solid" + theme.vars.palette.grey[600]
-            : "none",
-          paddingLeft: isHorizontal ? ".5em" : "0"
-        }}
+        style={contentShellStyle}
       >
         <AssetListView
           assets={assets}
@@ -359,6 +372,8 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
         style={{
           width: "100%",
           height: "100%",
+          flex: 1,
+          minHeight: 0,
           display: "flex",
           alignItems: "center",
           justifyContent: "center"
@@ -401,19 +416,13 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
       css={cssStyles}
       ref={containerRef}
       onContextMenu={handleContextMenu}
-      style={{
-        width: "100%",
-        height: "100%",
-        borderLeft: isHorizontal
-          ? "1px solid" + theme.vars.palette.grey[600]
-          : "none",
-        paddingLeft: isHorizontal ? ".5em" : "0"
-      }}
+      style={contentShellStyle}
     >
       <div
         ref={listScrollRef}
         className="asset-list autosizer-list"
-        style={{ overflow: "auto" }}
+        data-testid="asset-grid-scroll"
+        style={{ overflowX: "hidden", overflowY: "auto" }}
       >
         <div
           style={{

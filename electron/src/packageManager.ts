@@ -7,6 +7,9 @@ import {
   getCondaEnvPath,
 } from "./config";
 import * as path from "path";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 
 /** Extract the message from an unknown catch-clause error. */
@@ -48,7 +51,7 @@ interface RegistryPackageItem {
 
 const PACKAGE_DESCRIPTION_OVERRIDES: Record<string, string> = {
   "nodetool-ai/nodetool-core":
-    "Essential NodeTool core nodes and shared runtime components. Install this package in every NodeTool environment.",
+    `Essential ${APP_DISPLAY_NAME} core nodes and shared runtime components. Install this package in every ${APP_DISPLAY_NAME} environment.`,
   "nunchaku-tech/nunchaku":
     "Accelerates FLUX and Qwen image models with Nunchaku quantization kernels. Install this only if you plan to run Nunchaku-optimized HuggingFace models.",
 };

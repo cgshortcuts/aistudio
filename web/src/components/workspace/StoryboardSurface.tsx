@@ -21,6 +21,12 @@ import StoryboardBoard from "../storyboard/StoryboardBoard";
 import StoryboardSidebar from "../storyboard/StoryboardSidebar";
 import StoryboardQueueOverlay from "../storyboard/StoryboardQueueOverlay";
 import StoryboardAgentPanel from "../storyboard/StoryboardAgentPanel";
+// === CUSTOM FORK START: Product Profile ===
+import {
+  filterHiddenChatTabs,
+  isChatAndAgentsHidden
+} from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 interface StoryboardSurfaceProps {
   refId: string;
@@ -58,6 +64,10 @@ const StoryboardSurface = ({ refId, mode, active }: StoryboardSurfaceProps) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
   const [mobilePane, setMobilePane] = useState<MobilePane>("board");
+  // === CUSTOM FORK START: Product Profile ===
+  const hideChat = isChatAndAgentsHidden();
+  const mobileTabs = filterHiddenChatTabs(MOBILE_TABS);
+  // === CUSTOM FORK END ===
   const ensureBoard = useStoryboardStore((state) => state.ensureBoard);
   const undo = useStoryboardStore((state) => state.undo);
   const redo = useStoryboardStore((state) => state.redo);
@@ -129,8 +139,12 @@ const StoryboardSurface = ({ refId, mode, active }: StoryboardSurfaceProps) => {
     return (
       <FlexColumn fullHeight sx={{ minHeight: 0, position: "relative" }}>
         <TabGroup
-          tabs={MOBILE_TABS}
-          value={mobilePane}
+          tabs={mobileTabs}
+          value={
+            mobileTabs.some((t) => t.value === mobilePane)
+              ? mobilePane
+              : "board"
+          }
           onChange={(value) => {
             if (isMobilePane(value)) {
               setMobilePane(value);
@@ -163,14 +177,16 @@ const StoryboardSurface = ({ refId, mode, active }: StoryboardSurfaceProps) => {
           >
             {board}
           </div>
-          <div
-            style={{
-              height: "100%",
-              display: mobilePane === "assistant" ? "block" : "none"
-            }}
-          >
-            <StoryboardAgentPanel boardId={refId} />
-          </div>
+          {!hideChat && (
+            <div
+              style={{
+                height: "100%",
+                display: mobilePane === "assistant" ? "block" : "none"
+              }}
+            >
+              <StoryboardAgentPanel boardId={refId} />
+            </div>
+          )}
         </div>
         <StoryboardQueueOverlay boardId={refId} />
       </FlexColumn>
@@ -189,7 +205,7 @@ const StoryboardSurface = ({ refId, mode, active }: StoryboardSurfaceProps) => {
       {mode !== "view" && <StoryboardSidebar activeBoardId={refId} />}
       <StoryboardQueueOverlay boardId={refId} />
       <div style={{ flex: 1, minWidth: 0 }}>{board}</div>
-      {mode !== "view" && (
+      {mode !== "view" && !hideChat && (
         <FlexColumn
           fullHeight
           sx={{

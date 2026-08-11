@@ -28,6 +28,7 @@ import {
   importApplicationBundle
 } from "../../utils/applicationBundle";
 import { useWorkspaceTabsStore } from "../../stores/WorkspaceTabsStore";
+import { formatErrorMessage } from "../../utils/errorHandling";
 import { useWorkflowShareDialogStore } from "../../stores/WorkflowShareDialogStore";
 import { useNodes } from "../../contexts/NodeContext";
 import { create } from "zustand";
@@ -242,7 +243,7 @@ const WorkflowCommands = memo(function WorkflowCommands() {
         });
       } catch (error) {
         addNotification({
-          content: `Failed to save workflow: ${error instanceof Error ? error.message : "Unknown error"}`,
+          content: formatErrorMessage(error, "Failed to save workflow"),
           type: "error",
           alert: true
         });

@@ -25,6 +25,7 @@ describe("runtimeConfig", () => {
     const { isAuthRequired, getRuntimeConfig } = await import("../runtimeConfig");
     expect(isAuthRequired()).toBe(false);
     expect(getRuntimeConfig().supabaseUrl).toBeNull();
+    expect(getRuntimeConfig().hideChatAndAgents).toBe(false);
   });
 
   it("fetches /api/config from BASE_URL and applies supabase mode", async () => {
@@ -97,6 +98,21 @@ describe("runtimeConfig", () => {
       delete process.env.VITE_SUPABASE_URL;
       delete process.env.VITE_SUPABASE_ANON_KEY;
     }
+  });
+
+  it("reads hideChatAndAgents from the backend", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        authMode: "local",
+        hideChatAndAgents: true
+      })
+    );
+
+    const { loadRuntimeConfig, getRuntimeConfig } = await import(
+      "../runtimeConfig"
+    );
+    await loadRuntimeConfig();
+    expect(getRuntimeConfig().hideChatAndAgents).toBe(true);
   });
 
   it("caches after the first successful load", async () => {

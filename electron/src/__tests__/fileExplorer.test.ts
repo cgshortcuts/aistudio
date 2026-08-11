@@ -385,7 +385,7 @@ describe("fileExplorer", () => {
       const result = await openSystemDirectory("installation");
 
       expect(result.status).toBe("error");
-      expect(result.message).toContain("Nodetool installation directory is not available");
+      expect(result.message).toContain("Ai Studio installation directory is not available");
     });
 
     it("should return error when logs directory is unavailable", async () => {
@@ -393,7 +393,7 @@ describe("fileExplorer", () => {
       const result = await openSystemDirectory("logs");
 
       expect(result.status).toBe("error");
-      expect(result.message).toContain("Nodetool logs directory is not available");
+      expect(result.message).toContain("Ai Studio logs directory is not available");
     });
 
     it("should handle shell.openPath errors", async () => {

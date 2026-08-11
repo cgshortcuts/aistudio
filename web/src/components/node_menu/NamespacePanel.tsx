@@ -10,6 +10,9 @@ import { useShallow } from "zustand/react/shallow";
 import { NamespaceTree } from "../../hooks/useNamespaceTree";
 import { HomeNamespaceIcon } from "./NamespaceIcon";
 import OptionalPacksSection from "./OptionalPacksSection";
+// === CUSTOM FORK START: Product Profile ===
+import { showOptionalNodePacks } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 interface NamespacePanelProps {
   namespaceTree: NamespaceTree;
@@ -292,7 +295,9 @@ const NamespacePanel: React.FC<NamespacePanelProps> = ({ namespaceTree }) => {
             </div>
           </>
         )}
-        <OptionalPacksSection />
+        {/* === CUSTOM FORK START: Product Profile === */}
+        {showOptionalNodePacks() && <OptionalPacksSection />}
+        {/* === CUSTOM FORK END === */}
       </ListGroup>
     </div>
   );

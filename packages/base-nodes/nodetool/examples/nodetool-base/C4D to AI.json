@@ -1,0 +1,220 @@
+{
+  "id": "",
+  "access": "private",
+  "created_at": "2026-08-11T00:00:00.000Z",
+  "updated_at": "2026-08-11T00:00:00.000Z",
+  "name": "C4D to AI",
+  "tool_name": null,
+  "description": "Drive AI video from a C4D depth (or similar) pass with Wan VACE 14B depth on fal. Needs a FAL API key.",
+  "tags": [
+    "aistudio",
+    "recommended",
+    "example",
+    "video",
+    "fal"
+  ],
+  "thumbnail": null,
+  "thumbnail_url": null,
+  "graph": {
+    "nodes": [
+      {
+        "id": "comment",
+        "type": "nodetool.workflows.base_node.Comment",
+        "data": {
+          "comment": "# C4D to AI\n\nSupply a depth/pass clip from Cinema 4D. The prompt describes the look to apply."
+        },
+        "ui_properties": {
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "zIndex": 0,
+          "width": 360,
+          "selectable": true,
+          "title": "About"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "clip",
+        "type": "nodetool.input.VideoInput",
+        "data": {
+          "name": "pass",
+          "value": null,
+          "description": "C4D depth or combined pass"
+        },
+        "ui_properties": {
+          "position": {
+            "x": 0,
+            "y": 180
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "1  Pass"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "prompt",
+        "type": "nodetool.input.StringInput",
+        "data": {
+          "name": "prompt",
+          "value": "Photoreal coastal villa, overcast, wet concrete, 35mm",
+          "description": "Look / materials"
+        },
+        "ui_properties": {
+          "position": {
+            "x": 0,
+            "y": 360
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "2  Prompt"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "vace",
+        "type": "fal.video_to_video.WanVace14bDepth",
+        "data": {
+          "video": {
+            "type": "video",
+            "uri": "",
+            "asset_id": null,
+            "data": null,
+            "metadata": null,
+            "duration": null,
+            "format": null
+          },
+          "prompt": "",
+          "preprocess": true
+        },
+        "ui_properties": {
+          "position": {
+            "x": 400,
+            "y": 240
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "3  Wan VACE"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "out",
+        "type": "nodetool.output.Output",
+        "data": {
+          "name": "video"
+        },
+        "ui_properties": {
+          "position": {
+            "x": 760,
+            "y": 260
+          },
+          "zIndex": 0,
+          "width": 240,
+          "selectable": true,
+          "title": "4  Video"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "source": "clip",
+        "sourceHandle": "output",
+        "target": "vace",
+        "targetHandle": "video"
+      },
+      {
+        "id": "e2",
+        "source": "prompt",
+        "sourceHandle": "output",
+        "target": "vace",
+        "targetHandle": "prompt"
+      },
+      {
+        "id": "e3",
+        "source": "vace",
+        "sourceHandle": "output",
+        "target": "out",
+        "targetHandle": "value"
+      }
+    ]
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "pass": {
+        "type": "object",
+        "properties": {
+          "uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "type": {
+            "type": "string",
+            "const": "video"
+          }
+        },
+        "required": [
+          "uri",
+          "type"
+        ],
+        "label": ""
+      },
+      "prompt": {
+        "type": "string",
+        "label": ""
+      }
+    },
+    "required": [
+      "pass",
+      "prompt"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "video": {
+        "type": "object",
+        "properties": {
+          "uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "type": {
+            "type": "string",
+            "const": "video"
+          }
+        },
+        "required": [
+          "uri",
+          "type"
+        ],
+        "label": ""
+      }
+    },
+    "required": [
+      "video"
+    ]
+  },
+  "settings": {},
+  "package_name": "nodetool-base",
+  "path": null,
+  "run_mode": "workflow",
+  "workspace_id": null,
+  "required_providers": null,
+  "required_models": null,
+  "html_app": null,
+  "etag": ""
+}

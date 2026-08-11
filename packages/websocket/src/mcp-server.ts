@@ -51,6 +51,7 @@ import {
 import { resolveWorkflowWorkspace } from "./lib/workflow-workspace.js";
 import { runWorkflow } from "@nodetool-ai/execution/service";
 import { createAssetModelInterface } from "./lib/asset-model-interface.js";
+import { recordImageBatchModelInterface } from "./lib/image-batch-job.js";
 import type { AgentTransport } from "./agent/transport.js";
 import { registerAgentMcpTools } from "./mcp-agent-tools.js";
 
@@ -495,7 +496,8 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
               ensurePythonBridge: runtime.ensurePythonBridge,
               configureContext: (context) => {
                 context.setModelInterfaces({
-                  createAsset: createAssetModelInterface
+                  createAsset: createAssetModelInterface,
+                  recordImageBatch: recordImageBatchModelInterface
                 });
               }
             };

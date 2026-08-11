@@ -1,0 +1,274 @@
+{
+  "id": "",
+  "access": "private",
+  "created_at": "2026-08-11T00:00:00.000Z",
+  "updated_at": "2026-08-11T00:00:00.000Z",
+  "name": "Motion Control",
+  "tool_name": null,
+  "description": "Transfer motion from a reference clip onto a character still with Kling 3.0 Pro motion-control. Needs a FAL API key.",
+  "tags": [
+    "aistudio",
+    "recommended",
+    "example",
+    "video",
+    "fal"
+  ],
+  "thumbnail": null,
+  "thumbnail_url": null,
+  "graph": {
+    "nodes": [
+      {
+        "id": "comment",
+        "type": "nodetool.workflows.base_node.Comment",
+        "data": {
+          "comment": "# Motion Control\n\nCharacter image + motion clip. Orientation is set to the image so the still owns framing."
+        },
+        "ui_properties": {
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "zIndex": 0,
+          "width": 360,
+          "selectable": true,
+          "title": "About"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "pic",
+        "type": "nodetool.input.ImageInput",
+        "data": {
+          "name": "character",
+          "value": null,
+          "description": "Character still"
+        },
+        "ui_properties": {
+          "position": {
+            "x": 0,
+            "y": 180
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "1  Character"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "clip",
+        "type": "nodetool.input.VideoInput",
+        "data": {
+          "name": "motion",
+          "value": null,
+          "description": "Motion reference clip"
+        },
+        "ui_properties": {
+          "position": {
+            "x": 0,
+            "y": 360
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "2  Motion clip"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "prompt",
+        "type": "nodetool.input.StringInput",
+        "data": {
+          "name": "prompt",
+          "value": "Keep identity and clothing; follow the reference motion",
+          "description": "Optional guidance"
+        },
+        "ui_properties": {
+          "position": {
+            "x": 0,
+            "y": 540
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "3  Prompt"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "mc",
+        "type": "fal.video_to_video.KlingVideoV3ProMotionControl",
+        "data": {
+          "image": {
+            "type": "image",
+            "uri": "",
+            "asset_id": null,
+            "data": null,
+            "metadata": null
+          },
+          "video": {
+            "type": "video",
+            "uri": "",
+            "asset_id": null,
+            "data": null,
+            "metadata": null,
+            "duration": null,
+            "format": null
+          },
+          "prompt": "",
+          "character_orientation": "image",
+          "keep_original_sound": true
+        },
+        "ui_properties": {
+          "position": {
+            "x": 400,
+            "y": 280
+          },
+          "zIndex": 0,
+          "width": 280,
+          "selectable": true,
+          "title": "4  Motion control"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      },
+      {
+        "id": "out",
+        "type": "nodetool.output.Output",
+        "data": {
+          "name": "video"
+        },
+        "ui_properties": {
+          "position": {
+            "x": 760,
+            "y": 300
+          },
+          "zIndex": 0,
+          "width": 240,
+          "selectable": true,
+          "title": "5  Video"
+        },
+        "dynamic_properties": {},
+        "dynamic_outputs": {}
+      }
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "source": "pic",
+        "sourceHandle": "output",
+        "target": "mc",
+        "targetHandle": "image"
+      },
+      {
+        "id": "e2",
+        "source": "clip",
+        "sourceHandle": "output",
+        "target": "mc",
+        "targetHandle": "video"
+      },
+      {
+        "id": "e3",
+        "source": "prompt",
+        "sourceHandle": "output",
+        "target": "mc",
+        "targetHandle": "prompt"
+      },
+      {
+        "id": "e4",
+        "source": "mc",
+        "sourceHandle": "output",
+        "target": "out",
+        "targetHandle": "value"
+      }
+    ]
+  },
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "character": {
+        "type": "object",
+        "properties": {
+          "uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "type": {
+            "type": "string",
+            "const": "image"
+          }
+        },
+        "required": [
+          "uri",
+          "type"
+        ],
+        "label": ""
+      },
+      "motion": {
+        "type": "object",
+        "properties": {
+          "uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "type": {
+            "type": "string",
+            "const": "video"
+          }
+        },
+        "required": [
+          "uri",
+          "type"
+        ],
+        "label": ""
+      },
+      "prompt": {
+        "type": "string",
+        "label": ""
+      }
+    },
+    "required": [
+      "character",
+      "motion"
+    ]
+  },
+  "output_schema": {
+    "type": "object",
+    "properties": {
+      "video": {
+        "type": "object",
+        "properties": {
+          "uri": {
+            "type": "string",
+            "format": "uri"
+          },
+          "type": {
+            "type": "string",
+            "const": "video"
+          }
+        },
+        "required": [
+          "uri",
+          "type"
+        ],
+        "label": ""
+      }
+    },
+    "required": [
+      "video"
+    ]
+  },
+  "settings": {},
+  "package_name": "nodetool-base",
+  "path": null,
+  "run_mode": "workflow",
+  "workspace_id": null,
+  "required_providers": null,
+  "required_models": null,
+  "html_app": null,
+  "etag": ""
+}

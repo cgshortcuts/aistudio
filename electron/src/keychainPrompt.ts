@@ -1,6 +1,9 @@
 import { dialog } from "electron";
 import { logMessage } from "./logger";
 import { readSettingsAsync, updateSetting } from "./settings";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 /**
  * Settings key recording whether the user has seen the one-time
@@ -15,7 +18,7 @@ function getKeychainExplanation(): { title: string; detail: string } {
     return {
       title: "Keychain Access",
       detail:
-        "NodeTool uses your macOS Keychain to store an encryption key for your API credentials. " +
+        `${APP_DISPLAY_NAME} uses your macOS Keychain to store an encryption key for your API credentials. ` +
         "macOS will now ask for permission to store or access an item named 'secrets_master_key'. " +
         "This keeps the API keys you add in Settings encrypted at rest on this machine.",
     };
@@ -24,7 +27,7 @@ function getKeychainExplanation(): { title: string; detail: string } {
   return {
     title: "Keychain Access",
     detail:
-      "NodeTool uses your system's secret service (e.g. gnome-keyring, kwallet) to store " +
+      `${APP_DISPLAY_NAME} uses your system's secret service (e.g. gnome-keyring, kwallet) to store ` +
       "an encryption key for your API credentials. You may be prompted to unlock your keyring. " +
       "This keeps the API keys you add in Settings encrypted at rest on this machine.",
   };
@@ -89,8 +92,8 @@ export async function showKeychainExplanationIfNeeded(
       type: "info",
       title,
       message: opts.force
-        ? "NodeTool could not access your system keychain"
-        : "NodeTool needs access to your system keychain",
+        ? `${APP_DISPLAY_NAME} could not access your system keychain`
+        : `${APP_DISPLAY_NAME} needs access to your system keychain`,
       detail,
       buttons: ["Continue"],
       defaultId: 0,

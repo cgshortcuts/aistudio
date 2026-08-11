@@ -22,6 +22,9 @@ import {
 } from "../components/ui_primitives";
 import { useStudioCredits } from "./useStudioCredits";
 import { useStudioAssistantModel } from "./useStudioAssistantModel";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../custom/branding";
+// === CUSTOM FORK END ===
 
 const CreditsChip = () => {
   const navigate = useNavigate();
@@ -98,7 +101,7 @@ const StudioShell = ({
           <FlexRow align="center" gap={SPACING.sm}>
             <MovieFilterRoundedIcon fontSize="small" />
             <Text size="normal" weight={600}>
-              NodeTool Studio
+              {APP_DISPLAY_NAME} Studio
             </Text>
           </FlexRow>
         )}

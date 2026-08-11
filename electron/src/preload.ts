@@ -98,13 +98,23 @@ function validateUrl(url: string): string {
   if (url.length > 8192) {
     throw new Error("URL exceeds maximum length");
   }
+  // OS privacy deep-links (camera/mic settings) used by in-app help.
+  if (
+    url.startsWith("ms-settings:") ||
+    url.startsWith("x-apple.systempreferences:")
+  ) {
+    return url;
+  }
   // Only allow http, https, and file protocols
   try {
     const parsed = new URL(url);
     if (!["http:", "https:", "file:"].includes(parsed.protocol)) {
       throw new Error("Invalid URL protocol");
     }
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === "Invalid URL protocol") {
+      throw error;
+    }
     throw new Error("Invalid URL format");
   }
   return url;

@@ -31,6 +31,9 @@ import {
 import ErrorBoundary from "./ErrorBoundary";
 
 import { LoadingSpinner } from "./components/ui_primitives";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
 import { ThemeProvider } from "@mui/material/styles";
 import InitColorSchemeScript from "@mui/system/InitColorSchemeScript";
 import ThemeNodetool from "./components/themes/ThemeNodetool";
@@ -153,6 +156,10 @@ import {
   ChatThreadRedirect,
   WorkflowEditorRedirect
 } from "./components/workspace/RouteRedirects";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "./custom/product-profile";
+import { CustomerHiddenRedirect } from "./custom/product-profile/CustomerHiddenRedirect";
+// === CUSTOM FORK END ===
 const LegacyAppRedirect = React.lazy(
   () => import("./components/applications/LegacyAppRedirect")
 );
@@ -195,10 +202,14 @@ const NavigateToStart = () => {
       // here decides the entry route once, with no post-hydration redirect.
       const { completedSteps, dismissed } = useOnboardingStore.getState();
       const { showWelcomeOnStartup } = useSettingsStore.getState().settings;
+      // === CUSTOM FORK START: Product Profile ===
       navigate(
-        startRouteFor({ completedSteps, dismissed }, showWelcomeOnStartup),
+        isChatAndAgentsHidden()
+          ? "/workspace"
+          : startRouteFor({ completedSteps, dismissed }, showWelcomeOnStartup),
         { replace: true }
       );
+      // === CUSTOM FORK END ===
     } else if (state === "logged_out" || state === "error") {
       navigate("/login", { replace: true });
     }
@@ -217,7 +228,11 @@ function getRoutes() {
       path: "/dashboard",
       element: (
         <ProtectedRoute>
-          <Portal />
+          {/* === CUSTOM FORK START: Product Profile === */}
+          <CustomerHiddenRedirect>
+            <Portal />
+          </CustomerHiddenRedirect>
+          {/* === CUSTOM FORK END === */}
         </ProtectedRoute>
       )
     },
@@ -312,7 +327,11 @@ function getRoutes() {
       path: "collections",
       element: (
         <ProtectedRoute>
-          <CollectionsExplorer />
+          {/* === CUSTOM FORK START: Product Profile === */}
+          <CustomerHiddenRedirect>
+            <CollectionsExplorer />
+          </CustomerHiddenRedirect>
+          {/* === CUSTOM FORK END === */}
         </ProtectedRoute>
       )
     },
@@ -328,18 +347,22 @@ function getRoutes() {
       path: "tutorials",
       element: (
         <ProtectedRoute>
-          <div
-            style={{
-              display: "flex",
-              flexDirection: "column",
-              width: "100%",
-              height: "100%"
-            }}
-          >
-            <React.Suspense fallback={<LoadingSpinner />}>
-              <TutorialsPage />
-            </React.Suspense>
-          </div>
+          {/* === CUSTOM FORK START: Product Profile === */}
+          <CustomerHiddenRedirect>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                width: "100%",
+                height: "100%"
+              }}
+            >
+              <React.Suspense fallback={<LoadingSpinner />}>
+                <TutorialsPage />
+              </React.Suspense>
+            </div>
+          </CustomerHiddenRedirect>
+          {/* === CUSTOM FORK END === */}
         </ProtectedRoute>
       )
     },
@@ -363,7 +386,11 @@ function getRoutes() {
       path: "packages",
       element: (
         <ProtectedRoute>
-          <PackagesPage />
+          {/* === CUSTOM FORK START: Product Profile === */}
+          <CustomerHiddenRedirect>
+            <PackagesPage />
+          </CustomerHiddenRedirect>
+          {/* === CUSTOM FORK END === */}
         </ProtectedRoute>
       )
     },
@@ -371,7 +398,11 @@ function getRoutes() {
       path: "workspaces",
       element: (
         <ProtectedRoute>
-          <WorkspacesPage />
+          {/* === CUSTOM FORK START: Product Profile === */}
+          <CustomerHiddenRedirect>
+            <WorkspacesPage />
+          </CustomerHiddenRedirect>
+          {/* === CUSTOM FORK END === */}
         </ProtectedRoute>
       )
     },
@@ -442,9 +473,32 @@ function getRoutes() {
     // paths (storyboard, script) that both finish in the timeline editor.
     ...(
       [
-        { path: "/studio", el: <StudioHome /> },
-        { path: "/studio/storyboard/:boardId", el: <StudioStoryboardPage /> },
-        { path: "/studio/script/:scriptId", el: <StudioScriptPage /> },
+        // === CUSTOM FORK START: Product Profile ===
+        {
+          path: "/studio",
+          el: (
+            <CustomerHiddenRedirect>
+              <StudioHome />
+            </CustomerHiddenRedirect>
+          )
+        },
+        {
+          path: "/studio/storyboard/:boardId",
+          el: (
+            <CustomerHiddenRedirect>
+              <StudioStoryboardPage />
+            </CustomerHiddenRedirect>
+          )
+        },
+        {
+          path: "/studio/script/:scriptId",
+          el: (
+            <CustomerHiddenRedirect>
+              <StudioScriptPage />
+            </CustomerHiddenRedirect>
+          )
+        },
+        // === CUSTOM FORK END ===
         { path: "/studio/timeline/:sequenceId", el: <StudioTimelinePage /> },
         { path: "/studio/account", el: <StudioAccountPage /> }
       ] as const
@@ -636,7 +690,7 @@ const AppWrapper = ({ configReady }: { configReady: Promise<unknown> }) => {
                   {status === "pending" && !isDevTestRoute && (
                     <div
                       role="status"
-                      aria-label="Loading NodeTool"
+                      aria-label={`Loading ${APP_DISPLAY_NAME}`}
                       style={{
                         display: "flex",
                         flexDirection: "column",
@@ -653,7 +707,7 @@ const AppWrapper = ({ configReady }: { configReady: Promise<unknown> }) => {
                           fontSize: "var(--fontSizeNormal)"
                         }}
                       >
-                        Loading NodeTool…
+                        Loading {APP_DISPLAY_NAME}…
                       </span>
                     </div>
                   )}

@@ -15,13 +15,16 @@ import type {
   LanguageModelValue,
   VideoModelValue
 } from "../stores/ApiTypes";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../custom/branding";
+// === CUSTOM FORK END ===
 
 /** Directs screenplays and drives the in-editor assistants. */
 export const STUDIO_DIRECTOR_MODEL: LanguageModelValue = {
   type: "language_model",
   id: "nodetool/director",
   provider: "nodetool",
-  name: "NodeTool Director"
+  name: `${APP_DISPLAY_NAME} Director`
 };
 
 /** Renders storyboard keyframe stills. */
@@ -29,7 +32,7 @@ export const STUDIO_STILL_MODEL: ImageModelValue = {
   type: "image_model",
   id: "nodetool/flux-schnell",
   provider: "nodetool",
-  name: "NodeTool Still (FLUX Schnell)",
+  name: `${APP_DISPLAY_NAME} Still (FLUX Schnell)`,
   path: ""
 };
 
@@ -38,5 +41,5 @@ export const STUDIO_CLIP_MODEL: VideoModelValue = {
   type: "video_model",
   id: "nodetool/kling-standard",
   provider: "nodetool",
-  name: "NodeTool Clip (Kling Standard)"
+  name: `${APP_DISPLAY_NAME} Clip (Kling Standard)`
 };

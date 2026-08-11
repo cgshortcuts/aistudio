@@ -14,6 +14,21 @@ import {
   getCategoryForWorkflow
 } from "../../utils/templateCategories";
 import WorkflowCard from "../workflows/WorkflowCard";
+// === CUSTOM FORK START: recommended-examples ===
+import {
+  RECOMMENDED_CATEGORY_ID,
+  RECOMMENDED_HIDDEN_TAGS,
+  RecommendedFilterButton,
+  isRecommendedExample,
+  workflowsForRecommendedFilter
+} from "../../custom/recommended-examples";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: Product Profile ===
+import {
+  visibleExampleWorkflows,
+  visibleTemplateCategories
+} from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 import {
   EmptyState,
   LoadingSpinner,
@@ -152,13 +167,20 @@ const DashboardTemplates: React.FC<DashboardTemplatesProps> = ({
     queryFn: loadTemplates
   });
 
-  const allTemplates = useMemo(() => data?.workflows ?? [], [data]);
+  // === CUSTOM FORK START: Product Profile ===
+  const allTemplates = useMemo(
+    () => visibleExampleWorkflows(data?.workflows ?? []),
+    [data]
+  );
+  // === CUSTOM FORK END ===
+  // === CUSTOM FORK START: Product Profile ===
+  const templateCategories = visibleTemplateCategories(TOP_CATEGORIES);
+  // === CUSTOM FORK END ===
 
   const filtered = useMemo(() => {
     const base =
-      category === "all"
-        ? allTemplates
-        : workflowsForCategory(allTemplates, category);
+      workflowsForRecommendedFilter(allTemplates, category) ??
+      workflowsForCategory(allTemplates, category);
 
     const q = query.trim().toLowerCase();
     const searched = q
@@ -174,6 +196,11 @@ const DashboardTemplates: React.FC<DashboardTemplatesProps> = ({
     // Surface getting-started picks first when browsing everything unfiltered.
     return [...searched].sort((a, b) => {
       if (category === "all" && !q) {
+        // === CUSTOM FORK START: recommended-examples ===
+        const ra = isRecommendedExample(a) ? 0 : 1;
+        const rb = isRecommendedExample(b) ? 0 : 1;
+        if (ra !== rb) return ra - rb;
+        // === CUSTOM FORK END ===
         const ga = isGettingStarted(a) ? 0 : 1;
         const gb = isGettingStarted(b) ? 0 : 1;
         if (ga !== gb) return ga - gb;
@@ -221,7 +248,13 @@ const DashboardTemplates: React.FC<DashboardTemplatesProps> = ({
           >
             All
           </button>
-          {TOP_CATEGORIES.map((cat) => {
+          {/* === CUSTOM FORK START: recommended-examples === */}
+          <RecommendedFilterButton
+            active={category === RECOMMENDED_CATEGORY_ID}
+            onClick={() => setCategory(RECOMMENDED_CATEGORY_ID)}
+          />
+          {/* === CUSTOM FORK END === */}
+          {templateCategories.map((cat) => {
             const active = category === cat.id;
             return (
               <button
@@ -309,7 +342,12 @@ const DashboardTemplates: React.FC<DashboardTemplatesProps> = ({
                   onClick={handleExampleClick}
                   tint={cat?.color}
                   categoryLabel={cat?.label}
-                  hideTags={cat?.tags}
+                  hideTags={[
+                    ...(cat?.tags ?? []),
+                    // === CUSTOM FORK START: recommended-examples ===
+                    ...RECOMMENDED_HIDDEN_TAGS
+                    // === CUSTOM FORK END ===
+                  ]}
                   maxChips={1}
                   descriptionLines={2}
                 />

@@ -11,6 +11,9 @@ import { Text, FlexRow, FlexColumn, NavButton } from "../ui_primitives";
 import { getSharedSettingsStyles } from "./settingsMenuStyles";
 import { useNotificationStore } from "../../stores/NotificationStore";
 import { trpcClient } from "../../trpc/client";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 interface TargetStatus {
   target: string;
@@ -137,14 +140,14 @@ const MCPSettingsMenu = () => {
           type: "error",
           alert: true,
           content:
-            result.error ?? "Could not find the NodeTool extension bundle."
+            result.error ?? `Could not find the ${APP_DISPLAY_NAME} extension bundle.`
         });
       } else if (result.opened) {
         addNotification({
           type: "success",
           alert: true,
           content:
-            "Opening the NodeTool extension in Claude Desktop — confirm the install there."
+            `Opening the ${APP_DISPLAY_NAME} extension in Claude Desktop — confirm the install there.`
         });
       } else {
         addNotification({
@@ -172,9 +175,9 @@ const MCPSettingsMenu = () => {
     >
       <div className="settings-main-content">
         <Text className="description" sx={{ mb: 1 }}>
-          Connect AI coding assistants to NodeTool via the{" "}
+          Connect AI coding assistants to {APP_DISPLAY_NAME} via the{" "}
           <strong>Model Context Protocol</strong>. When installed, Claude Code,
-          Codex, and OpenCode can use NodeTool workflows, assets, nodes, and
+          Codex, and OpenCode can use {APP_DISPLAY_NAME} workflows, assets, nodes, and
           collections as tools.
         </Text>
 
@@ -277,7 +280,7 @@ const MCPSettingsMenu = () => {
           <div className="settings-section" style={{ marginTop: "1.5em" }}>
             <Text sx={{ fontWeight: 500, mb: 0.5 }}>Claude Desktop</Text>
             <Text className="description" sx={{ mb: 1 }}>
-              Install the NodeTool extension bundled with this app. Claude
+              Install the {APP_DISPLAY_NAME} extension bundled with this app. Claude
               Desktop opens its install dialog; confirm it there.
             </Text>
             <FlexRow justify="flex-start">

@@ -7,6 +7,9 @@ import {
   hasExternalFiles,
   extractFiles
 } from "../../lib/dragdrop";
+import { getLocalFilePath, pathToFileUri } from "../../utils/localFile";
+import { contentTypeToNodeType } from "../../utils/NodeTypeMapping";
+import { withMimeType } from "../../utils/mimeFromFilename";
 
 type FileDropProps = {
   /** The type of files to accept: image, audio, video, document, or all */
@@ -17,6 +20,11 @@ type FileDropProps = {
   onChange?: (uri: string) => void;
   /** Callback fired when a file is dropped and uploaded as an asset (returns Asset) */
   onChangeAsset?: (asset: Asset) => void;
+  /**
+   * Electron only: when the dropped file has a real disk path, call this with a
+   * `file://` URI instead of uploading. Preview resolves via `/api/files/local`.
+   */
+  onChangeLocalFile?: (uri: string, file: File) => void;
 };
 
 type FileDropResult = {
@@ -29,6 +37,32 @@ type FileDropResult = {
   /** Whether an upload is in progress */
   uploading: boolean;
 };
+
+function fileMatchesDropType(
+  file: File,
+  type: FileDropProps["type"]
+): boolean {
+  if (type === "all") {
+    return true;
+  }
+
+  const isDocument =
+    file.type === "application/pdf" ||
+    file.type === "application/msword" ||
+    file.type ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+  if (type === "document" && isDocument) {
+    return true;
+  }
+
+  if (file.type.startsWith(`${type}/`)) {
+    return true;
+  }
+
+  // Windows often leaves File.type empty; fall back to filename extension.
+  return contentTypeToNodeType(file.type, file.name) === type;
+}
 
 export function useFileDrop(props: FileDropProps): FileDropResult {
   const [filename, setFilename] = useState("");
@@ -86,61 +120,56 @@ export function useFileDrop(props: FileDropProps): FileDropResult {
         const files = extractFiles(event.dataTransfer);
         const file = files[0];
         if (file) {
-          const isDocument =
-            file.type === "application/pdf" ||
-            file.type === "application/msword" ||
-            file.type ===
-              "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-
-          const fileTypeMatchesType = file?.type.startsWith(`${props.type}/`);
-          const documentTypeMatchesType = isDocument && props.type === "document";
-
-          if (
-            props.type === "all" ||
-            fileTypeMatchesType ||
-            documentTypeMatchesType
-          ) {
-            setFilename(file.name);
-            const reader = new FileReader();
-
-            if (props.uploadAsset) {
-              uploadAsset({
-                file,
-                source:
-                  file.type.startsWith("image/") || props.type === "image"
-                    ? "drop"
-                    : "file",
-                onCompleted: (asset) => {
-                  if (props.onChangeAsset) {
-                    props.onChangeAsset(asset);
-                  }
-                },
-                onFailed: (error) => {
-                  addNotification({
-                    type: "error",
-                    alert: true,
-                    content: error
-                  });
-                }
-              });
-            } else {
-              reader.onload = function (event) {
-                if (
-                  event.target?.result &&
-                  typeof event.target.result === "string" &&
-                  props.onChange
-                ) {
-                  props.onChange(event.target.result);
-                }
-              };
-              reader.readAsDataURL(file);
-            }
-          } else {
+          if (!fileMatchesDropType(file, props.type)) {
             addNotification({
               type: "error",
               alert: true,
               content: `Invalid file type. Please drop a ${props.type} file.`
             });
+            return;
+          }
+
+          setFilename(file.name);
+
+          const localPath = getLocalFilePath(file);
+          if (localPath && props.onChangeLocalFile) {
+            props.onChangeLocalFile(pathToFileUri(localPath), file);
+            return;
+          }
+
+          if (props.uploadAsset) {
+            const fileToUpload = withMimeType(file);
+            uploadAsset({
+              file: fileToUpload,
+              source:
+                fileToUpload.type.startsWith("image/") || props.type === "image"
+                  ? "drop"
+                  : "file",
+              onCompleted: (asset) => {
+                if (props.onChangeAsset) {
+                  props.onChangeAsset(asset);
+                }
+              },
+              onFailed: (error) => {
+                addNotification({
+                  type: "error",
+                  alert: true,
+                  content: error
+                });
+              }
+            });
+          } else {
+            const reader = new FileReader();
+            reader.onload = function (loadEvent) {
+              if (
+                loadEvent.target?.result &&
+                typeof loadEvent.target.result === "string" &&
+                props.onChange
+              ) {
+                props.onChange(loadEvent.target.result);
+              }
+            };
+            reader.readAsDataURL(file);
           }
         }
       }

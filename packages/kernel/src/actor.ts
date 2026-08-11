@@ -569,7 +569,16 @@ export class NodeActor {
       // Report the suspension as a distinct node status. The human reason
       // rides on the status; `result` carries the saved state and `error`
       // stays null since this is not a failure.
-      this._emitNodeStatus("suspended", suspend.state);
+      // Provider image-Batch state is not a previewable image — sending it as
+      // `result` made the canvas show a blank "asset" tile next to the real
+      // output once Check saved the PNG.
+      const rec = suspend.state;
+      const skipPreview =
+        rec != null &&
+        typeof rec === "object" &&
+        !Array.isArray(rec) &&
+        (rec as Record<string, unknown>).kind === "image_batch";
+      this._emitNodeStatus("suspended", skipPreview ? undefined : suspend.state);
       return { outputs: {}, suspend };
     }
 

@@ -10,6 +10,12 @@ import GraphicEqIcon from "@mui/icons-material/GraphicEq";
 import SmartToyOutlinedIcon from "@mui/icons-material/SmartToyOutlined";
 import type { SvgIconComponent } from "@mui/icons-material";
 import { WELCOME_TRACKS, type WelcomeTrackId } from "./welcomeTracks";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: Product Profile ===
+import { visibleWelcomeTracks } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 const TRACK_ICONS: Record<WelcomeTrackId, SvgIconComponent> = {
   image: ImageOutlinedIcon,
@@ -194,7 +200,7 @@ const WelcomeFlow: React.FC<WelcomeFlowProps> = ({
     <div css={styles(theme, fullWidth)}>
       <div className="welcome-eyebrow">
         {statusDot && <span className="welcome-eyebrow-dot" />}
-        Welcome to NodeTool
+        Welcome to {APP_DISPLAY_NAME}
       </div>
       <h1 className="welcome-heading">What do you want to make today?</h1>
       <p className="welcome-sub">
@@ -204,7 +210,7 @@ const WelcomeFlow: React.FC<WelcomeFlowProps> = ({
       </p>
 
       <div className="welcome-grid">
-        {WELCOME_TRACKS.map((track) => {
+        {visibleWelcomeTracks(WELCOME_TRACKS).map((track) => {
           const Icon = TRACK_ICONS[track.id];
           return (
             <button

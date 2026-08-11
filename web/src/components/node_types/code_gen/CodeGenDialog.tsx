@@ -35,6 +35,9 @@ import {
   TextLink,
   TYPOGRAPHY
 } from "../../ui_primitives";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../../custom/branding";
+// === CUSTOM FORK END ===
 import CodeAuthoringModelNotice from "../../model_menu/CodeAuthoringModelNotice";
 import { useNodes } from "../../../contexts/NodeContext";
 import { useMonacoEditor } from "../../../hooks/editor/useMonacoEditor";
@@ -108,7 +111,7 @@ export function describeFailure(failure: CodeGenFailure): FailureCopy {
     case "offline":
       return {
         title: "You are offline",
-        detail: "Code generation needs a connection to the NodeTool server."
+        detail: `Code generation needs a connection to the ${APP_DISPLAY_NAME} server.`
       };
     case "internal":
     default:

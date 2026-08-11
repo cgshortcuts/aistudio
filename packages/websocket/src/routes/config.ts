@@ -2,6 +2,9 @@ import type { FastifyPluginAsync } from "fastify";
 import { isGoogleWorkspaceEnabled } from "@nodetool-ai/config";
 import { GOOGLE_WORKSPACE_SCOPES } from "@nodetool-ai/runtime";
 import { getVersion } from "./health.js";
+// === CUSTOM FORK START: Product Profile ===
+import { isAiStudioCustomerProduct } from "../aistudio-product-profile.js";
+// === CUSTOM FORK END ===
 
 /**
  * Public, non-secret runtime configuration for the web client.
@@ -66,7 +69,10 @@ const configRoute: FastifyPluginAsync = async (app) => {
       authRedirectUrl,
       googleWorkspace,
       googleScopes: googleWorkspace ? GOOGLE_WORKSPACE_SCOPES : [],
-      version: getVersion()
+      version: getVersion(),
+      // === CUSTOM FORK START: Product Profile ===
+      hideChatAndAgents: isAiStudioCustomerProduct()
+      // === CUSTOM FORK END ===
     });
   });
 };

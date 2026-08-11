@@ -7,6 +7,9 @@
  * claude.ai/design `PackageManager.dc.html` template.
  */
 import { memo } from "react";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 import {
   Box,
@@ -183,7 +186,7 @@ const PackageRail = ({
         borderTop: `1px solid ${theme.vars.palette.divider}`
       })}
     >
-      Changes take effect after the NodeTool server restarts.
+      Changes take effect after the {APP_DISPLAY_NAME} server restarts.
     </Text>
   </FlexColumn>
 );

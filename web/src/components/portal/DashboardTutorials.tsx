@@ -8,6 +8,12 @@ import { TutorialCard } from "../tutorials/TutorialCard";
 import { TUTORIALS } from "../tutorials/tutorialsData";
 import { SPACING, getSpacingPx } from "../ui_primitives";
 import { wrapStyles, SectionHeader, SectionLink } from "./dashboardChrome";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: Product Profile ===
+import { visibleTutorials } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 const gridStyles = (theme: Theme) =>
   css({
@@ -38,13 +44,13 @@ const DashboardTutorials: React.FC = () => {
   return (
     <section css={gridStyles(theme)}>
       <div css={wrapStyles(theme)}>
-        <SectionHeader title="Learn the basics" count="new to NodeTool? start here">
+        <SectionHeader title="Learn the basics" count={`new to ${APP_DISPLAY_NAME}? start here`}>
           <SectionLink onClick={() => navigate("/tutorials")}>
             All tutorials
           </SectionLink>
         </SectionHeader>
         <div className="tut-grid">
-          {TUTORIALS.map((tutorial) => (
+          {visibleTutorials(TUTORIALS).map((tutorial) => (
             <TutorialCard key={tutorial.id} tutorial={tutorial} onClick={open} />
           ))}
         </div>

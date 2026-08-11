@@ -37,6 +37,9 @@ import {
   defaultExamplePackageName,
   deriveExampleAssetsDir
 } from "../../example-workflows.js";
+// === CUSTOM FORK START: Product Profile ===
+import { isAiStudioHiddenExampleRecord } from "../../aistudio-product-profile.js";
+// === CUSTOM FORK END ===
 import { ApiErrorCode } from "../../error-codes.js";
 import { router, publicProcedure } from "../index.js";
 import { protectedProcedure } from "../middleware.js";
@@ -364,6 +367,11 @@ function buildExamplesFromDir(
         typeof parsed.name === "string"
           ? parsed.name
           : file.replace(/\.json$/i, "");
+      // === CUSTOM FORK START: Product Profile ===
+      if (isAiStudioHiddenExampleRecord(parsed, { id: file, name })) {
+        continue;
+      }
+      // === CUSTOM FORK END ===
       // Append ?v=<md5-8> via withCacheBuster so the browser invalidates
       // its cached thumbnail whenever the JPG is regenerated on disk.
       const jpgFile = `${name}.jpg`;
@@ -432,6 +440,16 @@ function buildExampleWorkflows(apiOptions: {
     if (!pkg.examples || pkg.examples.length === 0) continue;
     for (const ex of pkg.examples) {
       const meta = ex as ExampleMetadata;
+      // === CUSTOM FORK START: Product Profile ===
+      if (
+        isAiStudioHiddenExampleRecord(ex as Record<string, unknown>, {
+          id: meta.id ?? "",
+          name: meta.name
+        })
+      ) {
+        continue;
+      }
+      // === CUSTOM FORK END ===
       workflows.push({
         id: meta.id ?? "",
         access: "public",

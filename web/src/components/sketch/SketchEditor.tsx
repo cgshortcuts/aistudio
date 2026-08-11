@@ -75,6 +75,9 @@ import {
 } from "./editor-shell";
 import { ConnectedGeneratedLayerSection } from "./Inspector";
 import SketchAgentPanel from "./SketchAgentPanel";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 import { useSketchAgentBridge } from "../../hooks/sketch/useSketchAgentBridge";
 import { useSketchCanvasRefStore } from "../../stores/sketch/SketchCanvasRefStore";
 import { useSketchSessionStore } from "../../stores/sketch/SketchSessionStore";
@@ -221,6 +224,10 @@ function SketchEditor({
   const panelsHidden = useSketchStore((s) => s.panelsHidden);
   const togglePanelsHidden = useSketchStore((s) => s.togglePanelsHidden);
   const assistantPanelOpen = useSketchStore((s) => s.assistantPanelOpen);
+  // === CUSTOM FORK START: Product Profile ===
+  const hideChat = isChatAndAgentsHidden();
+  const showAssistantPanel = assistantPanelOpen && !hideChat;
+  // === CUSTOM FORK END ===
 
   // On narrow/touch viewports the fixed side columns can't sit beside the
   // canvas, so the right panel and assistant move into bottom sheets and the
@@ -627,7 +634,7 @@ function SketchEditor({
           drives the editor through the ui_sketch_* agent tools. Gated on the
           same panelsHidden chrome toggle so Tab collapses it too. On mobile
           it moves into a bottom sheet (below). */}
-        {!panelsHidden && !isMobile && assistantPanelOpen && (
+        {!panelsHidden && !isMobile && showAssistantPanel && (
           <FlexColumn
             className="sketch-editor__assistant-panel"
             sx={{
@@ -691,7 +698,7 @@ function SketchEditor({
           </MobileBottomSheet>
 
           <MobileBottomSheet
-            open={assistantPanelOpen}
+            open={showAssistantPanel}
             onClose={() => setAssistantPanelOpen(false)}
             title="Assistant"
             ariaLabel="AI assistant panel"

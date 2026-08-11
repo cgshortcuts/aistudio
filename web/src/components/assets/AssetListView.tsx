@@ -45,12 +45,14 @@ const styles = (theme: Theme) =>
   css({
     "&": {
       width: "100%",
-      height: "100%"
+      height: "100%",
+      minHeight: 0
     },
     ".asset-list-container": {
       display: "flex",
       flexDirection: "column",
-      height: "100%"
+      height: "100%",
+      minHeight: 0
     },
     ".asset-list-header": {
       display: "flex",
@@ -87,7 +89,11 @@ const styles = (theme: Theme) =>
     },
     ".asset-list-content": {
       flex: 1,
-      overflow: "hidden"
+      minHeight: 0,
+      minWidth: 0,
+      overflowX: "hidden",
+      overflowY: "auto",
+      overscrollBehavior: "contain"
     },
     ".asset-virtual-list": {
       paddingBottom: "14em"
@@ -539,7 +545,7 @@ const AssetListView: React.FC<AssetListViewProps> = ({
               handleDeselectAssets();
             }
           }}
-          style={{ overflow: "auto" }}
+          style={{ overflowX: "hidden", overflowY: "auto" }}
         >
           <div
             style={{

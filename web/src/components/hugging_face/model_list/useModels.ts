@@ -20,6 +20,12 @@ import useMetadataStore from "../../../stores/MetadataStore";
 // === CUSTOM FORK START: model-manager ===
 import { isFilesystemModelId } from "../../../custom/model-manager";
 // === CUSTOM FORK END ===
+// === CUSTOM FORK START: Product Profile ===
+import {
+  isHiddenHubModelType,
+  isHiddenLocalModel
+} from "../../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 /**
  * HuggingFace Hub pipeline tags, shown as the fixed category list when browsing
@@ -173,6 +179,11 @@ export const useModels = (scope: ModelScope = "local"): UseModelsResult => {
     if (source !== "hub" || !selectedModelType.startsWith("hf.")) {
       return undefined;
     }
+    // === CUSTOM FORK START: Product Profile ===
+    if (isHiddenHubModelType(selectedModelType)) {
+      return undefined;
+    }
+    // === CUSTOM FORK END ===
     return selectedModelType.slice(3).replace(/_/g, "-");
   }, [source, selectedModelType]);
 
@@ -199,9 +210,15 @@ export const useModels = (scope: ModelScope = "local"): UseModelsResult => {
   const allModels = useMemo(() => {
     // Onboarding renders its own curated guidance; it needs no model list here.
     if (source === "onboarding") return [];
-    if (source === "recommended") return recommendedCatalog;
-    if (source === "hub") return hubModels;
-    return rawModels?.filter(isManageableModel);
+    if (source === "recommended") {
+      return recommendedCatalog.filter((model) => !isHiddenLocalModel(model));
+    }
+    if (source === "hub") {
+      return (hubModels ?? []).filter((model) => !isHiddenLocalModel(model));
+    }
+    return rawModels?.filter(
+      (model) => isManageableModel(model) && !isHiddenLocalModel(model)
+    );
   }, [source, recommendedCatalog, hubModels, rawModels]);
 
   const groupedModels = useMemo(
@@ -223,7 +240,11 @@ export const useModels = (scope: ModelScope = "local"): UseModelsResult => {
       // all models matching search/size/download status.
       // HOWEVER, if the user selects a specific type, we DO filter by it.
       const typeMatches =
-        selectedModelType === "All" || model.type === selectedModelType;
+        selectedModelType === "All" ||
+        // === CUSTOM FORK START: Product Profile ===
+        isHiddenHubModelType(selectedModelType) ||
+        // === CUSTOM FORK END ===
+        model.type === selectedModelType;
 
       if (!matchesText) {return false;}
       if (!typeMatches) {return false;}
@@ -255,7 +276,11 @@ export const useModels = (scope: ModelScope = "local"): UseModelsResult => {
     // Hub mode: always offer the full pipeline-tag catalog so a category can be
     // picked before any search has run.
     if (source === "hub") {
-      HF_HUB_CATEGORY_TYPES.forEach((t) => allTypes.add(t));
+      HF_HUB_CATEGORY_TYPES.forEach((t) => {
+        if (!isHiddenHubModelType(t)) {
+          allTypes.add(t);
+        }
+      });
     }
 
     allModels?.forEach((model) => {
@@ -275,7 +300,11 @@ export const useModels = (scope: ModelScope = "local"): UseModelsResult => {
     // Hub mode: keep every pipeline-tag category visible (plus any from current
     // results) so the user can always pick one to drive the search.
     if (source === "hub") {
-      HF_HUB_CATEGORY_TYPES.forEach((t) => types.add(t));
+      HF_HUB_CATEGORY_TYPES.forEach((t) => {
+        if (!isHiddenHubModelType(t)) {
+          types.add(t);
+        }
+      });
       allModels?.forEach((model) => {
         if (model.type) {
           types.add(model.type);

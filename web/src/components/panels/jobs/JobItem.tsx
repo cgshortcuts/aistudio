@@ -17,6 +17,8 @@ import BoltIcon from "@mui/icons-material/Bolt";
 import CheckIcon from "@mui/icons-material/Check";
 import BlockIcon from "@mui/icons-material/Block";
 import StopIcon from "@mui/icons-material/Stop";
+import HourglassTopIcon from "@mui/icons-material/HourglassTop";
+import RefreshIcon from "@mui/icons-material/Refresh";
 
 import { Job, Asset } from "../../../stores/ApiTypes";
 import { useWorkflow } from "../../../serverState/useWorkflow";
@@ -26,6 +28,12 @@ import { trpcClient } from "../../../trpc/client";
 import { useQueryClient } from "@tanstack/react-query";
 import isEqual from "../../../utils/isEqual";
 import { notifyMutationError } from "../../../utils/notifyMutationError";
+import { useNotificationStore } from "../../../stores/NotificationStore";
+import {
+  applyImageBatchComplete,
+  isImageBatchJob,
+  openWorkflowForBatchResult
+} from "../../../utils/imageBatch";
 
 const formatDuration = (ms: number): string => {
   if (ms < 0) {
@@ -96,7 +104,11 @@ const statusTileVisual = (job: Job, cancelling: boolean): TileVisual => {
   if (cancelling) {
     return { icon: <LoadingSpinner size="small" />, fg: "text.secondary" };
   }
-  if (job.status === "failed" || job.status === "timed_out" || job.error) {
+  if (
+    job.status === "failed" ||
+    job.status === "timed_out" ||
+    (job.error && job.status !== "suspended")
+  ) {
     return {
       icon: <ErrorOutlineIcon fontSize="small" />,
       fg: "error.main",
@@ -107,6 +119,12 @@ const statusTileVisual = (job: Job, cancelling: boolean): TileVisual => {
     case "running":
       return {
         icon: <BoltIcon fontSize="small" />,
+        fg: "primary.main",
+        tint: "primary"
+      };
+    case "suspended":
+      return {
+        icon: <HourglassTopIcon fontSize="small" />,
         fg: "primary.main",
         tint: "primary"
       };
@@ -237,19 +255,27 @@ const AssetThumb = memo(function AssetThumb({ asset }: { asset: Asset }) {
 const JobItem = ({ job }: { job: Job }) => {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const addNotification = useNotificationStore((s) => s.addNotification);
   const { data: workflow } = useWorkflow(job.workflow_id);
   const [elapsedTime, setElapsedTime] = useState(
     formatElapsedTime(job.started_at)
   );
   const [cancelling, setCancelling] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   // Only fetch outputs for finished runs — running/queued rows show a status
   // glyph, so there's nothing to thumbnail yet.
   const isCompleted = job.status === "completed";
   const { data: assets } = useJobAssets(isCompleted ? job.id : "");
+  const isBatchSuspended =
+    job.status === "suspended" && isImageBatchJob(job);
 
   useEffect(() => {
-    if (job.status !== "running" && job.status !== "queued") {
+    if (
+      job.status !== "running" &&
+      job.status !== "queued" &&
+      job.status !== "suspended"
+    ) {
       return;
     }
     const interval = setInterval(() => {
@@ -301,15 +327,73 @@ const JobItem = ({ job }: { job: Job }) => {
     [cancelling, job.id, job.workflow_id, queryClient]
   );
 
+  const handleCheckBatch = useCallback(
+    async (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (checking) {
+        return;
+      }
+      setChecking(true);
+      try {
+        const result = await trpcClient.jobs.checkBatch.mutate({ id: job.id });
+        if (result.status === "completed") {
+          const nodeId =
+            result.job.suspended_node_id ??
+            (typeof result.job.suspension_metadata?.nodeId === "string"
+              ? result.job.suspension_metadata.nodeId
+              : job.suspended_node_id);
+          await applyImageBatchComplete({
+            queryClient,
+            workflowId: result.job.workflow_id,
+            jobId: job.id,
+            nodeId,
+            assetIds: result.asset_ids ?? []
+          });
+          if (result.job.workflow_id) {
+            openWorkflowForBatchResult(result.job.workflow_id);
+            navigate(`/editor/${result.job.workflow_id}`);
+          }
+        } else {
+          queryClient.invalidateQueries({ queryKey: ["jobs"] });
+        }
+        addNotification({
+          type:
+            result.status === "completed"
+              ? "success"
+              : result.status === "pending"
+                ? "info"
+                : "warning",
+          alert: true,
+          content: result.message
+        });
+      } catch (err) {
+        notifyMutationError("check the batch job", err);
+      } finally {
+        setChecking(false);
+      }
+    },
+    [
+      checking,
+      job.id,
+      job.suspended_node_id,
+      queryClient,
+      addNotification,
+      navigate
+    ]
+  );
+
   const workflowName = job.name || workflow?.name || "Loading...";
   const shortId = `#${job.id.slice(0, 4)}`;
   const isActive =
     job.status === "running" ||
     job.status === "queued" ||
     job.status === "scheduled" ||
-    job.status === "starting";
+    job.status === "starting" ||
+    job.status === "suspended";
   const isError =
-    job.status === "failed" || job.status === "timed_out" || !!job.error;
+    job.status === "failed" ||
+    job.status === "timed_out" ||
+    (!!job.error && job.status !== "suspended");
 
   const elapsed = job.started_at ? elapsedTime : null;
   const duration = getJobDuration(job.started_at, job.finished_at);
@@ -327,8 +411,19 @@ const JobItem = ({ job }: { job: Job }) => {
   let metaText: string;
   if (cancelling) {
     metaText = "Cancelling…";
+  } else if (checking) {
+    metaText = "Checking provider Batch…";
   } else if (isError) {
     metaText = job.error || "Failed";
+  } else if (isBatchSuspended) {
+    metaText = ["Batch · up to ~24h", elapsed].filter(Boolean).join(" · ");
+  } else if (job.status === "suspended") {
+    metaText = [
+      job.suspension_reason || "Waiting",
+      elapsed
+    ]
+      .filter(Boolean)
+      .join(" · ");
   } else if (job.status === "running") {
     metaText = ["Running", elapsed].filter(Boolean).join(" · ");
   } else if (
@@ -381,7 +476,17 @@ const JobItem = ({ job }: { job: Job }) => {
             sx={{ flex: "0 0 auto" }}>{shortId}</Text>
           </Tooltip>
         </FlexRow>
-        <Text size="smaller" color={isError ? "error" : "secondary"} truncate>{metaText}</Text>
+        <Text size="smaller" color={isError ? "error" : "secondary"} truncate>
+          {isBatchSuspended
+            ? "Batch · Checking until the image is ready."
+            : metaText}
+        </Text>
+        {isBatchSuspended ? (
+          <Text size="smaller" color="secondary" truncate>
+            {[elapsed, job.suspension_reason].filter(Boolean).join(" · ") ||
+              "waiting on provider"}
+          </Text>
+        ) : null}
       </FlexColumn>
       {/* All outputs, shown inline across the available width. */}
       <FlexRow
@@ -392,6 +497,26 @@ const JobItem = ({ job }: { job: Job }) => {
           <AssetThumb key={asset.id} asset={asset} />
         ))}
       </FlexRow>
+      {isBatchSuspended && (
+        <ToolbarIconButton
+          size="small"
+          onClick={handleCheckBatch}
+          disabled={checking}
+          ariaLabel="Check batch status"
+          tooltip="Check provider Batch status"
+          icon={
+            checking ? (
+              <LoadingSpinner size="small" />
+            ) : (
+              <RefreshIcon fontSize="small" />
+            )
+          }
+          sx={{
+            flex: "0 0 auto",
+            color: "primary.main"
+          }}
+        />
+      )}
       {isActive && (
         <ToolbarIconButton
           size="small"

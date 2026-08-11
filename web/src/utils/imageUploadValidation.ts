@@ -1,4 +1,7 @@
+import { mimeTypeFromFilename } from "./mimeFromFilename";
+
 export type UploadSource = "clipboard" | "drop" | "file";
+
 
 type SniffedImageMime =
   | "image/png"
@@ -129,11 +132,19 @@ export const prepareUploadFile = async (
   }
 
   if (!shouldValidateImage) {
+    const hasUsableMime = declaredMime.includes("/");
+    const finalMime = hasUsableMime
+      ? declaredMime
+      : mimeTypeFromFilename(file.name);
+    const normalizedFile =
+      finalMime === declaredMime
+        ? file
+        : new File([file], file.name, { type: finalMime });
     return {
-      file,
+      file: normalizedFile,
       declaredMime,
       sniffedMime: null,
-      finalMime: declaredMime || "application/octet-stream",
+      finalMime,
       size: file.size
     };
   }

@@ -33,6 +33,7 @@ export interface CreateAssetArgs {
   contentType: string;
   content?: Uint8Array | null;
   parentId?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export async function createAssetModelInterface(
@@ -50,6 +51,9 @@ export async function createAssetModelInterface(
     // folder-scoped listing while global search still found them.
     parent_id: args.parentId ?? args.userId
   });
+  if (args.metadata && Object.keys(args.metadata).length > 0) {
+    asset.metadata = args.metadata;
+  }
   if (args.content) {
     const ext = MIME_TO_EXT[args.contentType] ?? "bin";
     const key = `${asset.id}.${ext}`;

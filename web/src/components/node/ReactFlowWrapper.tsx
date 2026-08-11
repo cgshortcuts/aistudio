@@ -24,6 +24,12 @@ import {
 
 import useConnectionStore from "../../stores/ConnectionStore";
 import { useSettingsStore } from "../../stores/SettingsStore";
+// === CUSTOM FORK START: canvas-pan-select ===
+import {
+  getCanvasDragInteraction,
+  usePreventAltMenuActivation
+} from "../../custom/canvas-pan-select";
+// === CUSTOM FORK END ===
 import { useShallow } from "zustand/react/shallow";
 import { useLiveRunStore } from "../../stores/LiveRunStore";
 import ContextMenus from "../context_menus/ContextMenus";
@@ -486,7 +492,6 @@ const ReactFlowWrapper = ({
   const {
     gridSnap,
     connectionSnap,
-    panControls,
     selectNodesOnDrag,
     selectionMode,
     instantUpdate
@@ -494,12 +499,15 @@ const ReactFlowWrapper = ({
     useShallow((state) => ({
       gridSnap: state.settings.gridSnap,
       connectionSnap: state.settings.connectionSnap,
-      panControls: state.settings.panControls,
       selectNodesOnDrag: state.settings.selectNodesOnDrag,
       selectionMode: state.settings.selectionMode,
       instantUpdate: state.settings.instantUpdate
     }))
   );
+  // === CUSTOM FORK START: canvas-pan-select ===
+  const canvasDrag = getCanvasDragInteraction();
+  usePreventAltMenuActivation();
+  // === CUSTOM FORK END ===
   // Live slider scrubs re-run the graph continuously; freeze the same per-run
   // animations as instant-update mode while a scrub is active (independent of
   // the instantUpdate setting). See `useLiveSliderWriter` / `LiveRunStore`.
@@ -903,15 +911,6 @@ const ReactFlowWrapper = ({
     return classes.join(" ");
   }, [zoomedOut, connecting, instantUpdate, isScrubbing]);
 
-  const conditionalProps = useMemo(() => {
-    const props: { selectionOnDrag?: boolean } = {};
-    // fitView disabled — viewport is restored from stored state
-    if (panControls === "RMB") {
-      props.selectionOnDrag = true;
-    }
-    return props;
-  }, [panControls]);
-
   // Local stores (subgraph tabs included) bypass the fetch entirely; ignore
   // any stale loading/error state cached from a previous query for the same
   // workflowId — those reflect the server fetch which is no longer relevant.
@@ -946,7 +945,6 @@ const ReactFlowWrapper = ({
         autoPanOnNodeDrag={true}
         autoPanOnConnect={true}
         autoPanSpeed={50}
-        {...conditionalProps}
         nodes={nodes}
         edges={processedEdges}
         nodeTypes={nodeTypes}
@@ -956,6 +954,9 @@ const ReactFlowWrapper = ({
         defaultViewport={storedViewport || undefined}
         onMoveEnd={handleMoveEnd}
         panOnDrag={panOnDrag}
+        // === CUSTOM FORK START: canvas-pan-select ===
+        selectionOnDrag={canvasDrag.selectionOnDrag}
+        // === CUSTOM FORK END ===
         panOnScroll={IS_APPLE_PLATFORM}
         zoomOnPinch={IS_APPLE_PLATFORM}
         zoomOnScroll={!IS_APPLE_PLATFORM}
@@ -996,7 +997,9 @@ const ReactFlowWrapper = ({
         onMoveStart={handleOnMoveStart}
         onDoubleClick={handleDoubleClick}
         proOptions={proOptions}
-        panActivationKeyCode=""
+        // === CUSTOM FORK START: canvas-pan-select ===
+        panActivationKeyCode={canvasDrag.panActivationKeyCode}
+        // === CUSTOM FORK END ===
         deleteKeyCode={null}
       >
         <Background

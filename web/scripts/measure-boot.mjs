@@ -9,7 +9,7 @@
  * Usage:
  *   node scripts/measure-boot.mjs [url] [--runs N] [--json out.json] [--label name]
  *
- * The app is considered booted when the boot spinner and the "Loading NodeTool"
+ * The app is considered booted when the boot spinner and the "Loading Ai Studio"
  * status are gone and real workspace chrome is in the DOM. That is the number
  * a user feels, and it is what regressions should be judged against.
  */
@@ -36,7 +36,7 @@ const BOOT_TIMEOUT = Number(flag("timeout", 60000));
 const BOOTED_JS = `
   (() => {
     if (document.getElementById("boot-spinner")) return false;
-    if (document.querySelector('[aria-label="Loading NodeTool"]')) return false;
+    if (document.querySelector('[aria-label="Loading Ai Studio"]')) return false;
     if (document.querySelector('[aria-label="Loading"]')) return false;
     return !!document.querySelector('[aria-label="Open or create a tab"]');
   })()

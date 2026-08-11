@@ -1,12 +1,14 @@
 /** @jsxImportSource @emotion/react */
 import React, { useCallback, useRef, memo } from "react";
+import { useTheme } from "@mui/material/styles";
+
+import { useAssetGridStore } from "../../../stores/AssetGridStore";
+import { Asset, AssetWithPath } from "../../../stores/ApiTypes";
 import SearchErrorBoundary from "../../SearchErrorBoundary";
+import { FlexColumn } from "../../ui_primitives";
 import GlobalSearchResults from "../GlobalSearchResults";
 import AssetGridContent from "../AssetGridContent";
 import BreadcrumbNav from "../BreadcrumbNav";
-import { useAssetGridStore } from "../../../stores/AssetGridStore";
-import { Asset, AssetWithPath } from "../../../stores/ApiTypes";
-import { useTheme } from "@mui/material/styles";
 
 export interface AssetFilesPanelProps {
   isHorizontal?: boolean;
@@ -68,14 +70,23 @@ const AssetFilesPanel: React.FC<AssetFilesPanelProps> = ({
   const theme = useTheme();
 
   return (
-    <div style={{ height: "100%", overflow: "hidden", backgroundColor: theme.vars.palette.c_editor_bg_color }}>
-      <div
+    <FlexColumn
+      fullHeight
+      className="asset-files-panel"
+      sx={{
+        minHeight: 0,
+        minWidth: 0,
+        overflow: "hidden",
+        backgroundColor: theme.vars.palette.c_editor_bg_color
+      }}
+    >
+      <FlexColumn
         className={`asset-content-wrapper ${
           isGlobalSearchModeLocal && isGlobalSearchActiveLocal
             ? "global-search-mode"
             : "normal-grid-mode"
         }`}
-        style={{ height: "100%" }}
+        sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}
         ref={containerRef}
       >
         <BreadcrumbNav />
@@ -95,8 +106,8 @@ const AssetFilesPanel: React.FC<AssetFilesPanelProps> = ({
             onDoubleClick={handleDoubleClick}
           />
         )}
-      </div>
-    </div>
+      </FlexColumn>
+    </FlexColumn>
   );
 };
 

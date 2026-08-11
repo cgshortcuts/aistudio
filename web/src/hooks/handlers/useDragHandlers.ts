@@ -1,5 +1,7 @@
 import { useCallback, useState, useRef, MouseEvent as ReactMouseEvent } from "react";
-import { useSettingsStore } from "../../stores/SettingsStore";
+// === CUSTOM FORK START: canvas-pan-select ===
+import { getCanvasDragInteraction } from "../../custom/canvas-pan-select";
+// === CUSTOM FORK END ===
 import {
   getMousePosition,
   addWiggleMovement,
@@ -44,7 +46,6 @@ export default function useDragHandlers() {
   const [lastParentNode, setLastParentNode] = useState<
     Node<NodeData> | undefined
   >();
-  const settings = useSettingsStore((state) => state.settings);
   const [_draggedNodes, setDraggedNodes] = useState<Set<Node<NodeData>>>(
     new Set()
   );
@@ -297,11 +298,10 @@ export default function useDragHandlers() {
     []
   );
 
-  // enables pan on drag. accepts boolean or array of mouse buttons
-  let panOnDrag: number[] = [0];
-  if (settings.panControls === "RMB") {
-    panOnDrag = [1, 2];
-  }
+  // === CUSTOM FORK START: canvas-pan-select ===
+  // Left-drag selects; Alt+left-drag (and middle/right) pans.
+  const panOnDrag = getCanvasDragInteraction().panOnDrag;
+  // === CUSTOM FORK END ===
 
   return {
     onNodeDragStart,

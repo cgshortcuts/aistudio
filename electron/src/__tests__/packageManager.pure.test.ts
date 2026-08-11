@@ -12,7 +12,7 @@ describe("getPackageDescription", () => {
       repo_id: "nodetool-ai/nodetool-core",
       description: "original",
     });
-    expect(desc).toContain("Essential NodeTool");
+    expect(desc).toContain("Essential Ai Studio");
   });
 
   it("is case-insensitive for repo_id overrides", () => {
@@ -20,7 +20,7 @@ describe("getPackageDescription", () => {
       repo_id: "Nodetool-AI/Nodetool-Core",
       description: "original",
     });
-    expect(desc).toContain("Essential NodeTool");
+    expect(desc).toContain("Essential Ai Studio");
   });
 
   it("returns trimmed description when no override", () => {

@@ -536,3 +536,201 @@ describe("OpenAIProvider", () => {
     });
   });
 });
+
+describe("OpenAIProvider — image batch", () => {
+  it("submitImageBatch uploads JSONL and creates a batch", async () => {
+    const filesCreate = vi.fn().mockResolvedValue({ id: "file-1" });
+    const batchesCreate = vi.fn().mockResolvedValue({
+      id: "batch_abc",
+      status: "validating",
+      output_file_id: null
+    });
+    const provider = new OpenAIProvider(
+      { OPENAI_API_KEY: "k" },
+      {
+        client: {
+          files: { create: filesCreate },
+          batches: { create: batchesCreate }
+        } as any
+      }
+    );
+
+    const job = await provider.submitImageBatch({
+      model: "gpt-image-2",
+      requests: [
+        { prompt: "a red fox", size: "1024x1024", quality: "medium" },
+        { prompt: "a blue bird" }
+      ]
+    });
+
+    expect(job).toEqual({
+      batchId: "batch_abc",
+      status: "validating",
+      outputFileId: null,
+      error: null
+    });
+    expect(filesCreate).toHaveBeenCalledOnce();
+    expect(batchesCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input_file_id: "file-1",
+        endpoint: "/v1/images/generations",
+        completion_window: "24h"
+      }),
+      expect.anything()
+    );
+  });
+
+  it("getImageBatch retrieves status", async () => {
+    const retrieve = vi.fn().mockResolvedValue({
+      id: "batch_abc",
+      status: "completed",
+      output_file_id: "file-out"
+    });
+    const provider = new OpenAIProvider(
+      { OPENAI_API_KEY: "k" },
+      { client: { batches: { retrieve } } as any }
+    );
+
+    const job = await provider.getImageBatch({ batchId: "batch_abc" });
+    expect(job.status).toBe("completed");
+    expect(job.outputFileId).toBe("file-out");
+  });
+
+  it("downloadImageBatchResults decodes b64 images and applies batchDiscount", async () => {
+    const pngB64 = Buffer.from([137, 80, 78, 71]).toString("base64");
+    const retrieve = vi.fn().mockResolvedValue({
+      id: "batch_abc",
+      status: "completed",
+      output_file_id: "file-out"
+    });
+    const content = vi.fn().mockResolvedValue({
+      text: async () =>
+        JSON.stringify({
+          custom_id: "img-0",
+          response: { body: { data: [{ b64_json: pngB64 }] } }
+        }) +
+        "\n" +
+        JSON.stringify({
+          custom_id: "img-1",
+          response: { body: { data: [{ b64_json: pngB64 }] } }
+        })
+    });
+    const provider = new OpenAIProvider(
+      { OPENAI_API_KEY: "k" },
+      {
+        client: {
+          batches: { retrieve },
+          files: { content }
+        } as any
+      }
+    );
+
+    const images = await provider.downloadImageBatchResults({
+      batchId: "batch_abc",
+      model: "gpt-image-2",
+      quality: "medium"
+    });
+    expect(images).toHaveLength(2);
+    expect(provider.getTotalCost()).toBeGreaterThan(0);
+  });
+
+  it("submitImageBatch rejects empty prompts", async () => {
+    const provider = new OpenAIProvider(
+      { OPENAI_API_KEY: "k" },
+      { client: {} as any }
+    );
+    await expect(
+      provider.submitImageBatch({ model: "gpt-image-2", requests: [] })
+    ).rejects.toThrow(/at least one/);
+  });
+
+  it("submitImageBatch with reference images uses /v1/images/edits", async () => {
+    const filesCreate = vi
+      .fn()
+      .mockResolvedValueOnce({ id: "file-ref" })
+      .mockResolvedValueOnce({ id: "file-jsonl" });
+    const batchesCreate = vi.fn().mockResolvedValue({
+      id: "batch_edit",
+      status: "validating",
+      output_file_id: null
+    });
+    const provider = new OpenAIProvider(
+      { OPENAI_API_KEY: "k" },
+      {
+        client: {
+          files: { create: filesCreate },
+          batches: { create: batchesCreate }
+        } as any
+      }
+    );
+
+    await provider.submitImageBatch({
+      model: "gpt-image-2",
+      requests: [
+        {
+          prompt: "make it blue",
+          size: "1024x1024",
+          quality: "medium",
+          images: [Uint8Array.from([1, 2, 3, 4])]
+        }
+      ]
+    });
+
+    expect(batchesCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: "/v1/images/edits"
+      }),
+      expect.anything()
+    );
+    const jsonlCall = filesCreate.mock.calls.find(
+      (c) => c[0]?.purpose === "batch"
+    );
+    expect(jsonlCall).toBeTruthy();
+  });
+
+  it("runImageBatchUntilDone polls until completed", async () => {
+    const filesCreate = vi.fn().mockResolvedValue({ id: "file-1" });
+    const batchesCreate = vi.fn().mockResolvedValue({
+      id: "batch_wait",
+      status: "in_progress",
+      output_file_id: null
+    });
+    const retrieve = vi
+      .fn()
+      .mockResolvedValueOnce({
+        id: "batch_wait",
+        status: "in_progress",
+        output_file_id: null
+      })
+      .mockResolvedValue({
+        id: "batch_wait",
+        status: "completed",
+        output_file_id: "file-out"
+      });
+    const pngB64 = Buffer.from([137, 80, 78, 71]).toString("base64");
+    const content = vi.fn().mockResolvedValue({
+      text: async () =>
+        JSON.stringify({
+          custom_id: "img-0",
+          response: { body: { data: [{ b64_json: pngB64 }] } }
+        })
+    });
+    const provider = new OpenAIProvider(
+      { OPENAI_API_KEY: "k" },
+      {
+        client: {
+          files: { create: filesCreate, content },
+          batches: { create: batchesCreate, retrieve }
+        } as any
+      }
+    );
+
+    const images = await provider.runImageBatchUntilDone({
+      model: "gpt-image-2",
+      requests: [{ prompt: "a fox" }],
+      timeoutMs: 5000
+    });
+    expect(images).toHaveLength(1);
+    expect(retrieve.mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+});

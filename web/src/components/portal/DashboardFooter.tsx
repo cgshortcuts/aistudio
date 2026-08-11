@@ -5,6 +5,9 @@ import { useTheme } from "@mui/material/styles";
 import { memo } from "react";
 import { wrapStyles } from "./dashboardChrome";
 import { SPACING, getSpacingPx } from "../ui_primitives";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 const styles = (theme: Theme) =>
   css({
@@ -61,7 +64,7 @@ const DashboardFooter: React.FC<DashboardFooterProps> = ({
         <span className="foot-stat">
           {workflowCount} {workflowCount === 1 ? "workflow" : "workflows"}
         </span>
-        <span className="foot-stat">nodetool</span>
+        <span className="foot-stat">{APP_DISPLAY_NAME}</span>
       </div>
     </footer>
   );

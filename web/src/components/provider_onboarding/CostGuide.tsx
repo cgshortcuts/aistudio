@@ -15,6 +15,9 @@ import {
   BORDER_RADIUS,
   SPACING
 } from "../ui_primitives";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 interface CostPoint {
   icon: React.ReactNode;
@@ -35,8 +38,8 @@ const COST_POINTS: CostPoint[] = [
   },
   {
     icon: <PaymentsOutlinedIcon sx={{ fontSize: 18 }} />,
-    title: "You pay the provider, not NodeTool",
-    body: "Your API key bills your own account with each provider directly. NodeTool never adds a markup and never sees your card — set spending limits in the provider's dashboard to stay in control."
+    title: `You pay the provider, not ${APP_DISPLAY_NAME}`,
+    body: `Your API key bills your own account with each provider directly. ${APP_DISPLAY_NAME} never adds a markup and never sees your card — set spending limits in the provider's dashboard to stay in control.`
   },
   {
     icon: <SavingsOutlinedIcon sx={{ fontSize: 18 }} />,

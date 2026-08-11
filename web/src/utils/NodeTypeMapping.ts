@@ -1,6 +1,48 @@
 import { TypeName } from "../stores/ApiTypes";
 
 const model3dFileExtensions = new Set(["glb", "gltf", "obj", "fbx", "stl", "ply"]);
+const imageFileExtensions = new Set([
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+  "tif",
+  "tiff",
+  "bmp",
+  "ico",
+  "heic",
+  "heif"
+]);
+const videoFileExtensions = new Set([
+  "mp4",
+  "mpeg",
+  "mpg",
+  "ogg",
+  "ogv",
+  "webm",
+  "mov",
+  "avi",
+  "mkv",
+  "3gp",
+  "3g2",
+  "wmv",
+  "flv",
+  "m4v"
+]);
+const audioFileExtensions = new Set([
+  "mp3",
+  "ogg",
+  "oga",
+  "wav",
+  "webm",
+  "aac",
+  "midi",
+  "mid",
+  "flac",
+  "m4a"
+]);
 
 const getFileExtension = (filename?: string): string | null => {
   if (!filename) {
@@ -9,6 +51,26 @@ const getFileExtension = (filename?: string): string | null => {
 
   const extension = filename.split(".").pop()?.toLowerCase();
   return extension || null;
+};
+
+const typeFromFilename = (filename?: string): TypeName | null => {
+  const extension = getFileExtension(filename);
+  if (!extension) {
+    return null;
+  }
+  if (model3dFileExtensions.has(extension)) {
+    return "model_3d";
+  }
+  if (imageFileExtensions.has(extension)) {
+    return "image";
+  }
+  if (videoFileExtensions.has(extension)) {
+    return "video";
+  }
+  if (audioFileExtensions.has(extension)) {
+    return "audio";
+  }
+  return null;
 };
 
 /**
@@ -24,10 +86,26 @@ export const contentTypeToNodeType = (
     return "model_3d";
   }
 
-  if (normalizedContentType === "application/octet-stream") {
-    const extension = getFileExtension(filename);
-    if (extension && model3dFileExtensions.has(extension)) {
-      return "model_3d";
+  if (
+    normalizedContentType === "application/octet-stream" ||
+    normalizedContentType === "" ||
+    // Property pickers sometimes stamp a bare "video"/"audio"/"image" type.
+    normalizedContentType === "video" ||
+    normalizedContentType === "audio" ||
+    normalizedContentType === "image"
+  ) {
+    const fromName = typeFromFilename(filename);
+    if (fromName) {
+      return fromName;
+    }
+    if (normalizedContentType === "video") {
+      return "video";
+    }
+    if (normalizedContentType === "audio") {
+      return "audio";
+    }
+    if (normalizedContentType === "image") {
+      return "image";
     }
   }
 
@@ -99,7 +177,7 @@ export const contentTypeToNodeType = (
     case "folder":
       return "folder";
     default:
-      return null;
+      return typeFromFilename(filename);
   }
 };
 

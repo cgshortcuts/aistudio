@@ -147,7 +147,7 @@ export function collectPageLoadErrors(page: Page): PageLoadError[] {
 }
 
 /**
- * Wait for the "Loading NodeTool…" overlay (shown until /api/nodes/metadata
+ * Wait for the "Loading Ai Studio…" overlay (shown until /api/nodes/metadata
  * resolves) to disappear, then a short network-idle + animation settle so
  * late-firing async errors are captured before we assert.
  *
@@ -157,7 +157,7 @@ export function collectPageLoadErrors(page: Page): PageLoadError[] {
  */
 export async function waitForAppReady(page: Page): Promise<void> {
   const loadingOverlay = page.locator(
-    '[role="status"][aria-label="Loading NodeTool"]'
+    '[role="status"][aria-label="Loading Ai Studio"]'
   );
   if ((await loadingOverlay.count()) > 0) {
     const hidden = await loadingOverlay
@@ -167,7 +167,7 @@ export async function waitForAppReady(page: Page): Promise<void> {
       .catch(() => false);
     if (!hidden) {
       throw new Error(
-        `Route stuck on the "Loading NodeTool…" overlay after 30s — the app never finished booting.\nURL: ${page.url()}`
+        `Route stuck on the "Loading Ai Studio…" overlay after 30s — the app never finished booting.\nURL: ${page.url()}`
       );
     }
   }

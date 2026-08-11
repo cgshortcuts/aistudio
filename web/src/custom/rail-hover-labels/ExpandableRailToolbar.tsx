@@ -7,7 +7,6 @@ import {
   ToolbarIconButton,
   Tooltip
 } from "../../components/ui_primitives";
-import RailAppMenu from "../../components/panels/RailAppMenu";
 import ThemeToggle from "../../components/ui/ThemeToggle";
 import { LEFT_PANEL_TOP_LEVEL } from "../../config/quickAccessCategories";
 import { useWorkflowManager } from "../../contexts/WorkflowManagerContext";
@@ -16,6 +15,8 @@ import {
   usePanelStore
 } from "../../stores/PanelStore";
 import ExpandableQuickAccessSidebar from "./ExpandableQuickAccessSidebar";
+import ExpandableRailAppItems from "./ExpandableRailAppItems";
+import RailAppLogo from "./RailAppLogo";
 import { expandableRailToolbarStyles } from "./expandableRailToolbarStyles";
 import { useRailExpand } from "./useRailExpand";
 
@@ -68,18 +69,23 @@ const ExpandableRailToolbar = memo(function ExpandableRailToolbar({
       >
         {showAppMenu && (
           <>
-            <RailAppMenu />
+            <RailAppLogo />
             <div className="toolbar-divider" aria-hidden />
           </>
         )}
-        <ExpandableQuickAccessSidebar
-          activeCategory={renderedActive}
-          onCategoryClick={onViewChange}
-          hiddenViews={hiddenViews}
-          labelOverrides={labelOverrides}
-          expanded={railExpanded}
-        />
-        <div style={{ flexGrow: 1 }} />
+        <div className="toolbar-scroll">
+          <ExpandableQuickAccessSidebar
+            activeCategory={renderedActive}
+            onCategoryClick={onViewChange}
+            hiddenViews={hiddenViews}
+            labelOverrides={labelOverrides}
+            expanded={railExpanded}
+          />
+          <div className="toolbar-spacer" />
+          {showAppMenu && (
+            <ExpandableRailAppItems expanded={railExpanded} />
+          )}
+        </div>
         <div className="toolbar-divider" aria-hidden />
         <ThemeToggle />
         <Tooltip title="Toggle Panel" placement="right-start">

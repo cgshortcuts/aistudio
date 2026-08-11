@@ -21,6 +21,9 @@ import { createEmptyData, type AppDocument } from "./appData";
 import PuckAppEditor from "./puck/PuckAppEditor";
 import AppBuilderAgentPanel from "./AppBuilderAgentPanel";
 import AppDataPanel from "./AppDataPanel";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 export interface AppBuilderShellProps {
   /**
@@ -124,6 +127,9 @@ const AppBuilderShell: React.FC<AppBuilderShellProps> = ({
   }));
   const [agentOpen, setAgentOpen] = useState(false);
   const toggleAgent = useCallback(() => setAgentOpen((open) => !open), []);
+  // === CUSTOM FORK START: Product Profile ===
+  const showAgent = Boolean(agentWorkflowId) && !isChatAndAgentsHidden();
+  // === CUSTOM FORK END ===
   const narrow = useMediaQuery(NARROW_QUERY);
   const panelSx = narrow ? overlayPanelSx : sidePanelSx;
   const [dataOpen, setDataOpen] = useState(false);
@@ -177,7 +183,7 @@ const AppBuilderShell: React.FC<AppBuilderShellProps> = ({
             onPublish={handleSave}
             onClose={onClose}
             agentOpen={agentOpen}
-            onToggleAgent={agentWorkflowId ? toggleAgent : undefined}
+            onToggleAgent={showAgent ? toggleAgent : undefined}
             meta={meta}
             onMetaChange={setMeta}
             dataOpen={dataOpen}
@@ -196,7 +202,7 @@ const AppBuilderShell: React.FC<AppBuilderShellProps> = ({
           />
         </Box>
       )}
-      {agentOpen && agentWorkflowId && (
+      {agentOpen && showAgent && agentWorkflowId && (
         <Box sx={panelSx}>
           <AppBuilderAgentPanel
             applicationId={applicationId}
@@ -204,7 +210,7 @@ const AppBuilderShell: React.FC<AppBuilderShellProps> = ({
           />
         </Box>
       )}
-      {narrow && agentWorkflowId && (
+      {narrow && showAgent && (
         <CircularActionButton
           icon={agentOpen ? <CloseIcon /> : <AutoAwesomeIcon />}
           onClick={toggleAgent}

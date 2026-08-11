@@ -41,6 +41,9 @@ import {
 import SceneOutliner from "./SceneOutliner";
 import PropertiesPanel from "./PropertiesPanel";
 import Model3DChatPanel from "./Model3DChatPanel";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 import { buildSceneTree } from "./sceneTree";
 import { disposeObject } from "./sceneTree";
 import {
@@ -338,6 +341,10 @@ const Model3DEditor = ({ url, name, onSave, onClose }: Model3DEditorProps) => {
   const [isSaving, setIsSaving] = useState(false);
   const [fitTrigger, setFitTrigger] = useState(0);
   const [showAssistant, setShowAssistant] = useState<boolean>(readAssistantOpen);
+  // === CUSTOM FORK START: Product Profile ===
+  const hideChat = isChatAndAgentsHidden();
+  const assistantOpen = showAssistant && !hideChat;
+  // === CUSTOM FORK END ===
 
   const toggleAssistant = useCallback(() => {
     setShowAssistant((open) => {
@@ -755,13 +762,15 @@ const Model3DEditor = ({ url, name, onSave, onClose }: Model3DEditorProps) => {
           size="small"
         />
         <FlexRow style={{ marginLeft: "auto" }} gap={1} align="center">
-          <ToolbarIconButton
-            icon={<AutoAwesomeIcon fontSize="small" />}
-            tooltip={showAssistant ? "Hide assistant" : "Show assistant"}
-            onClick={toggleAssistant}
-            active={showAssistant}
-            size="small"
-          />
+          {!hideChat && (
+            <ToolbarIconButton
+              icon={<AutoAwesomeIcon fontSize="small" />}
+              tooltip={showAssistant ? "Hide assistant" : "Show assistant"}
+              onClick={toggleAssistant}
+              active={showAssistant}
+              size="small"
+            />
+          )}
           <DownloadButton onClick={handleSave} tooltip="Save to asset" />
           <CloseButton onClick={onClose} tooltip="Close editor" />
         </FlexRow>
@@ -843,7 +852,7 @@ const Model3DEditor = ({ url, name, onSave, onClose }: Model3DEditorProps) => {
         <FlexColumn
           className="side-panel right assistant"
           fullHeight
-          style={{ display: showAssistant ? "flex" : "none" }}
+          style={{ display: assistantOpen ? "flex" : "none" }}
         >
           <FlexRow className="panel-header" justify="space-between" align="center">
             <FlexRow gap={1} align="center">

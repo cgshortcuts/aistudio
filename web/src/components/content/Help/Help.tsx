@@ -25,6 +25,9 @@ import { NODE_EDITOR_SHORTCUTS } from "../../../config/shortcuts";
 import ControlsShortcutsTab from "./ControlsShortcutsTab";
 import { TOOLTIP_ENTER_DELAY } from "../../../config/constants";
 import { Dialog } from "../../ui_primitives";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../../custom/branding";
+// === CUSTOM FORK END ===
 
 interface TabPanelProps {
   children: React.ReactNode;
@@ -241,7 +244,7 @@ const Help = ({
                 <Tab label="Keyboard" id="help-tab-1" />
                 <Tab label="DataTypes" id="help-tab-2" />
               </Tabs>
-              <Tooltip title="Open Nodetool Documentation Website" placement="bottom"
+              <Tooltip title={`Open ${APP_DISPLAY_NAME} Documentation Website`} placement="bottom"
                 delay={TOOLTIP_ENTER_DELAY}
               >
                 <a
@@ -251,7 +254,7 @@ const Help = ({
                   className="docs-button"
                 >
                   <div className="docs-button-text">
-                    <span>Nodetool</span>
+                    <span>{APP_DISPLAY_NAME}</span>
                     <span>Docs</span>
                   </div>
                   <OpenInNewIcon />
@@ -267,7 +270,7 @@ const Help = ({
               </TabPanel>
               <TabPanel value={helpIndex} index={2}>
                 <DataTypesList
-                  title="Nodetool Data Types"
+                  title={`${APP_DISPLAY_NAME} Data Types`}
                   dataTypes={nodetoolTypes}
                   expanded={expandedNodetool}
                   onChange={handleAccordionChange("nodetool")}

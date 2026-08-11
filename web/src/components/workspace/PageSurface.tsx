@@ -1,7 +1,10 @@
 import React, { Suspense } from "react";
 
-import { LoadingSpinner } from "../ui_primitives";
+import { FlexColumn, LoadingSpinner, Text } from "../ui_primitives";
 import { PAGE_TAB_TITLES, type PageTabKey } from "./pageTabs";
+// === CUSTOM FORK START: Product Profile ===
+import { isHiddenPageTab } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 const AssetExplorer = React.lazy(() => import("../assets/AssetExplorer"));
 const TutorialsPage = React.lazy(() => import("../tutorials/TutorialsPage"));
@@ -52,6 +55,17 @@ interface PageSurfaceProps {
  * lazily loaded so it only costs bundle weight once its tab is opened.
  */
 const PageSurface = ({ pageKey }: PageSurfaceProps) => {
+  // === CUSTOM FORK START: Product Profile ===
+  if (isHiddenPageTab(pageKey)) {
+    return (
+      <FlexColumn fullWidth fullHeight align="center" justify="center">
+        <Text color="secondary">
+          {PAGE_TAB_TITLES[pageKey]} is not available in this product.
+        </Text>
+      </FlexColumn>
+    );
+  }
+  // === CUSTOM FORK END ===
   const Component = PAGE_COMPONENTS[pageKey];
   return (
     <div style={surfaceStyle} aria-label={PAGE_TAB_TITLES[pageKey]}>

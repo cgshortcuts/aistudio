@@ -14,9 +14,36 @@ export const jobResponse = z.object({
   started_at: z.string().nullable(),
   finished_at: z.string().nullable(),
   error: z.string().nullable(),
-  cost: z.number().nullable()
+  cost: z.number().nullable(),
+  /** Human-readable suspend reason (e.g. provider Batch waiting). */
+  suspension_reason: z.string().nullable().optional(),
+  suspended_node_id: z.string().nullable().optional(),
+  /** Opaque suspend metadata — image Batch stores `{ kind: "image_batch", … }`. */
+  suspension_metadata: z.record(z.string(), z.unknown()).nullable().optional()
 });
 export type JobResponse = z.infer<typeof jobResponse>;
+
+/** Input for jobs.checkBatch — poll a suspended provider image Batch job. */
+export const checkBatchInput = z.object({
+  id: z.string().min(1)
+});
+export type CheckBatchInput = z.infer<typeof checkBatchInput>;
+
+export const checkBatchOutput = z.object({
+  status: z.enum([
+    "pending",
+    "completed",
+    "failed",
+    "cancelled",
+    "expired",
+    "not_batch"
+  ]),
+  provider_status: z.string().nullable(),
+  message: z.string(),
+  job: jobResponse,
+  asset_ids: z.array(z.string()).optional()
+});
+export type CheckBatchOutput = z.infer<typeof checkBatchOutput>;
 
 // ── Background-job response ──────────────────────────────────────
 // Mirrors `toBackgroundJobResponse` — a slimmer shape used by

@@ -12,6 +12,7 @@ import {
 import { trpcClient } from "../trpc/client";
 import { debounce, omit } from "../utils/lodashAlternatives";
 import { createErrorMessage } from "../utils/errorHandling";
+import { expectedUpdatedAtForSave } from "./expectedUpdatedAtForSave";
 import { fetchLiveFalPricing } from "../utils/fetchLiveFalPricing";
 import { fetchLiveKiePricing } from "../utils/fetchLiveKiePricing";
 import useMetadataStore from "./MetadataStore";
@@ -328,7 +329,7 @@ export const createWorkflowManagerStore = (queryClient: QueryClient) => {
             run_mode: workflow.run_mode,
             workspace_id: workflow.workspace_id,
             html_app: workflow.html_app,
-            expected_updated_at: workflow.updated_at ?? undefined
+            expected_updated_at: expectedUpdatedAtForSave(workflow)
           })) as Workflow;
         } catch (err) {
           throw createErrorMessage(err, "Failed to save workflow");
@@ -600,7 +601,7 @@ export const createWorkflowManagerStore = (queryClient: QueryClient) => {
           path: workflow.path,
           access: "public",
           graph: workflow.graph,
-          expected_updated_at: workflow.updated_at ?? undefined
+          expected_updated_at: expectedUpdatedAtForSave(workflow)
         });
 
         get().queryClient?.invalidateQueries({ queryKey: ["workflows"] });

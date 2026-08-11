@@ -17,6 +17,7 @@
   "dependencies": {
     "@nodetool-ai/agents": "*",
     "@nodetool-ai/config": "*",
+    "@nodetool-ai/kernel": "*",
     "@nodetool-ai/node-sdk": "*",
     "@nodetool-ai/nodes-utils": "*",
     "@nodetool-ai/protocol": "*",

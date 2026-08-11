@@ -13,6 +13,9 @@ import useModelPreferencesStore from "./ModelPreferencesStore";
 import React from "react";
 import { useSecrets } from "../hooks/useSecrets";
 import { rankModels } from "../utils/modelRanking";
+// === CUSTOM FORK START: product-profile ===
+import { isCustomerVisibleModelProvider } from "../custom/product-profile";
+// === CUSTOM FORK END ===
 
 type SidebarTab = "favorites" | "recent";
 
@@ -154,7 +157,20 @@ export const useModelMenuData = <TModel extends ModelSelectorModel>(
   const search = storeHook((s) => s.search);
   const selectedProvider = storeHook((s) => s.selectedProvider);
 
-  const providers = React.useMemo(() => computeProvidersList(models), [models]);
+  // === CUSTOM FORK START: product-profile ===
+  const visibleModels = React.useMemo(
+    () =>
+      models?.filter((model) =>
+        isCustomerVisibleModelProvider(model.provider || "")
+      ),
+    [models]
+  );
+  // === CUSTOM FORK END ===
+
+  const providers = React.useMemo(
+    () => computeProvidersList(visibleModels),
+    [visibleModels]
+  );
 
   const recentKeys = React.useMemo(
     () => recentsList.map((r) => `${r.provider}:${r.id}`),
@@ -163,12 +179,18 @@ export const useModelMenuData = <TModel extends ModelSelectorModel>(
 
   const filteredModels = React.useMemo(
     () =>
-      filterModelsList(models, selectedProvider, search, enabledProviders, {
-        recentKeys,
-        favoriteKeys: favoritesSet
-      }),
+      filterModelsList(
+        visibleModels,
+        selectedProvider,
+        search,
+        enabledProviders,
+        {
+          recentKeys,
+          favoriteKeys: favoritesSet
+        }
+      ),
     [
-      models,
+      visibleModels,
       selectedProvider,
       search,
       enabledProviders,
@@ -179,28 +201,35 @@ export const useModelMenuData = <TModel extends ModelSelectorModel>(
 
   const recentModels = React.useMemo(() => {
     const byKey = new Map<string, TModel>(
-      (models ?? []).map((model) => [`${model.provider ?? ""}:${model.id ?? ""}`, model])
+      (visibleModels ?? []).map((model) => [
+        `${model.provider ?? ""}:${model.id ?? ""}`,
+        model
+      ])
     );
     const mapped: TModel[] = [];
     recentsList.forEach((recentItem) => {
       const model = byKey.get(`${recentItem.provider}:${recentItem.id}`);
-      if (model) {mapped.push(model);}
+      if (model) {
+        mapped.push(model);
+      }
     });
     return mapped;
-  }, [models, recentsList]);
+  }, [visibleModels, recentsList]);
 
   const favoriteModels = React.useMemo(() => {
     const keyHas = (provider?: string, id?: string) =>
       favoritesSet.has(`${provider ?? ""}:${id ?? ""}`);
-    const filtered = (models ?? []).filter((m) => keyHas(m.provider, m.id));
+    const filtered = (visibleModels ?? []).filter((m) =>
+      keyHas(m.provider, m.id)
+    );
     return [...filtered].sort((a, b) => {
       const nameA = (a.path || a.name || a.id || "").toLowerCase();
       const nameB = (b.path || b.name || b.id || "").toLowerCase();
       return nameA.localeCompare(nameB);
     });
-  }, [models, favoritesSet]);
+  }, [visibleModels, favoritesSet]);
 
-  const totalCount = models?.length ?? 0;
+  const totalCount = visibleModels?.length ?? 0;
   const filteredCount = filteredModels.length;
   const totalActiveCount = React.useMemo(() => {
     const isEnabled = (p?: string) => enabledProviders?.[p || ""] !== false;
@@ -210,13 +239,13 @@ export const useModelMenuData = <TModel extends ModelSelectorModel>(
       return isApiKeySet(env);
     };
     return (
-      models?.filter((m) => isEnabled(m.provider) && isEnvOk(m.provider))
+      visibleModels?.filter((m) => isEnabled(m.provider) && isEnvOk(m.provider))
         .length ?? 0
     );
-  }, [models, enabledProviders, isApiKeySet]);
+  }, [visibleModels, enabledProviders, isApiKeySet]);
 
   return {
-    models,
+    models: visibleModels,
     providers,
     filteredModels,
     favoriteModels,

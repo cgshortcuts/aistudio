@@ -104,19 +104,35 @@ const WorkspaceTabItem = ({
   );
 
   const handleMouseDown = useCallback((event: MouseEvent<HTMLDivElement>) => {
-    if (event.button === 0) {
+    // Middle-click: cancel autoscroll so auxclick can close the tab.
+    // Do not cancel left-click — that blocks the rename input from focusing.
+    if (event.button === 1) {
       event.preventDefault();
     }
   }, []);
 
+  const handleNameClick = useCallback(
+    (event: MouseEvent<HTMLSpanElement>) => {
+      if (!isActive || !canRename) {
+        return;
+      }
+      event.stopPropagation();
+      onBeginRename(tab);
+    },
+    [isActive, canRename, onBeginRename, tab]
+  );
+
   const handleTabKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
+      if (isEditing) {
+        return;
+      }
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         onActivate(tab.id);
       }
     },
-    [onActivate, tab.id]
+    [isEditing, onActivate, tab.id]
   );
 
   return (
@@ -153,6 +169,7 @@ const WorkspaceTabItem = ({
             defaultValue={tab.title}
             autoFocus
             onClick={(event) => event.stopPropagation()}
+            onMouseDown={(event) => event.stopPropagation()}
             onFocus={(event) => event.currentTarget.select()}
             onBlur={(event) => {
               if (!cancelRenameRef.current) {
@@ -161,13 +178,12 @@ const WorkspaceTabItem = ({
               cancelRenameRef.current = false;
             }}
             onKeyDown={(event) => {
+              event.stopPropagation();
               if (event.key === "Enter") {
                 event.preventDefault();
-                event.stopPropagation();
                 event.currentTarget.blur();
               } else if (event.key === "Escape") {
                 event.preventDefault();
-                event.stopPropagation();
                 cancelRenameRef.current = true;
                 onCancelRename();
               }
@@ -184,7 +200,9 @@ const WorkspaceTabItem = ({
                 color="primary"
               />
             )}
-            <span className="tab-name">{tab.title}</span>
+            <span className="tab-name" onClick={handleNameClick}>
+              {tab.title}
+            </span>
             {isWorkflowDirty && (
               <span
                 className="dirty-dot"

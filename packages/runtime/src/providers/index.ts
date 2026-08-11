@@ -227,6 +227,10 @@ export type {
   TextTo3DParams,
   ImageTo3DParams,
   TextToImageParams,
+  ImageBatchRequest,
+  ImageBatchSubmitParams,
+  ImageBatchJob,
+  ImageBatchGetParams,
   TextToMusicParams,
   ImageToImageParams,
   InpaintingParams,
@@ -242,6 +246,18 @@ export type {
   AudioChunk,
   ASRResult
 } from "./types.js";
+export {
+  IMAGE_BATCH_KIND,
+  IMAGE_BATCH_SUSPEND_REASON,
+  IMAGE_BATCH_QUICK_POLL_MS,
+  IMAGE_BATCH_FAST_POLL_MS,
+  IMAGE_BATCH_SLOW_POLL_MS,
+  readImageBatchSuspendState
+} from "./image-batch-suspend.js";
+export type {
+  ImageBatchProviderId,
+  ImageBatchSuspendState
+} from "./image-batch-suspend.js";
 export {
   applyEntityReferences,
   injectEntityDescriptors

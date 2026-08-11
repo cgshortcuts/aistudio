@@ -21,6 +21,9 @@ import type {
   ProviderTool,
   StreamingAudioChunk,
   TextToImageParams,
+  ImageBatchSubmitParams,
+  ImageBatchGetParams,
+  ImageBatchJob,
   TextToVideoParams,
   ToolCall,
   TTSModel,
@@ -501,6 +504,174 @@ async function* decodeGeminiSse(
       .catch(() => undefined);
     reader.releaseLock();
   }
+}
+
+type GeminiBatchPayload = {
+  name?: string;
+  done?: boolean;
+  state?: string;
+  metadata?: Record<string, unknown>;
+  batch?: { name?: string; state?: string };
+  dest?: Record<string, unknown>;
+  response?: Record<string, unknown>;
+  inlinedResponses?: unknown;
+  error?: { message?: string } | string;
+};
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function recordOf(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
+/** JOB_STATE_* / BATCH_STATE_* from any of the shapes Google returns. */
+function geminiBatchRawState(data: GeminiBatchPayload): string | undefined {
+  const meta = recordOf(data.metadata);
+  const metaBatch = recordOf(meta?.batch);
+  return (
+    readNonEmptyString(data.state) ||
+    readNonEmptyString(meta?.state) ||
+    readNonEmptyString(data.batch?.state) ||
+    readNonEmptyString(metaBatch?.state)
+  );
+}
+
+function mapGeminiBatchStatus(
+  raw: string | undefined,
+  done?: boolean
+): string {
+  const state = (raw ?? "").toUpperCase();
+  if (
+    state === "JOB_STATE_SUCCEEDED" ||
+    state === "BATCH_STATE_SUCCEEDED"
+  ) {
+    return "completed";
+  }
+  if (state === "JOB_STATE_FAILED" || state === "BATCH_STATE_FAILED") {
+    return "failed";
+  }
+  if (
+    state === "JOB_STATE_CANCELLED" ||
+    state === "BATCH_STATE_CANCELLED"
+  ) {
+    return "cancelled";
+  }
+  if (state === "JOB_STATE_EXPIRED" || state === "BATCH_STATE_EXPIRED") {
+    return "expired";
+  }
+  if (state === "JOB_STATE_RUNNING" || state === "BATCH_STATE_RUNNING") {
+    return "in_progress";
+  }
+  if (
+    state === "JOB_STATE_PENDING" ||
+    state === "BATCH_STATE_PENDING" ||
+    state === "JOB_STATE_UNSPECIFIED" ||
+    state === "BATCH_STATE_UNSPECIFIED"
+  ) {
+    return "validating";
+  }
+  if (done) {
+    return "completed";
+  }
+  return raw ? "validating" : "unknown";
+}
+
+function geminiBatchJobStatus(data: GeminiBatchPayload): string {
+  return mapGeminiBatchStatus(geminiBatchRawState(data), data.done === true);
+}
+
+function unwrapInlinedResponseRows(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  const rec = recordOf(value);
+  if (!rec) {
+    return [];
+  }
+  const nested =
+    rec.inlinedResponses ?? rec.inlined_responses ?? rec.responses;
+  if (nested === value) {
+    return [];
+  }
+  return unwrapInlinedResponseRows(nested);
+}
+
+function collectGeminiBatchInlineRows(data: GeminiBatchPayload): unknown[] {
+  const dest = recordOf(data.dest) ?? {};
+  const response = recordOf(data.response) ?? {};
+  for (const candidate of [
+    dest.inlinedResponses,
+    dest.inlined_responses,
+    response.inlinedResponses,
+    response.inlined_responses,
+    data.inlinedResponses
+  ]) {
+    const rows = unwrapInlinedResponseRows(candidate);
+    if (rows.length > 0) {
+      return rows;
+    }
+  }
+  return [];
+}
+
+function extractInlineImageBytes(
+  part: Record<string, unknown>
+): Uint8Array | null {
+  const inline = recordOf(part.inlineData) ?? recordOf(part.inline_data);
+  const b64 = inline?.data;
+  if (typeof b64 === "string" && b64.length > 0) {
+    return Uint8Array.from(Buffer.from(b64, "base64"));
+  }
+  return null;
+}
+
+function extractImageFromGeminiResponse(resp: unknown): Uint8Array | null {
+  const rec = recordOf(resp);
+  if (!rec || !Array.isArray(rec.candidates)) {
+    return null;
+  }
+  for (const cand of rec.candidates) {
+    const content = recordOf(recordOf(cand)?.content);
+    const parts = content?.parts;
+    if (!Array.isArray(parts)) {
+      continue;
+    }
+    for (const part of parts) {
+      const bytes = recordOf(part)
+        ? extractInlineImageBytes(part as Record<string, unknown>)
+        : null;
+      if (bytes) {
+        return bytes;
+      }
+    }
+  }
+  return null;
+}
+
+function geminiBatchOutputFileId(data: GeminiBatchPayload): string | null {
+  const dest = recordOf(data.dest) ?? {};
+  const response = recordOf(data.response) ?? {};
+  return (
+    readNonEmptyString(dest.fileName) ??
+    readNonEmptyString(dest.file_name) ??
+    readNonEmptyString(dest.responsesFile) ??
+    readNonEmptyString(dest.responses_file) ??
+    readNonEmptyString(response.responsesFile) ??
+    readNonEmptyString(response.responses_file) ??
+    null
+  );
+}
+
+function geminiBatchErrorMessage(data: GeminiBatchPayload): string | null {
+  if (typeof data.error === "string") {
+    return data.error;
+  }
+  return readNonEmptyString(recordOf(data.error)?.message) ?? null;
 }
 
 export class GeminiProvider extends BaseProvider {
@@ -1618,6 +1789,360 @@ export class GeminiProvider extends BaseProvider {
       }
     }
     throw new Error("No image data returned in response");
+  }
+
+  // ---------------------------------------------------------------------------
+  // Image batch (async, ~50% off, up to 24h)
+  // ---------------------------------------------------------------------------
+
+  private buildGeminiImageBatchRequest(req: {
+    prompt: string;
+    aspectRatio?: string;
+    resolution?: string;
+    images?: Uint8Array[];
+    mimeType?: string;
+  }): Record<string, unknown> {
+    const imageConfig: Record<string, unknown> = {};
+    if (req.aspectRatio) imageConfig.aspectRatio = req.aspectRatio;
+    if (req.resolution) imageConfig.imageSize = req.resolution;
+    const parts: Array<Record<string, unknown>> = [{ text: req.prompt }];
+    const mimeType = req.mimeType ?? "image/png";
+    for (const bytes of req.images ?? []) {
+      if (!bytes || bytes.length === 0) continue;
+      parts.push({
+        inlineData: {
+          mimeType,
+          data: Buffer.from(bytes).toString("base64")
+        }
+      });
+    }
+    return {
+      contents: [{ role: "user", parts }],
+      generationConfig: {
+        responseModalities: ["IMAGE", "TEXT"],
+        ...(Object.keys(imageConfig).length > 0 ? { imageConfig } : {})
+      }
+    };
+  }
+
+  /**
+   * Submit an async Batch job for Nano Banana / Gemini image models.
+   * Uses inline requests when the payload is under 20MB; otherwise uploads JSONL.
+   */
+  async submitImageBatch(
+    params: ImageBatchSubmitParams
+  ): Promise<ImageBatchJob> {
+    if (!params.requests.length) {
+      throw new Error("Image batch requires at least one request");
+    }
+    const model = params.model || "gemini-3.1-flash-image";
+    const inlineRequests = params.requests.map((req, i) => {
+      const prompt = req.prompt?.trim();
+      if (!prompt) {
+        throw new Error(`Image batch request ${i} has an empty prompt`);
+      }
+      return {
+        request: this.buildGeminiImageBatchRequest({
+          prompt,
+          aspectRatio: req.aspectRatio,
+          resolution: req.resolution,
+          images: req.images,
+          mimeType: req.mimeType
+        }),
+        metadata: { key: `img-${i}` }
+      };
+    });
+
+    const bodyBytes = Buffer.byteLength(JSON.stringify(inlineRequests), "utf8");
+    const INLINE_LIMIT = 18 * 1024 * 1024; // stay under the 20MB inline cap
+    let batchBody: Record<string, unknown>;
+
+    if (bodyBytes <= INLINE_LIMIT) {
+      batchBody = {
+        batch: {
+          display_name: "nodetool-image-batch",
+          input_config: {
+            requests: { requests: inlineRequests }
+          }
+        }
+      };
+    } else {
+      const jsonl = params.requests
+        .map((req, i) =>
+          JSON.stringify({
+            key: `img-${i}`,
+            request: this.buildGeminiImageBatchRequest({
+              prompt: req.prompt.trim(),
+              aspectRatio: req.aspectRatio,
+              resolution: req.resolution,
+              images: req.images,
+              mimeType: req.mimeType
+            })
+          })
+        )
+        .join("\n");
+      const fileName = await this.uploadGeminiBatchJsonl(
+        jsonl,
+        params.signal
+      );
+      batchBody = {
+        batch: {
+          display_name: "nodetool-image-batch",
+          input_config: { file_name: fileName }
+        }
+      };
+    }
+
+    const url = `${GEMINI_API_BASE}/models/${model}:batchGenerateContent?key=${this.apiKey}`;
+    const response = await this._fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": this.apiKey
+      },
+      body: JSON.stringify(batchBody),
+      signal: params.signal
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(
+        `Gemini image batch submit failed ${response.status}: ${errText}`
+      );
+    }
+    const data = (await response.json()) as GeminiBatchPayload;
+    const batchId = data.name ?? data.batch?.name;
+    if (!batchId) {
+      throw new Error("Gemini batch create returned no batch name");
+    }
+    return {
+      batchId,
+      status: geminiBatchJobStatus(data),
+      outputFileId: null,
+      error: null
+    };
+  }
+
+  /**
+   * Submit a Gemini image Batch job and poll until completed (or timeout).
+   * Returns decoded image bytes. Throws if the job does not complete in time.
+   */
+  async runImageBatchUntilDone(
+    params: ImageBatchSubmitParams
+  ): Promise<Uint8Array[]> {
+    const timeoutMs = Math.max(0, params.timeoutMs ?? 1_800_000);
+    const job = await this.submitImageBatch(params);
+    const pending = new Set(["validating", "in_progress"]);
+    const start = Date.now();
+    let current = job;
+    while (pending.has(current.status) && Date.now() - start < timeoutMs) {
+      const remaining = timeoutMs - (Date.now() - start);
+      if (remaining <= 0) break;
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, Math.min(2000, remaining))
+      );
+      current = await this.getImageBatch({
+        batchId: job.batchId,
+        signal: params.signal
+      });
+    }
+    if (current.status !== "completed") {
+      throw new Error(
+        `Image batch '${job.batchId}' did not complete within ` +
+          `${Math.round(timeoutMs / 1000)}s (status=${current.status}). ` +
+          `Re-run later or check the Gemini Batch dashboard.`
+      );
+    }
+    return this.downloadImageBatchResults({
+      batchId: job.batchId,
+      model: params.model,
+      signal: params.signal
+    });
+  }
+
+  /** Resumable Files API upload for large batch JSONL inputs. */
+  private async uploadGeminiBatchJsonl(
+    jsonl: string,
+    signal?: AbortSignal
+  ): Promise<string> {
+    const bytes = Buffer.from(jsonl, "utf8");
+    const startUrl = `${GEMINI_API_BASE.replace("/v1beta", "")}/upload/v1beta/files?key=${this.apiKey}`;
+    const start = await this._fetch(startUrl, {
+      method: "POST",
+      headers: {
+        "x-goog-api-key": this.apiKey,
+        "X-Goog-Upload-Protocol": "resumable",
+        "X-Goog-Upload-Command": "start",
+        "X-Goog-Upload-Header-Content-Length": String(bytes.length),
+        "X-Goog-Upload-Header-Content-Type": "application/jsonl",
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        file: { display_name: "nodetool-image-batch.jsonl" }
+      }),
+      signal
+    });
+    if (!start.ok) {
+      throw new Error(
+        `Gemini batch file upload start failed ${start.status}: ${await start.text()}`
+      );
+    }
+    const uploadUrl = start.headers.get("x-goog-upload-url");
+    if (!uploadUrl) {
+      throw new Error("Gemini batch file upload returned no upload URL");
+    }
+    const finalize = await this._fetch(uploadUrl, {
+      method: "POST",
+      headers: {
+        "Content-Length": String(bytes.length),
+        "X-Goog-Upload-Offset": "0",
+        "X-Goog-Upload-Command": "upload, finalize"
+      },
+      body: bytes,
+      signal
+    });
+    if (!finalize.ok) {
+      throw new Error(
+        `Gemini batch file upload failed ${finalize.status}: ${await finalize.text()}`
+      );
+    }
+    const info = (await finalize.json()) as { file?: { name?: string } };
+    const name = info.file?.name;
+    if (!name) {
+      throw new Error("Gemini batch file upload returned no file name");
+    }
+    return name;
+  }
+
+  async getImageBatch(params: ImageBatchGetParams): Promise<ImageBatchJob> {
+    const batchId = params.batchId?.trim();
+    if (!batchId) {
+      throw new Error("batchId is required");
+    }
+    const url = `${GEMINI_API_BASE}/${batchId}?key=${this.apiKey}`;
+    const response = await this._fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": this.apiKey
+      },
+      signal: params.signal
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(
+        `Gemini image batch get failed ${response.status}: ${errText}`
+      );
+    }
+    const data = (await response.json()) as GeminiBatchPayload;
+    return {
+      batchId: data.name ?? data.batch?.name ?? batchId,
+      status: geminiBatchJobStatus(data),
+      outputFileId: geminiBatchOutputFileId(data),
+      error: geminiBatchErrorMessage(data)
+    };
+  }
+
+  async downloadImageBatchResults(
+    params: ImageBatchGetParams & { model?: string }
+  ): Promise<Uint8Array[]> {
+    const batchId = params.batchId?.trim();
+    if (!batchId) {
+      throw new Error("batchId is required");
+    }
+    const url = `${GEMINI_API_BASE}/${batchId}?key=${this.apiKey}`;
+    const response = await this._fetch(url, {
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": this.apiKey
+      },
+      signal: params.signal
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(
+        `Gemini image batch get failed ${response.status}: ${errText}`
+      );
+    }
+    const data = (await response.json()) as GeminiBatchPayload;
+    const status = geminiBatchJobStatus(data);
+    if (status !== "completed") {
+      throw new Error(
+        `Image batch '${batchId}' is not completed (status=${status})`
+      );
+    }
+
+    const images: Uint8Array[] = [];
+    let failures = 0;
+
+    for (const row of collectGeminiBatchInlineRows(data)) {
+      const rec = recordOf(row);
+      if (!rec) {
+        failures += 1;
+        continue;
+      }
+      if (rec.error) {
+        failures += 1;
+        continue;
+      }
+      const resp = rec.response ?? rec.inlineResponse ?? rec;
+      const bytes = extractImageFromGeminiResponse(resp);
+      if (bytes) {
+        images.push(bytes);
+      } else {
+        failures += 1;
+      }
+    }
+
+    const fileName = geminiBatchOutputFileId(data);
+    if (images.length === 0 && fileName) {
+      const downloadUrl = `https://generativelanguage.googleapis.com/download/v1beta/${fileName}:download?alt=media&key=${this.apiKey}`;
+      const fileResp = await this._fetch(downloadUrl, {
+        headers: { "x-goog-api-key": this.apiKey },
+        signal: params.signal
+      });
+      if (!fileResp.ok) {
+        throw new Error(
+          `Gemini batch results download failed ${fileResp.status}: ${await fileResp.text()}`
+        );
+      }
+      const text = await fileResp.text();
+      for (const line of text.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+          if (parsed.error) {
+            failures += 1;
+            continue;
+          }
+          const bytes = extractImageFromGeminiResponse(
+            parsed.response ?? parsed
+          );
+          if (bytes) {
+            images.push(bytes);
+          } else {
+            failures += 1;
+          }
+        } catch {
+          failures += 1;
+        }
+      }
+    }
+
+    if (failures > 0) {
+      log.warn("Gemini image batch had failed or empty result lines", {
+        batchId,
+        failures,
+        images: images.length
+      });
+    }
+    if (images.length === 0) {
+      throw new Error(`Image batch '${batchId}' produced no images`);
+    }
+    this.trackUsage(params.model || "gemini-3.1-flash-image", {
+      imageCount: images.length,
+      batchDiscount: true
+    });
+    return images;
   }
 
   // ---------------------------------------------------------------------------

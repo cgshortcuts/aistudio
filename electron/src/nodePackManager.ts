@@ -12,6 +12,9 @@ import { spawn } from "child_process";
 import * as path from "path";
 import * as fsp from "fs/promises";
 import { app } from "electron";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 import { logMessage } from "./logger";
 import { getProcessEnv, resolveNpmInvocation } from "./config";
@@ -64,7 +67,7 @@ async function runNpm(args: string[]): Promise<void> {
   const npm = resolveNpmInvocation();
   if (!npm) {
     throw new Error(
-      "npm not found. Reinstall the NodeTool environment to restore the bundled Node.js/npm runtime."
+      `npm not found. Reinstall the ${APP_DISPLAY_NAME} environment to restore the bundled Node.js/npm runtime.`
     );
   }
   await ensureInstallRoot();

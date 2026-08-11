@@ -42,6 +42,9 @@ import { registerBytePlusNodes } from "@nodetool-ai/byteplus-nodes";
 import { registerTogetherNodes } from "@nodetool-ai/together-nodes";
 import { registerReplicateNodes } from "@nodetool-ai/replicate-nodes";
 import { registerHuggingFaceNodes } from "@nodetool-ai/huggingface-nodes";
+// === CUSTOM FORK START: Product Profile ===
+import { applyAiStudioNodePolicy } from "./aistudio-product-profile.js";
+// === CUSTOM FORK END ===
 
 /** Node-type prefixes that require on-demand npm packages; dropped in production. */
 const PRODUCTION_SKIPPED_PREFIXES = [
@@ -345,6 +348,9 @@ export async function bootstrapNodeRegistry(
   }
   applyProductionNodePolicy(registry, options.log);
   applyCloudNodePolicy(registry, options.log);
+  // === CUSTOM FORK START: Product Profile ===
+  applyAiStudioNodePolicy(registry, options.log);
+  // === CUSTOM FORK END ===
   return registry;
 }
 

@@ -19,9 +19,14 @@ import { useTheme } from "@mui/material/styles";
 import { memo, useCallback, useMemo } from "react";
 
 import { Workflow } from "../../stores/ApiTypes";
-import { BASE_URL } from "../../stores/BASE_URL";
 import { getNodeDisplayName, getNodeNamespace } from "../../utils/nodeDisplay";
 import { WorkflowTriggerIndicator } from "./WorkflowTriggerIndicator";
+// === CUSTOM FORK START: example-thumbnails ===
+import { ExampleThumbnail } from "../../custom/example-thumbnails";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: recommended-examples ===
+import { RecommendedBadge } from "../../custom/recommended-examples";
+// === CUSTOM FORK END ===
 
 interface WorkflowCardProps {
   workflow: Workflow;
@@ -114,6 +119,11 @@ const cardStyles = (theme: Theme) =>
     "&:hover .card-image": {
       transform: "scale(1.03)"
     },
+    // === CUSTOM FORK START: example-thumbnails ===
+    "&:hover .example-thumb-tile": {
+      transform: "scale(1.03)"
+    },
+    // === CUSTOM FORK END ===
     ".card-tint": {
       position: "absolute",
       inset: 0,
@@ -268,17 +278,6 @@ const WorkflowCard = ({
     onClick(workflow);
   }, [onClick, workflow]);
 
-  const imageUrl = useMemo(() => {
-    // Prefer the server-provided URL — it carries an md5-based ?v=<hash>
-    // cache buster so updates show up without users having to hard-refresh.
-    if (workflow.thumbnail_url) {
-      return workflow.thumbnail_url.startsWith("http")
-        ? workflow.thumbnail_url
-        : `${BASE_URL}${workflow.thumbnail_url}`;
-    }
-    return `${BASE_URL}/api/assets/packages/${workflow.package_name}/${workflow.name}.jpg`;
-  }, [workflow.thumbnail_url, workflow.package_name, workflow.name]);
-
   // Hide the package badge for the default base package — it's noise when
   // every card carries it. Surface only differentiating signals.
   const packageBadge = useMemo(() => {
@@ -343,23 +342,15 @@ const WorkflowCard = ({
         )}
 
         <Box className="card-image-container">
-          <img
-            className="card-image"
-            src={imageUrl}
-            alt={workflow.name}
-            loading="lazy"
-          />
-          {tint && (
-            <div
-              className="card-tint"
-              style={{
-                background: `linear-gradient(180deg, ${tint}14 0%, ${tint}38 100%)`
-              }}
-            />
-          )}
+          {/* === CUSTOM FORK START: example-thumbnails === */}
+          <ExampleThumbnail workflow={workflow} />
+          {/* === CUSTOM FORK END === */}
           {packageBadge && (
             <Text className="package-badge">{packageBadge}</Text>
           )}
+          {/* === CUSTOM FORK START: recommended-examples === */}
+          <RecommendedBadge workflow={workflow} />
+          {/* === CUSTOM FORK END === */}
           <WorkflowTriggerIndicator
             workflowId={workflow.id}
             className="trigger-badge"

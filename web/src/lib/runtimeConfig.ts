@@ -38,6 +38,11 @@ export interface RuntimeConfig {
   googleScopes: string[];
   /** Backend version, for diagnostics. */
   version: string | null;
+  /**
+   * AiStudio customer product: hide Global Chat, agent panels, and the canvas
+   * chat composer. Set by the backend from `AISTUDIO_PRODUCT=customer`.
+   */
+  hideChatAndAgents: boolean;
 }
 
 /**
@@ -56,7 +61,8 @@ const fallbackConfig = (): RuntimeConfig => {
     authRedirectUrl: getBuildEnv("VITE_AUTH_REDIRECT_URL") ?? null,
     googleWorkspace: false,
     googleScopes: [],
-    version: null
+    version: null,
+    hideChatAndAgents: false
   };
 };
 
@@ -92,7 +98,8 @@ const coerce = (data: unknown): RuntimeConfig => {
     authRedirectUrl: d.authRedirectUrl ?? null,
     googleWorkspace: d.googleWorkspace === true,
     googleScopes: Array.isArray(d.googleScopes) ? d.googleScopes : [],
-    version: d.version ?? null
+    version: d.version ?? null,
+    hideChatAndAgents: d.hideChatAndAgents === true
   };
 };
 

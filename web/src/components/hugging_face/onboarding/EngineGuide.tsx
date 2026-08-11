@@ -18,6 +18,9 @@ import {
   SPACING,
   getSpacingPx
 } from "../../ui_primitives";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../../custom/branding";
+// === CUSTOM FORK END ===
 import useNodePacksStore from "../../../stores/NodePacksStore";
 import { useShallow } from "zustand/react/shallow";
 import { useOpenPackageManagerInNewTab } from "../../../hooks/useOpenPackageManager";
@@ -179,7 +182,7 @@ const EngineGuide: React.FC = () => {
             Local engines
           </Text>
           <Caption sx={{ opacity: 0.7 }}>
-            NodeTool runs models through these engines. Ollama is the easiest
+            {APP_DISPLAY_NAME} runs models through these engines. Ollama is the easiest
             start; the others unlock more model types.
           </Caption>
         </FlexColumn>

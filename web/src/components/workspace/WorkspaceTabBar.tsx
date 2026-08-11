@@ -28,6 +28,9 @@ import OpenMenu from "./OpenMenu";
 import WorkspaceTabItem from "./WorkspaceTabItem";
 import MobileDocumentSelector from "./MobileDocumentSelector";
 import MobileRailLauncher from "../panels/MobileRailLauncher";
+// === CUSTOM FORK START: workspace-tabs ===
+import { useWorkspaceTabStrip } from "../../custom/workspace-tabs";
+// === CUSTOM FORK END ===
 
 /** Whether a document type supports both View and Edit (vs view-only). */
 const SUPPORTS_BOTH_MODES: Record<WorkspaceTabType, boolean> = {
@@ -105,8 +108,10 @@ const styles = (theme: Theme) =>
       display: "flex",
       flexWrap: "nowrap",
       alignItems: "stretch",
+      minWidth: 0,
       overflowX: "auto",
       overflowY: "hidden",
+      overscrollBehavior: "contain",
       scrollbarWidth: "none",
       msOverflowStyle: "none",
       "&::-webkit-scrollbar": { display: "none" }
@@ -310,6 +315,10 @@ const WorkspaceTabBar = React.memo(function WorkspaceTabBar() {
   );
 
   const newTabButtonRef = useRef<HTMLButtonElement>(null);
+  // === CUSTOM FORK START: workspace-tabs ===
+  const tabsRef = useRef<HTMLDivElement>(null);
+  useWorkspaceTabStrip(tabsRef, !isMobile);
+  // === CUSTOM FORK END ===
   const [menuOpen, setMenuOpen] = useState(false);
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{
@@ -410,8 +419,7 @@ const WorkspaceTabBar = React.memo(function WorkspaceTabBar() {
         return;
       }
 
-      // Workflows carry their name in the workflow store; the tab title is
-      // synced from there by WorkspaceShell, so update + save the workflow.
+      // Persist the name on the workflow and set the tab label immediately.
       if (tab.type === "workflow") {
         const workflow = getWorkflow(tab.ref);
         if (!workflow || workflow.name === trimmed) {
@@ -419,10 +427,12 @@ const WorkspaceTabBar = React.memo(function WorkspaceTabBar() {
         }
         const updatedWorkflow = { ...workflow, name: trimmed };
         updateWorkflow(updatedWorkflow);
+        setTitle(tab.ref, tab.type, trimmed);
         try {
           await saveWorkflow(updatedWorkflow);
         } catch {
           updateWorkflow(workflow);
+          setTitle(tab.ref, tab.type, workflow.name);
         }
         return;
       }
@@ -539,7 +549,7 @@ const WorkspaceTabBar = React.memo(function WorkspaceTabBar() {
           onCloseAll={handleCloseAll}
         />
       ) : (
-        <div className="tabs">
+        <div className="tabs" ref={tabsRef}>
           {tabs.map((tab) => (
             <WorkspaceTabItem
               key={tab.id}

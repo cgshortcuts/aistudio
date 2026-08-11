@@ -145,7 +145,7 @@ const ProviderCarousel: React.FC = () => {
       <div className="provider-carousel-header">
         <h3 className="provider-carousel-title">Supported Providers</h3>
         <p className="provider-carousel-subtitle">
-          NodeTool integrates with these AI providers. Sign up to get API keys.
+          {APP_DISPLAY_NAME} integrates with these AI providers. Sign up to get API keys.
         </p>
       </div>
 

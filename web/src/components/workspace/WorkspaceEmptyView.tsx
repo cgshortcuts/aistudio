@@ -23,6 +23,9 @@ import {
   TYPOGRAPHY,
   getSpacingPx
 } from "../ui_primitives";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 const styles = (theme: Theme) =>
   css({
@@ -185,6 +188,9 @@ const WorkspaceEmptyView = () => {
   // ChatInputSection has no "stopping" state; the composer treats it as idle.
   const inputStatus = status === "stopping" ? "connected" : status;
   const isBusy = status === "loading" || status === "streaming";
+  // === CUSTOM FORK START: Product Profile ===
+  const hideChat = isChatAndAgentsHidden();
+  // === CUSTOM FORK END ===
 
   return (
     <div css={emptyStyles} className="workspace-empty">
@@ -198,31 +204,36 @@ const WorkspaceEmptyView = () => {
         />
       </div>
       <Caption color="secondary">
-        Describe a workflow in plain language and the agent builds it for you —
-        or use + to open a document.
+        {hideChat
+          ? "Use + to open a workflow, or pick a template to get started."
+          : "Describe a workflow in plain language and the agent builds it for you — or use + to open a document."}
       </Caption>
-      <div className="empty-prompts">
-        {SAMPLE_PROMPTS.map((prompt) => (
-          <button
-            key={prompt}
-            type="button"
-            className="empty-prompt"
-            disabled={isBusy}
-            onClick={() => handleSendPrompt(prompt)}
-          >
-            {prompt}
-          </button>
-        ))}
-      </div>
-      <div className="empty-composer">
-        <ChatInputSection
-          status={inputStatus}
-          onSendMessage={handleSend}
-          onStop={stopGeneration}
-          selectedModel={selectedModel}
-          onModelChange={setSelectedModel}
-        />
-      </div>
+      {!hideChat && (
+        <>
+          <div className="empty-prompts">
+            {SAMPLE_PROMPTS.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                className="empty-prompt"
+                disabled={isBusy}
+                onClick={() => handleSendPrompt(prompt)}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+          <div className="empty-composer">
+            <ChatInputSection
+              status={inputStatus}
+              onSendMessage={handleSend}
+              onStop={stopGeneration}
+              selectedModel={selectedModel}
+              onModelChange={setSelectedModel}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 };

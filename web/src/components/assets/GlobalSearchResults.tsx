@@ -32,12 +32,15 @@ const styles = (theme: Theme) =>
   css({
     "&": {
       width: "100%",
-      height: "100%"
+      height: "100%",
+      flex: 1,
+      minHeight: 0
     },
     ".search-results-container": {
       display: "flex",
       flexDirection: "column",
-      height: "calc(100% - 120px)",
+      height: "100%",
+      minHeight: 0,
       paddingBottom: "1em"
     },
     ".search-results-header": {
@@ -60,7 +63,9 @@ const styles = (theme: Theme) =>
     },
     ".search-results-content": {
       flex: 1,
-      overflow: "auto",
+      minHeight: 0,
+      overflowX: "hidden",
+      overflowY: "auto",
       paddingBottom: "4em"
     },
     ".search-result-item": {

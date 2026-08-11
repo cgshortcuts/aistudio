@@ -27,9 +27,15 @@ import { useDragDropStore } from "../../lib/dragdrop/store";
 import { rankSearchNodes } from "../../utils/nodeSearch";
 import {
   filterNodesForCategory,
-  NODE_SUBCATEGORIES,
-  getNodeSubcategory
+  NODE_SUBCATEGORIES
 } from "../../config/quickAccessCategories";
+// === CUSTOM FORK START: Product Profile ===
+import {
+  isChatAndAgentsHidden,
+  visibleCustomerNodes,
+  visibleNodeSubcategories
+} from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 import type { NodeCategoryId } from "../../stores/PanelStore";
 import type { NodeMetadata } from "../../stores/ApiTypes";
 
@@ -316,8 +322,17 @@ const NodeLibrary = memo<NodeLibraryProps>(
     const autoFocusEnabled = useAutoFocusEnabled();
     const scrollRef = useRef<HTMLDivElement>(null);
 
+    // === CUSTOM FORK START: Product Profile ===
+    const hideChat = isChatAndAgentsHidden();
+    const subcategories = useMemo(
+      () => visibleNodeSubcategories(hideChat),
+      [hideChat]
+    );
     const category =
-      getNodeSubcategory(activeSubcategory) ?? NODE_SUBCATEGORIES[0];
+      subcategories.find((sub) => sub.id === activeSubcategory) ??
+      subcategories[0] ??
+      NODE_SUBCATEGORIES[0];
+    // === CUSTOM FORK END ===
     const metadataRecord = useMetadataStore((s) => s.metadata);
 
     const requestCreate = usePendingNodeCreateStore((s) => s.requestCreate);
@@ -334,24 +349,24 @@ const NodeLibrary = memo<NodeLibraryProps>(
     }, [autoFocusEnabled]);
 
     const allNodes = useMemo(
-      () => Object.values(metadataRecord),
+      () => visibleCustomerNodes(Object.values(metadataRecord)),
       [metadataRecord]
     );
 
     const counts = useMemo(() => {
       const map = {} as Record<NodeCategoryId, number>;
-      for (const sub of NODE_SUBCATEGORIES) {
+      for (const sub of subcategories) {
         map[sub.id] = 0;
       }
       for (const node of allNodes) {
-        for (const sub of NODE_SUBCATEGORIES) {
+        for (const sub of subcategories) {
           if (sub.filter(node)) {
             map[sub.id]++;
           }
         }
       }
       return map;
-    }, [allNodes]);
+    }, [allNodes, subcategories]);
 
     const recentNodeTypes = useMemo(
       () => recentNodes.map((node) => node.nodeType),
@@ -452,7 +467,7 @@ const NodeLibrary = memo<NodeLibraryProps>(
         <div className="nl-body">
           <div className="nl-browse">
             <nav className="nl-rail" role="tablist" aria-label="Node categories">
-              {NODE_SUBCATEGORIES.map((sub) => (
+              {subcategories.map((sub) => (
                 <button
                   key={sub.id}
                   type="button"

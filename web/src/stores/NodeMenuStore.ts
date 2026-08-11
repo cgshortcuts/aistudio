@@ -13,6 +13,9 @@ import {
   SearchResultGroup
 } from "../utils/nodeSearch";
 import { NODE_MENU_HOVER_INFO_DELAY_MS } from "../config/constants";
+// === CUSTOM FORK START: Product Profile ===
+import { visibleCustomerNodes } from "../custom/product-profile";
+// === CUSTOM FORK END ===
 
 export interface SplitNodeDescription {
   description: string;
@@ -119,8 +122,13 @@ export const createNodeMenuStore = () =>
     let hoveredNodeTimeout: ReturnType<typeof setTimeout> | null = null;
     let pendingSearchId = 0;
 
-    const getFilteredMetadata = () =>
-      Object.values(useMetadataStore.getState().metadata);
+    const getFilteredMetadata = () => {
+      // === CUSTOM FORK START: Product Profile ===
+      return visibleCustomerNodes(
+        Object.values(useMetadataStore.getState().metadata)
+      );
+      // === CUSTOM FORK END ===
+    };
     const filterNodes = (nodes: NodeMetadata[]) =>
       filterNodesUtil(
         nodes,

@@ -310,7 +310,7 @@ async function seedFirstRunOnboarding(page: Page): Promise<void> {
 /**
  * Navigate to a page and wait for the app shell to finish loading.
  *
- * The app renders a "Loading NodeTool…" spinner until /api/nodes/metadata
+ * The app renders a "Loading Ai Studio…" spinner until /api/nodes/metadata
  * returns. A naive `networkidle` wait can race with that fetch, producing
  * black screenshots. We explicitly wait for the spinner element to disappear
  * before taking the picture.
@@ -329,7 +329,7 @@ async function gotoPage(
   // selector survives style refactors. The wait is generous because the dev
   // server may transpile metadata-heavy modules on first hit.
   const loadingOverlay = page.locator(
-    '[role="status"][aria-label="Loading NodeTool"]'
+    '[role="status"][aria-label="Loading Ai Studio"]'
   );
   if ((await loadingOverlay.count()) > 0) {
     await loadingOverlay
@@ -337,7 +337,7 @@ async function gotoPage(
       .waitFor({ state: "hidden", timeout: 30_000 })
       .catch(() => {
         console.warn(
-          "  ⚠ Loading NodeTool overlay never disappeared — capturing anyway"
+          "  ⚠ Loading Ai Studio overlay never disappeared — capturing anyway"
         );
       });
   }

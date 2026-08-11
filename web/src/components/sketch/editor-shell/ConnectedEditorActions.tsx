@@ -33,6 +33,9 @@ import {
 import { useSketchStore, SKETCH_ZOOM_MIN, SKETCH_ZOOM_MAX } from "../state";
 import { useSketchSessionStore } from "../../../stores/sketch/SketchSessionStore";
 import { ConnectedGeneratePopover } from "./ConnectedGeneratePopover";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 export interface ConnectedEditorActionsProps {
   /** Compact buttons rendered inline before the menu (e.g. the asset tab's
@@ -83,6 +86,7 @@ export const ConnectedEditorActions = memo(function ConnectedEditorActions({
   // survives closing the popover.
   const [generateMounted, setGenerateMounted] = useState(false);
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const hideChat = isChatAndAgentsHidden();
 
   const closeMenu = useCallback(() => setMenuAnchor(null), []);
 
@@ -159,18 +163,20 @@ export const ConnectedEditorActions = memo(function ConnectedEditorActions({
         transformOrigin={{ vertical: "top", horizontal: "right" }}
         paperSx={{ borderRadius: BORDER_RADIUS.lg, minWidth: 220 }}
       >
-        <EditorMenuItem
-          onClick={handleAssistant}
-          selected={assistantPanelOpen}
-          data-testid="sketch-assistant-toggle"
-        >
-          <ListItemIcon>
-            <SmartToyOutlinedIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>
-            {assistantPanelOpen ? "Hide Assistant" : "Assistant"}
-          </ListItemText>
-        </EditorMenuItem>
+        {!hideChat && (
+          <EditorMenuItem
+            onClick={handleAssistant}
+            selected={assistantPanelOpen}
+            data-testid="sketch-assistant-toggle"
+          >
+            <ListItemIcon>
+              <SmartToyOutlinedIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>
+              {assistantPanelOpen ? "Hide Assistant" : "Assistant"}
+            </ListItemText>
+          </EditorMenuItem>
+        )}
 
         <EditorMenuItem onClick={handleFit} data-testid="sketch-fit-view">
           <ListItemIcon>

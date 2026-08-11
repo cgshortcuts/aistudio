@@ -4,6 +4,9 @@ import WebSocket from "ws";
 import { Notification } from "electron";
 import { getServerWebSocketUrl } from "./utils";
 import { Workflow } from "./types";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 const getWorkerUrl = () => getServerWebSocketUrl("/ws");
 
@@ -264,7 +267,7 @@ export const createWorkflowRunner = () =>
       const notificationWithId = { ...notification, id };
 
       new Notification({
-        title: "Nodetool",
+        title: APP_DISPLAY_NAME,
         body: notification.content,
         silent: false,
         urgency: notification.type === "error" ? "critical" : "normal",

@@ -10,6 +10,9 @@ import {
   getRequiredSecretKeyForNamespace,
   getSecretDisplayName
 } from "../utils/nodeProvider";
+// === CUSTOM FORK START: Product Profile ===
+import { isHiddenCustomerNodeType } from "../custom/product-profile";
+// === CUSTOM FORK END ===
 
 /**
  * Hierarchical tree of node namespaces (e.g. "openai.chat", "anthropic.completion"),
@@ -59,6 +62,9 @@ const useNamespaceTree = (): NamespaceTree => {
   // Get unique namespaces and sort them (enabled first, then disabled)
   const uniqueNamespaces = useMemo(() => {
     const namespaces = Object.values(metadata)
+      // === CUSTOM FORK START: Product Profile ===
+      .filter((node) => !isHiddenCustomerNodeType(node.node_type))
+      // === CUSTOM FORK END ===
       .map((node) => node.namespace)
       .filter((namespace) => namespace !== "default")
       .filter(

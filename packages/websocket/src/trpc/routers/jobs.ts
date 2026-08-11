@@ -8,13 +8,25 @@
  */
 
 import { z } from "zod";
-import { Job, RunEvent, TriggerRegistration } from "@nodetool-ai/models";
+import { Job, RunEvent, TriggerRegistration, getSecret } from "@nodetool-ai/models";
 import type { Job as JobModel } from "@nodetool-ai/models";
+import {
+  OpenAIProvider,
+  GeminiProvider,
+  IMAGE_BATCH_KIND,
+  IMAGE_BATCH_SUSPEND_REASON
+} from "@nodetool-ai/runtime";
 import { ApiErrorCode } from "../../error-codes.js";
 import { router } from "../index.js";
 import { protectedProcedure } from "../middleware.js";
 import { throwApiError } from "../error-formatter.js";
 import { rearmTrigger } from "../../triggers/settle.js";
+import { createAssetModelInterface } from "../../lib/asset-model-interface.js";
+import {
+  parkImageBatchJob,
+  readImageBatchStateFromJob
+} from "../../lib/image-batch-job.js";
+import { jobRunRegistry } from "../../job-run-registry.js";
 import {
   listInput,
   listOutput,
@@ -22,11 +34,16 @@ import {
   jobResponse,
   cancelInput,
   cancelOutput,
+  checkBatchInput,
+  checkBatchOutput,
   type JobResponse,
   type BackgroundJobResponse
 } from "@nodetool-ai/protocol/api-schemas/jobs.js";
 
 function toJobResponse(job: JobModel): JobResponse {
+  const batchMeta =
+    job.suspension_metadata_json ??
+    (job.metadata_json?.kind === IMAGE_BATCH_KIND ? job.metadata_json : null);
   return {
     id: job.id,
     user_id: job.user_id,
@@ -37,7 +54,10 @@ function toJobResponse(job: JobModel): JobResponse {
     started_at: job.started_at ?? null,
     finished_at: job.finished_at ?? null,
     error: job.error ?? null,
-    cost: job.cost ?? null
+    cost: job.cost ?? null,
+    suspension_reason: job.suspension_reason ?? null,
+    suspended_node_id: job.suspended_node_id ?? null,
+    suspension_metadata: batchMeta
   };
 }
 
@@ -143,6 +163,205 @@ export const jobsRouter = router({
       job.markCancelled();
       await job.save();
       return toBackgroundJobResponse(job);
+    }),
+
+  /**
+   * Poll a suspended provider image Batch job. When the provider reports
+   * completed, download the image(s), save assets, and mark the job completed.
+   */
+  checkBatch: protectedProcedure
+    .input(checkBatchInput)
+    .output(checkBatchOutput)
+    .mutation(async ({ ctx, input }) => {
+      const job = (await Job.get(input.id)) as JobModel | null;
+      if (!job || job.user_id !== ctx.userId) {
+        throwApiError(ApiErrorCode.NOT_FOUND, "Job not found");
+      }
+
+      if (job.status === "completed") {
+        return {
+          status: "completed" as const,
+          provider_status: "completed",
+          message: "Batch already completed.",
+          job: toJobResponse(job),
+          asset_ids:
+            (job.metadata_json?.batch_asset_ids as string[] | undefined) ?? []
+        };
+      }
+
+      const batchState = readImageBatchStateFromJob(job);
+      if (!batchState) {
+        return {
+          status: "not_batch" as const,
+          provider_status: null,
+          message:
+            job.status === "suspended"
+              ? "This suspended job is not a provider image Batch."
+              : "Job is not waiting on a provider Batch.",
+          job: toJobResponse(job)
+        };
+      }
+
+      // A live run still owns this Batch — leave it alone (the node is polling).
+      if (job.status === "running" && jobRunRegistry.get(ctx.userId, job.id)) {
+        return {
+          status: "pending" as const,
+          provider_status: "in_progress",
+          message: "Batch is still generating in this app.",
+          job: toJobResponse(job)
+        };
+      }
+
+      if (job.status !== "suspended") {
+        parkImageBatchJob(job, batchState);
+        await job.save();
+      }
+
+      const providerId = batchState.provider;
+      let provider: OpenAIProvider | GeminiProvider;
+      if (providerId === "openai") {
+        const key =
+          (await getSecret("OPENAI_API_KEY", ctx.userId)) ||
+          process.env.OPENAI_API_KEY ||
+          "";
+        if (!key) {
+          throwApiError(
+            ApiErrorCode.INVALID_INPUT,
+            "OPENAI_API_KEY is not configured"
+          );
+        }
+        provider = new OpenAIProvider({ OPENAI_API_KEY: key });
+      } else {
+        const key =
+          (await getSecret("GEMINI_API_KEY", ctx.userId)) ||
+          process.env.GEMINI_API_KEY ||
+          "";
+        if (!key) {
+          throwApiError(
+            ApiErrorCode.INVALID_INPUT,
+            "GEMINI_API_KEY is not configured"
+          );
+        }
+        provider = new GeminiProvider({ GEMINI_API_KEY: key });
+      }
+
+      const snapshot = await provider.getImageBatch({
+        batchId: batchState.batchId
+      });
+
+      if (
+        snapshot.status === "validating" ||
+        snapshot.status === "in_progress" ||
+        snapshot.status === "finalizing" ||
+        snapshot.status === "cancelling" ||
+        snapshot.status === "unknown"
+      ) {
+        job.suspension_reason = `${IMAGE_BATCH_SUSPEND_REASON} (status: ${snapshot.status})`;
+        await job.save();
+        return {
+          status: "pending" as const,
+          provider_status: snapshot.status,
+          message: `Still generating (${snapshot.status}). Checking again soon.`,
+          job: toJobResponse(job)
+        };
+      }
+
+      if (
+        snapshot.status === "failed" ||
+        snapshot.status === "cancelled" ||
+        snapshot.status === "expired"
+      ) {
+        const detail =
+          snapshot.error?.trim() ||
+          `Provider Batch ended with status=${snapshot.status}`;
+        job.markFailed(detail);
+        await job.save();
+        return {
+          status: snapshot.status as "failed" | "cancelled" | "expired",
+          provider_status: snapshot.status,
+          message: detail,
+          job: toJobResponse(job)
+        };
+      }
+
+      if (snapshot.status !== "completed") {
+        return {
+          status: "pending" as const,
+          provider_status: snapshot.status,
+          message: `Unexpected provider status '${snapshot.status}'. Try Check again later.`,
+          job: toJobResponse(job)
+        };
+      }
+
+      // Idempotent: if a previous Check already saved assets, don't re-download.
+      const existingIds = job.metadata_json?.batch_asset_ids;
+      if (Array.isArray(existingIds) && existingIds.length > 0) {
+        job.markCompleted();
+        await job.save();
+        return {
+          status: "completed" as const,
+          provider_status: "completed",
+          message: "Batch completed.",
+          job: toJobResponse(job),
+          asset_ids: existingIds.filter(
+            (id): id is string => typeof id === "string"
+          )
+        };
+      }
+
+      const images = await provider.downloadImageBatchResults({
+        batchId: batchState.batchId,
+        model: batchState.model
+      });
+      if (images.length === 0) {
+        job.markFailed("Image batch completed but returned no images");
+        await job.save();
+        return {
+          status: "failed" as const,
+          provider_status: "completed",
+          message: "Image batch completed but returned no images",
+          job: toJobResponse(job)
+        };
+      }
+
+      const assetIds: string[] = [];
+      const nodeId = batchState.nodeId ?? job.suspended_node_id;
+      for (let i = 0; i < images.length; i++) {
+        const bytes = images[i];
+        if (!bytes || bytes.length === 0) continue;
+        const asset = await createAssetModelInterface({
+          userId: ctx.userId,
+          workflowId: job.workflow_id,
+          jobId: job.id,
+          nodeId,
+          name: `batch_${batchState.provider}_${i + 1}.png`,
+          contentType: "image/png",
+          content: bytes,
+          metadata: { generation_index: i }
+        });
+        assetIds.push(asset.id);
+      }
+
+      job.metadata_json = {
+        ...(job.metadata_json ?? {}),
+        kind: IMAGE_BATCH_KIND,
+        batch_asset_ids: assetIds,
+        batch_id: batchState.batchId,
+        batch_provider: batchState.provider
+      };
+      job.markCompleted();
+      await job.save();
+
+      return {
+        status: "completed" as const,
+        provider_status: "completed",
+        message:
+          assetIds.length === 1
+            ? "Batch completed — image is on the workflow node."
+            : `Batch completed — ${assetIds.length} images are on the workflow node.`,
+        job: toJobResponse(job),
+        asset_ids: assetIds
+      };
     }),
 
   // ── triggersRunning (GET /api/jobs/triggers/running) ────────────────────

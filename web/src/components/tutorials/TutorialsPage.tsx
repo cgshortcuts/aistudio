@@ -18,6 +18,12 @@ import {
 } from "../ui_primitives";
 import { TutorialCard } from "./TutorialCard";
 import { TUTORIALS, getTutorial } from "./tutorialsData";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: Product Profile ===
+import { visibleTutorials } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 const styles = (theme: Theme) =>
   css({
@@ -223,7 +229,13 @@ const TutorialsPage: React.FC = () => {
   const stacked = useMediaQuery(theme.breakpoints.down("md"));
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  const active = getTutorial(params.get("id"));
+  // === CUSTOM FORK START: Product Profile ===
+  const tutorials = visibleTutorials(TUTORIALS);
+  const active =
+    tutorials.find((tutorial) => tutorial.id === params.get("id")) ??
+    tutorials[0] ??
+    getTutorial(params.get("id"));
+  // === CUSTOM FORK END ===
 
   const select = useCallback(
     (id: string) => {
@@ -242,7 +254,7 @@ const TutorialsPage: React.FC = () => {
         <Logo small width="26px" height="26px" fontSize="1em" borderRadius={BORDER_RADIUS.sm} />
         <div className="titles">
           <h1>Tutorials</h1>
-          <span className="sub">Short, beginner-friendly walkthroughs of NodeTool</span>
+          <span className="sub">Short, beginner-friendly walkthroughs of {APP_DISPLAY_NAME}</span>
         </div>
         <span className="spacer" />
         <button type="button" className="back" onClick={() => navigate("/dashboard")}>
@@ -253,8 +265,8 @@ const TutorialsPage: React.FC = () => {
 
       <div className="tut-body" ref={bodyRef}>
         <aside className="tut-sidebar">
-          <span className="sidebar-label">{TUTORIALS.length} tutorials</span>
-          {TUTORIALS.map((tutorial) => (
+          <span className="sidebar-label">{tutorials.length} tutorials</span>
+          {tutorials.map((tutorial) => (
             <TutorialCard
               key={tutorial.id}
               tutorial={tutorial}

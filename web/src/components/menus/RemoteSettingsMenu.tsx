@@ -26,6 +26,12 @@ import { getSharedSettingsStyles } from "./settingsMenuStyles";
 import { formatSettingLabel } from "./settingsLabel";
 import ExternalLink from "../common/ExternalLink";
 import SearchProviderSection from "./SearchProviderSection";
+// === CUSTOM FORK START: Product Profile ===
+import {
+  isHiddenIntegrationSection,
+  showSearchProviderSettings
+} from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 /**
  * Groups surfaced elsewhere (General tab, Folders panel) or via
@@ -175,11 +181,15 @@ export const getDisplayedSettingGroups = (
   const result: DisplayedGroup[] = [];
   for (const section of META_SECTION_GROUPS) {
     if (presentKeys.has(section.key)) {
-      result.push({ id: section.key, label: section.label });
+      // === CUSTOM FORK START: Product Profile ===
+      if (!isHiddenIntegrationSection(section.key)) {
+        result.push({ id: section.key, label: section.label });
+      }
+      // === CUSTOM FORK END ===
     }
     // SearchProviderSection always renders alongside the registry list, so
     // the sidebar always lists it at this slot (after Local Model Servers).
-    if (section.key === "local-model-servers") {
+    if (section.key === "local-model-servers" && showSearchProviderSettings()) {
       result.push({ id: "search-provider", label: "Search Provider" });
     }
   }
@@ -506,9 +516,17 @@ const RemoteSettings = () => {
                 (SearchProviderSection) sits right after Local Model Servers. */}
             {META_SECTION_GROUPS.map((section) => {
               const sec = sectionsMap.get(section.key);
+              // === CUSTOM FORK START: Product Profile ===
+              const showSection =
+                Boolean(sec) && !isHiddenIntegrationSection(section.key);
+              const showSearch =
+                section.key === "local-model-servers" &&
+                Boolean(data) &&
+                showSearchProviderSettings();
+              // === CUSTOM FORK END ===
               return (
                 <Fragment key={section.key}>
-                  {sec && (
+                  {showSection && sec && (
                     <div className="settings-section">
                       <Text
                         size="big"
@@ -529,7 +547,7 @@ const RemoteSettings = () => {
                       )}
                     </div>
                   )}
-                  {section.key === "local-model-servers" && data && (
+                  {showSearch && (
                     <SearchProviderSection
                       settingValues={settingValues}
                       onChange={handleChange}

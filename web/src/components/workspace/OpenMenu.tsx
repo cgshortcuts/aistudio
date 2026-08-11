@@ -41,6 +41,9 @@ import type {
   AssetWithPath,
   Thread
 } from "../../stores/ApiTypes";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 /** Render a blank white PNG to seed a "New image" canvas asset. */
 const createBlankImageFile = (): Promise<File> =>
@@ -150,6 +153,9 @@ const OpenMenu = ({ anchorEl, open, onClose }: OpenMenuProps) => {
   const [chatFilter, setChatFilter] = useState("");
   /** Label of the "New X" creator currently in flight, if any. */
   const [creating, setCreating] = useState<string | null>(null);
+  // === CUSTOM FORK START: Product Profile ===
+  const hideChat = isChatAndAgentsHidden();
+  // === CUSTOM FORK END ===
 
   const addNotification = useNotificationStore(
     (state) => state.addNotification
@@ -467,37 +473,44 @@ const OpenMenu = ({ anchorEl, open, onClose }: OpenMenuProps) => {
               onClick={() => void handleNewVideo()}
               disabled={creating !== null}
             />
-            <MenuItemPrimitive
-              label="New storyboard"
-              icon={<DashboardOutlinedIcon fontSize="small" />}
-              onClick={() => void handleNewStoryboard()}
-              disabled={creating !== null}
-            />
+            {!hideChat && (
+              <MenuItemPrimitive
+                label="New storyboard"
+                icon={<DashboardOutlinedIcon fontSize="small" />}
+                onClick={() => void handleNewStoryboard()}
+                disabled={creating !== null}
+              />
+            )}
             <MenuItemPrimitive
               label="New app"
               icon={<DashboardCustomizeOutlinedIcon fontSize="small" />}
               onClick={() => void handleNewApp()}
               disabled={creating !== null}
             />
-            <MenuItemPrimitive
-              label="New script"
-              icon={<RecordVoiceOverOutlinedIcon fontSize="small" />}
-              onClick={() => void handleNewScript()}
-              disabled={creating !== null}
-            />
+            {!hideChat && (
+              <MenuItemPrimitive
+                label="New script"
+                icon={<RecordVoiceOverOutlinedIcon fontSize="small" />}
+                onClick={() => void handleNewScript()}
+                disabled={creating !== null}
+              />
+            )}
             <MenuItemPrimitive
               label="New 3D model"
               icon={<ViewInArOutlinedIcon fontSize="small" />}
               onClick={() => void handleNewModel()}
               disabled={creating !== null}
+              dividerAfter={hideChat}
             />
-            <MenuItemPrimitive
-              label="New chat"
-              icon={<ForumOutlinedIcon fontSize="small" />}
-              onClick={() => void handleNewChat()}
-              disabled={creating !== null}
-              dividerAfter
-            />
+            {!hideChat && (
+              <MenuItemPrimitive
+                label="New chat"
+                icon={<ForumOutlinedIcon fontSize="small" />}
+                onClick={() => void handleNewChat()}
+                disabled={creating !== null}
+                dividerAfter
+              />
+            )}
             <MenuItemPrimitive
               label="Open workflow…"
               hasSubmenu
@@ -508,11 +521,13 @@ const OpenMenu = ({ anchorEl, open, onClose }: OpenMenuProps) => {
               hasSubmenu
               onClick={() => setView("assets")}
             />
-            <MenuItemPrimitive
-              label="Open chat…"
-              hasSubmenu
-              onClick={() => setView("chats")}
-            />
+            {!hideChat && (
+              <MenuItemPrimitive
+                label="Open chat…"
+                hasSubmenu
+                onClick={() => setView("chats")}
+              />
+            )}
           </>
         )}
 
@@ -573,7 +588,7 @@ const OpenMenu = ({ anchorEl, open, onClose }: OpenMenuProps) => {
           </>
         )}
 
-        {view === "chats" && (
+        {view === "chats" && !hideChat && (
           <>
             <MenuItemPrimitive
               label="Back"

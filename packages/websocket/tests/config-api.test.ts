@@ -10,7 +10,8 @@ const ENV_KEYS = [
   "SUPABASE_KEY",
   "SUPABASE_ANON_KEY",
   "AUTH_REDIRECT_URL",
-  "NODETOOL_GOOGLE_WORKSPACE"
+  "NODETOOL_GOOGLE_WORKSPACE",
+  "AISTUDIO_PRODUCT"
 ] as const;
 
 describe("/api/config endpoint", () => {
@@ -66,6 +67,7 @@ describe("/api/config endpoint", () => {
       "authRedirectUrl",
       "googleScopes",
       "googleWorkspace",
+      "hideChatAndAgents",
       "supabaseAnonKey",
       "supabaseUrl",
       "version"
@@ -112,6 +114,19 @@ describe("/api/config endpoint", () => {
     expect(body.authMode).toBe("supabase");
     expect(body.supabaseAnonKey).toBeNull();
     expect(JSON.stringify(body)).not.toContain("service-role-key");
+  });
+
+  it("reports hideChatAndAgents when AISTUDIO_PRODUCT=customer", async () => {
+    const off = JSON.parse(
+      (await app.inject({ method: "GET", url: "/api/config" })).body
+    );
+    expect(off.hideChatAndAgents).toBe(false);
+
+    process.env.AISTUDIO_PRODUCT = "customer";
+    const on = JSON.parse(
+      (await app.inject({ method: "GET", url: "/api/config" })).body
+    );
+    expect(on.hideChatAndAgents).toBe(true);
   });
 });
 

@@ -23,10 +23,11 @@ import WorkflowFormModal from "./WorkflowFormModal";
 import { usePanelStore } from "../../stores/PanelStore";
 import { useAutoFocusEnabled } from "../../hooks/useAutoFocusEnabled";
 import { useFavoriteWorkflowIds } from "../../stores/FavoriteWorkflowsStore";
-import { useSelectedTags } from "../../stores/WorkflowListViewStore";
+import { useSelectedTags, useSortBy } from "../../stores/WorkflowListViewStore";
 import { useNotificationStore } from "../../stores/NotificationStore";
 import { EmptyState, FlexColumn, FlexRow, LoadingSpinner } from "../ui_primitives";
 import { workflowListQueryKey } from "../../serverState/workflowQueryKeys";
+import { nextWorkflowSelection } from "./workflowListSelection";
 
 const styles = (theme: Theme) =>
   css({
@@ -92,6 +93,8 @@ const WorkflowList = () => {
 
   const favoriteWorkflowIds = useFavoriteWorkflowIds();
   const selectedTags = useSelectedTags();
+  const sortBy = useSortBy();
+  const lastSelectedWorkflowIdRef = useRef<string | null>(null);
   const addNotification = useNotificationStore(
     (state) => state.addNotification
   );
@@ -141,13 +144,37 @@ const WorkflowList = () => {
     return filtered;
   }, [data?.workflows, filterValue, showFavoritesOnly, favoriteWorkflowIds, selectedTags]);
 
-  const onSelect = useCallback((workflow: Workflow) => {
-    setSelectedWorkflows((prev) =>
-      prev.includes(workflow.id)
-        ? prev.filter((id) => id !== workflow.id)
-        : [...prev, workflow.id]
-    );
-  }, []);
+  // Same order as WorkflowListView so shift-click ranges match what's on screen.
+  const sortedWorkflowIds = useMemo(() => {
+    return [...workflows]
+      .sort((a, b) => {
+        if (sortBy === "name") {
+          return a.name.localeCompare(b.name);
+        }
+        return (
+          new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+        );
+      })
+      .map((workflow) => workflow.id);
+  }, [workflows, sortBy]);
+
+  const onSelect = useCallback(
+    (workflow: Workflow) => {
+      const shiftKeyPressed =
+        useKeyPressedStore.getState().isKeyPressed("shift");
+      setSelectedWorkflows((prev) =>
+        nextWorkflowSelection(
+          sortedWorkflowIds,
+          prev,
+          workflow.id,
+          lastSelectedWorkflowIdRef.current,
+          shiftKeyPressed
+        )
+      );
+      lastSelectedWorkflowIdRef.current = workflow.id;
+    },
+    [sortedWorkflowIds]
+  );
 
   const onDeselect = useCallback(
     (event: MouseEvent) => {
@@ -160,6 +187,7 @@ const WorkflowList = () => {
         !target.closest(".delete-selected-button")
       ) {
         setSelectedWorkflows([]);
+        lastSelectedWorkflowIdRef.current = null;
       }
     },
     []

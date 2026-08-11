@@ -2,12 +2,14 @@
 import { css, keyframes } from "@emotion/react";
 import { useTheme, type Theme } from "@mui/material/styles";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Box,
   FlexColumn,
   FlexRow,
   Text,
   Tooltip,
+  LoadingSpinner,
   MOTION,
   reducedMotion,
   BORDER_RADIUS,
@@ -22,6 +24,8 @@ import RemoveIcon from "@mui/icons-material/Remove";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
 import CloseIcon from "@mui/icons-material/Close";
 import VisibilityIcon from "@mui/icons-material/Visibility";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import HourglassTopIcon from "@mui/icons-material/HourglassTop";
 import { useRunningJobs } from "../../hooks/useRunningJobs";
 import { useWorkflow } from "../../serverState/useWorkflow";
 import { trpcClient } from "../../trpc/client";
@@ -30,6 +34,12 @@ import { Job } from "../../stores/ApiTypes";
 import { useWorkflowManager } from "../../contexts/WorkflowManagerContext";
 import useWorkflowRunsStore from "../../stores/WorkflowRunsStore";
 import { notifyMutationError } from "../../utils/notifyMutationError";
+import { useNotificationStore } from "../../stores/NotificationStore";
+import {
+  applyImageBatchComplete,
+  isImageBatchJob,
+  openWorkflowForBatchResult
+} from "../../utils/imageBatch";
 
 const RUNNING = new Set(["running", "suspended", "paused"]);
 const QUEUED = new Set(["queued", "scheduled", "starting"]);
@@ -162,9 +172,66 @@ const RunningCard = memo(function RunningCard({
   onFocusJob?: (jobId: string) => void;
 }) {
   const theme = useTheme();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const addNotification = useNotificationStore((s) => s.addNotification);
   const name = useJobName(job);
   const elapsed = formatClock(job.started_at, now);
   const handleFocus = useCallback(() => onFocusJob?.(job.id), [onFocusJob, job.id]);
+  const isBatch = job.status === "suspended" && isImageBatchJob(job);
+  const isSuspended = job.status === "suspended";
+  const [checking, setChecking] = useState(false);
+
+  const handleCheckBatch = useCallback(async () => {
+    if (checking) {
+      return;
+    }
+    setChecking(true);
+    try {
+      const result = await trpcClient.jobs.checkBatch.mutate({ id: job.id });
+      if (result.status === "completed") {
+        const nodeId =
+          result.job.suspended_node_id ??
+          (typeof result.job.suspension_metadata?.nodeId === "string"
+            ? result.job.suspension_metadata.nodeId
+            : job.suspended_node_id);
+        await applyImageBatchComplete({
+          queryClient,
+          workflowId: result.job.workflow_id,
+          jobId: job.id,
+          nodeId,
+          assetIds: result.asset_ids ?? []
+        });
+        if (result.job.workflow_id) {
+          openWorkflowForBatchResult(result.job.workflow_id);
+          navigate(`/editor/${result.job.workflow_id}`);
+        }
+      } else {
+        queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      }
+      addNotification({
+        type:
+          result.status === "completed"
+            ? "success"
+            : result.status === "pending"
+              ? "info"
+              : "warning",
+        alert: true,
+        content: result.message
+      });
+    } catch (err) {
+      notifyMutationError("check the batch job", err);
+    } finally {
+      setChecking(false);
+    }
+  }, [
+    checking,
+    job.id,
+    job.suspended_node_id,
+    queryClient,
+    addNotification,
+    navigate
+  ]);
 
   const focusableSx: SxProps<Theme> = onFocusJob
     ? {
@@ -193,7 +260,13 @@ const RunningCard = memo(function RunningCard({
       }}
     >
       <FlexRow align="center" gap={1} sx={{ minWidth: 0 }}>
-        <Dot color={isFocused ? "primary.main" : undefined} />
+        {isSuspended ? (
+          <HourglassTopIcon
+            sx={{ fontSize: 14, color: "primary.main", flex: "0 0 auto" }}
+          />
+        ) : (
+          <Dot color={isFocused ? "primary.main" : undefined} />
+        )}
         <Text size="small" weight={500} truncate sx={{ flex: 1, minWidth: 0 }}>
           {name}
         </Text>
@@ -212,6 +285,25 @@ const RunningCard = memo(function RunningCard({
         {elapsed && !isFocused && (
           <Text size="smaller" color="secondary" family="secondary">{elapsed}</Text>
         )}
+        {isBatch && (
+          <Box
+            component="span"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+          >
+            <IconButton
+              icon={
+                checking ? (
+                  <LoadingSpinner size="small" />
+                ) : (
+                  <RefreshIcon sx={{ fontSize: 15 }} />
+                )
+              }
+              label="Check provider Batch status"
+              onClick={handleCheckBatch}
+              hoverColor="primary.main"
+            />
+          </Box>
+        )}
         <Box
           component="span"
           onClick={(e: React.MouseEvent) => e.stopPropagation()}
@@ -224,9 +316,19 @@ const RunningCard = memo(function RunningCard({
           />
         </Box>
       </FlexRow>
-      <Box sx={{ mt: 1 }}>
-        <RunBar />
-      </Box>
+      {isBatch ? (
+        <Text size="smaller" color="secondary" sx={{ mt: 0.75 }} truncate>
+          Batch — checking until the image is ready.
+        </Text>
+      ) : isSuspended ? (
+        <Text size="smaller" color="secondary" sx={{ mt: 0.75 }} truncate>
+          {job.suspension_reason || "Waiting"}
+        </Text>
+      ) : (
+        <Box sx={{ mt: 1 }}>
+          <RunBar />
+        </Box>
+      )}
     </Box>
   );
 

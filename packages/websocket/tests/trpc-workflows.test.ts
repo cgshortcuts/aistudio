@@ -640,6 +640,22 @@ describe("workflows router", () => {
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
+    it("does not create a missing workflow when expected_updated_at is set", async () => {
+      (Workflow.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const caller = createCaller(makeCtx());
+      await expect(
+        caller.workflows.update({
+          id: "wf-new",
+          name: "New Workflow",
+          access: "private",
+          graph: { nodes: [], edges: [] },
+          expected_updated_at: "2026-08-11T00:00:00.000Z"
+        })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(Workflow.create).not.toHaveBeenCalled();
+    });
+
     it("upserts when workflow does not exist", async () => {
       (Workflow.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
       const wf = makeWorkflow({ id: "wf-new" });

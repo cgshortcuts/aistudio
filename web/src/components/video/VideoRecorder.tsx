@@ -1,16 +1,53 @@
 /** @jsxImportSource @emotion/react */
 import { css } from "@emotion/react";
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useTheme } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
 
-import { EditorButton, Text, LoadingSpinner, Box, BORDER_RADIUS, SPACING, getSpacingPx, Z_INDEX } from "../ui_primitives";
+import {
+  EditorButton,
+  Text,
+  LoadingSpinner,
+  Box,
+  BORDER_RADIUS,
+  SPACING,
+  getSpacingPx,
+  Z_INDEX
+} from "../ui_primitives";
 import SettingsInputComponentIcon from "@mui/icons-material/SettingsInputComponent";
 import {
   VideoRecorderProps,
-  useVideoRecorder
+  useVideoRecorder,
+  NO_VIDEO_DEVICES_MESSAGE
 } from "../../hooks/browser/useVideoRecorder";
 import Select from "../inputs/Select";
+import { isElectron } from "../../utils/browser";
+
+const openCameraPrivacySettings = async (): Promise<void> => {
+  const platform =
+    typeof navigator !== "undefined" ? navigator.platform.toLowerCase() : "";
+  const isWindows = platform.includes("win");
+  const isMac = platform.includes("mac");
+
+  let url: string | null = null;
+  if (isWindows) {
+    url = "ms-settings:privacy-webcam";
+  } else if (isMac) {
+    url =
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
+  }
+
+  if (!url) {
+    return;
+  }
+
+  if (isElectron && window.api?.shell?.openExternal) {
+    await window.api.shell.openExternal(url);
+    return;
+  }
+
+  window.open(url, "_blank", "noopener,noreferrer");
+};
 
 const VideoRecorder = (props: VideoRecorderProps) => {
   const theme = useTheme();
@@ -21,6 +58,9 @@ const VideoRecorder = (props: VideoRecorderProps) => {
     isRecording,
     isPreviewing,
     isLoading,
+    isCameraEnabled,
+    enableCamera,
+    disableCamera,
     startPreview,
     stopStream,
     videoInputDevices,
@@ -32,6 +72,16 @@ const VideoRecorder = (props: VideoRecorderProps) => {
     handleVideoDeviceChange,
     handleAudioDeviceChange
   } = useVideoRecorder(props);
+
+  const showDeviceSettingsLink =
+    error === NO_VIDEO_DEVICES_MESSAGE ||
+    (isCameraEnabled &&
+      isDeviceListVisible &&
+      videoInputDevices.length === 0);
+
+  const handleOpenDeviceSettings = useCallback(() => {
+    void openCameraPrivacySettings();
+  }, []);
 
   const videoDeviceOptions = useMemo(() => {
     const options = videoInputDevices.map((device) => ({
@@ -107,14 +157,14 @@ const VideoRecorder = (props: VideoRecorderProps) => {
         }
       },
       "& .toggle-on": {
-        width: "10px",
-        height: "10px",
+        width: "16px",
+        height: "16px",
         opacity: "1"
       },
       "& .toggle-off": {
-        width: "10px",
-        height: "10px",
-        opacity: "0.6"
+        width: "16px",
+        height: "16px",
+        opacity: "0.75"
       },
       "& button.recording": {
         backgroundColor: theme.vars.palette.error.main,
@@ -126,8 +176,38 @@ const VideoRecorder = (props: VideoRecorderProps) => {
         color: theme.vars.palette.error.main,
         fontSize: theme.fontSizeSmaller,
         lineHeight: "1.1em"
+      },
+      "& .device-help": {
+        marginTop: getSpacingPx(SPACING.xs),
+        fontSize: theme.fontSizeSmaller,
+        lineHeight: "1.2em"
+      },
+      "& .device-help-link": {
+        color: "var(--palette-primary-main)",
+        cursor: "pointer",
+        textDecoration: "underline",
+        background: "none",
+        border: "none",
+        padding: 0,
+        margin: "0.5em",
+        font: "inherit"
       }
     });
+
+  if (!isCameraEnabled) {
+    return (
+      <Box className="videorecorder" css={styles(theme)}>
+        <EditorButton
+          onClick={enableCamera}
+          className="enable-camera-button nodrag"
+          variant="text"
+          density="compact"
+        >
+          USE CAMERA
+        </EditorButton>
+      </Box>
+    );
+  }
 
   return (
     <Box className="videorecorder" css={styles(theme)}>
@@ -180,7 +260,30 @@ const VideoRecorder = (props: VideoRecorderProps) => {
           <SettingsInputComponentIcon className="toggle-off" />
         )}
       </EditorButton>
+
+      {!isRecording && (
+        <EditorButton
+          onClick={disableCamera}
+          className="disable-camera-button nodrag"
+          variant="text"
+          density="compact"
+        >
+          HIDE CAMERA
+        </EditorButton>
+      )}
+
       {error && <div className="error">{error}</div>}
+      {showDeviceSettingsLink && (
+        <div className="device-help">
+          <button
+            type="button"
+            className="device-help-link nodrag"
+            onClick={handleOpenDeviceSettings}
+          >
+            Open camera privacy settings
+          </button>
+        </div>
+      )}
 
       {isPreviewing && (
         <video
@@ -197,10 +300,14 @@ const VideoRecorder = (props: VideoRecorderProps) => {
         <div className="device-list" style={{ margin: theme.spacing(1.5) }}>
           {videoInputDevices.length > 0 ? (
             <>
-              <Text size="smaller" weight={600} sx={{
-                margin: "0 0 .5em 0",
-                color: "var(--palette-grey-100)"
-              }}>
+              <Text
+                size="smaller"
+                weight={600}
+                sx={{
+                  margin: "0 0 .5em 0",
+                  color: "var(--palette-grey-100)"
+                }}
+              >
                 Camera
               </Text>
               <div
@@ -233,16 +340,20 @@ const VideoRecorder = (props: VideoRecorderProps) => {
                 left: "0.5em"
               }}
             >
-              No video input devices found.
+              {NO_VIDEO_DEVICES_MESSAGE}
             </Text>
           )}
 
           {audioInputDevices.length > 0 && (
             <>
-              <Text size="smaller" weight={600} sx={{
-                margin: "1em 0 .5em 0",
-                color: "var(--palette-grey-100)"
-              }}>
+              <Text
+                size="smaller"
+                weight={600}
+                sx={{
+                  margin: "1em 0 .5em 0",
+                  color: "var(--palette-grey-100)"
+                }}
+              >
                 Microphone
               </Text>
               <div

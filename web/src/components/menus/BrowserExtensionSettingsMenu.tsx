@@ -12,6 +12,9 @@ import { getSharedSettingsStyles } from "./settingsMenuStyles";
 import { useNotificationStore } from "../../stores/NotificationStore";
 import { trpcClient } from "../../trpc/client";
 import { BASE_URL } from "../../stores/BASE_URL";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 const CHROME_EXTENSIONS_URL = "chrome://extensions";
 
@@ -32,7 +35,7 @@ const STEPS: readonly string[] = [
   "Open chrome://extensions in the Chrome you use for the target sites.",
   "Enable “Developer mode” (top-right).",
   "Click “Load unpacked” and select the extension folder.",
-  "Open a site to automate, click the Nodetool extension, and press “Attach to this tab”."
+  `Open a site to automate, click the ${APP_DISPLAY_NAME} extension, and press “Attach to this tab”.`
 ];
 
 const BrowserExtensionSettingsMenu = () => {
@@ -87,7 +90,7 @@ const BrowserExtensionSettingsMenu = () => {
     >
       <div className="settings-main-content">
         <Text className="description" sx={{ mb: 1 }}>
-          The <strong>Nodetool browser extension</strong> lets the{" "}
+          The <strong>{APP_DISPLAY_NAME} browser extension</strong> lets the{" "}
           <strong>Live Browser Agent</strong> drive your own logged-in Chrome —
           automating media-generation sites, saving results as assets, and
           uploading assets into pages. Chrome can’t install it for you, so load

@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { isMac } from "../utils/platform";
+// === CUSTOM FORK START: Instant Update ===
+import { isInstantUpdateAllowed } from "../custom/instant-update";
+// === CUSTOM FORK END ===
 
 interface AutosaveSettings {
   enabled: boolean;
@@ -265,7 +268,13 @@ export const useSettingsStore = create<SettingsStore>()(
             autosave: {
               ...defaultAutosaveSettings,
               ...persisted?.settings?.autosave
-            }
+            },
+            // === CUSTOM FORK START: Instant Update ===
+            instantUpdate: isInstantUpdateAllowed()
+              ? (persisted?.settings?.instantUpdate ??
+                defaultSettings.instantUpdate)
+              : false
+            // === CUSTOM FORK END ===
           }
         };
       }

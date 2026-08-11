@@ -21,6 +21,9 @@ import {
   defaultExamplePackageName,
   deriveExampleAssetsDir
 } from "./example-workflows.js";
+// === CUSTOM FORK START: Product Profile ===
+import { isAiStudioHiddenExampleRecord } from "./aistudio-product-profile.js";
+// === CUSTOM FORK END ===
 import {
   createLogger,
   loadAssetStorageConfig,
@@ -61,6 +64,7 @@ import {
   type PythonBridge
 } from "@nodetool-ai/runtime";
 import { createAssetModelInterface } from "./lib/asset-model-interface.js";
+import { recordImageBatchModelInterface } from "./lib/image-batch-job.js";
 import { verdictSchema } from "@nodetool-ai/protocol";
 import {
   cancelDebugSession,
@@ -517,7 +521,8 @@ export async function getWorkflowRuntimeEnvironment(
         // that stores an image needs it on every host, not just chat turns.
         configureContext: (context: ProcessingContext) => {
           context.setModelInterfaces({
-            createAsset: createAssetModelInterface
+            createAsset: createAssetModelInterface,
+            recordImageBatch: recordImageBatchModelInterface
           });
         }
       };
@@ -1156,6 +1161,11 @@ function buildExamplesFromDir(
         typeof parsed.name === "string"
           ? parsed.name
           : file.replace(/\.json$/i, "");
+      // === CUSTOM FORK START: Product Profile ===
+      if (isAiStudioHiddenExampleRecord(parsed, { id: file, name })) {
+        continue;
+      }
+      // === CUSTOM FORK END ===
       // Point thumbnail_url to the served JPG when the file exists in
       // assets. withCacheBuster() appends ?v=<md5-8> so the browser cache
       // invalidates whenever the JPG is regenerated.
@@ -1232,6 +1242,16 @@ export function buildExampleWorkflows(
     if (!pkg.examples || pkg.examples.length === 0) continue;
     for (const ex of pkg.examples) {
       const meta = ex as ExampleMetadata;
+      // === CUSTOM FORK START: Product Profile ===
+      if (
+        isAiStudioHiddenExampleRecord(ex as Record<string, unknown>, {
+          id: meta.id ?? "",
+          name: meta.name
+        })
+      ) {
+        continue;
+      }
+      // === CUSTOM FORK END ===
       workflows.push({
         id: meta.id ?? "",
         access: "public",

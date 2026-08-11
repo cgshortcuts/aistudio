@@ -222,3 +222,30 @@ describe("calculateImageCost (gpt-image-1, per-image USD)", () => {
     );
   });
 });
+
+describe("CostCalculator.calculate – batchDiscount", () => {
+  it("halves per-image gpt-image cost when batchDiscount is set", () => {
+    const full = CostCalculator.calculate(
+      "gpt-image-1",
+      { imageCount: 2, imageQuality: "medium" },
+      "openai"
+    );
+    const batch = CostCalculator.calculate(
+      "gpt-image-1",
+      { imageCount: 2, imageQuality: "medium", batchDiscount: true },
+      "openai"
+    );
+    expect(batch).toBeCloseTo(full * 0.5);
+  });
+
+  it("halves token chat cost when batchDiscount is set", () => {
+    const usage = { inputTokens: 1_000_000, outputTokens: 1_000_000 };
+    const full = CostCalculator.calculate("gpt-4o-mini", usage, "openai");
+    const batch = CostCalculator.calculate(
+      "gpt-4o-mini",
+      { ...usage, batchDiscount: true },
+      "openai"
+    );
+    expect(batch).toBeCloseTo(full * 0.5);
+  });
+});

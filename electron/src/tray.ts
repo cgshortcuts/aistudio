@@ -16,15 +16,15 @@ import { createMiniAppWindow, createChatWindow } from "./workflowWindow";
 import type { Workflow } from "./types";
 import { EventEmitter } from "events";
 // === CUSTOM FORK START: AiStudio Branding ===
-import { APP_ID } from "./custom/branding";
+import { APP_DISPLAY_NAME, APP_ID } from "./custom/branding";
 // === CUSTOM FORK END ===
 
 let trayInstance: Electron.Tray | null = null;
 
 function formatNodeToolStatus(connected: boolean, port?: number): string {
   return connected
-    ? `NodeTool: Running${port ? ` on ${port}` : ""}`
-    : "NodeTool: Stopped";
+    ? `${APP_DISPLAY_NAME}: Running${port ? ` on ${port}` : ""}`
+    : `${APP_DISPLAY_NAME}: Stopped`;
 }
 
 /**
@@ -335,7 +335,7 @@ async function updateTrayMenu(): Promise<void> {
     },
     { type: "separator" },
     {
-      label: "Show NodeTool",
+      label: `Show ${APP_DISPLAY_NAME}`,
       enabled: true,
       click: async () => focusNodeTool(),
     },
@@ -369,11 +369,11 @@ async function updateTrayMenu(): Promise<void> {
     },
     ...getCloseBehaviorMenuItems(settings),
     { type: "separator" },
-    { label: "Quit NodeTool", role: "quit" },
+    { label: `Quit ${APP_DISPLAY_NAME}`, role: "quit" },
   ]);
 
   trayInstance.setContextMenu(contextMenu);
-  trayInstance.setToolTip("NodeTool Desktop");
+  trayInstance.setToolTip(`${APP_DISPLAY_NAME} Desktop`);
 }
 
 export { createTray, updateTrayMenu };

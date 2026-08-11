@@ -20,6 +20,9 @@ import {
   buildReportUrl,
   type InputConnection
 } from "../../utils/bugReport";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 const GITHUB_ISSUE_URL =
   "https://github.com/nodetool-ai/nodetool/issues/new";
@@ -31,7 +34,7 @@ function getSystemInfo(): string {
     `Platform: ${navigator.platform}`,
     `Language: ${navigator.language}`,
     `Screen: ${window.screen.width}x${window.screen.height} (devicePixelRatio: ${window.devicePixelRatio})`,
-    `NodeTool version: ${VERSION} (build ${BUILD_NUMBER}, commit ${GIT_COMMIT_HASH})`,
+    `${APP_DISPLAY_NAME} version: ${VERSION} (build ${BUILD_NUMBER}, commit ${GIT_COMMIT_HASH})`,
   ];
   return lines.join("\n");
 }

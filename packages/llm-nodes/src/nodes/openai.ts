@@ -4,7 +4,9 @@ import type {
   StreamingOutputs
 } from "@nodetool-ai/node-sdk";
 import type { ProcessingContext } from "@nodetool-ai/runtime";
+import { OpenAIProvider } from "@nodetool-ai/runtime";
 import { tagAsServer } from "@nodetool-ai/nodes-utils";
+import { awaitImageBatchOrSuspend } from "../lib/image-batch.js";
 
 const OPENAI_API_BASE = "https://api.openai.com/v1";
 
@@ -224,7 +226,7 @@ export class CreateImageNode extends BaseNode {
   static readonly inlineFields = [];
   static readonly inputFields: string[] = ["prompt"];
   static readonly description =
-    "Generates images from textual descriptions.\n    image, t2i, tti, text-to-image, create, generate, picture, photo, art, drawing, illustration";
+    "Generates images from textual descriptions.\n    image, t2i, tti, text-to-image, create, generate, picture, photo, art, drawing, illustration, batch\n\n    Enable Use Batch for ~50% off via the OpenAI Batch API (slower — waits in the provider queue).";
   static readonly metadataOutputTypes = {
     output: "image"
   };
@@ -241,10 +243,10 @@ export class CreateImageNode extends BaseNode {
 
   @prop({
     type: "enum",
-    default: "gpt-image-1",
+    default: "gpt-image-2",
     title: "Model",
     description: "The model to use for image generation.",
-    values: ["gpt-image-1"]
+    values: ["gpt-image-2", "gpt-image-1.5", "gpt-image-1", "gpt-image-1-mini"]
   })
   declare model: any;
 
@@ -275,15 +277,40 @@ export class CreateImageNode extends BaseNode {
   })
   declare quality: any;
 
-  async process(): Promise<Record<string, unknown>> {
+  @prop({
+    type: "bool",
+    default: false,
+    title: "Use Batch",
+    description:
+      "Submit via the OpenAI Batch API (~50% off). Polls for 5 minutes in-run, then keeps checking until the image is ready."
+  })
+  declare use_batch: any;
+
+  async process(context?: ProcessingContext): Promise<Record<string, unknown>> {
     const apiKey = getApiKey(this._secrets);
     const prompt = String(this.prompt ?? "");
     if (!prompt) throw new Error("Prompt cannot be empty");
 
-    const model = String(this.model ?? "gpt-image-1");
+    const model = String(this.model ?? "gpt-image-2");
     const size = String(this.size ?? "1024x1024");
     const quality = String(this.quality ?? "high");
     const background = String(this.background ?? "auto");
+    const useBatch = Boolean(this.use_batch);
+
+    if (useBatch) {
+      const provider = new OpenAIProvider({ OPENAI_API_KEY: apiKey });
+      const nodeId = String(this.__node_id ?? "");
+      const images = await awaitImageBatchOrSuspend({
+        provider,
+        providerId: "openai",
+        nodeId,
+        params: { model, requests: [{ prompt, size, quality }] },
+        onSubmitted: (state) => context?.recordImageBatch(nodeId, { ...state })
+      });
+      const bytes = images[0];
+      if (!bytes) throw new Error("Image batch returned no image");
+      return { output: imageRefFromB64(Buffer.from(bytes).toString("base64")) };
+    }
 
     const res = await fetch(`${OPENAI_API_BASE}/images/generations`, {
       method: "POST",
@@ -326,7 +353,7 @@ export class EditImageNode extends BaseNode {
   static readonly inlineFields = [];
   static readonly inputFields = ["prompt", "image", "mask"];
   static readonly description =
-    "Edit images using OpenAI's gpt-image-1 model.\n    image, edit, modify, transform, inpaint, outpaint, variation\n\n    Takes an input image and a text prompt to generate a modified version.\n    Can be used for inpainting, outpainting, style transfer, and image modification.\n    Optionally accepts a mask to specify which areas to edit.";
+    "Edit images using OpenAI's GPT Image models.\n    image, edit, modify, transform, inpaint, outpaint, variation, batch\n\n    Takes an input image and a text prompt to generate a modified version.\n    Optionally accepts a mask to specify which areas to edit.\n    Enable Use Batch for ~50% off via the OpenAI Batch API (slower).";
   static readonly metadataOutputTypes = {
     output: "image"
   };
@@ -372,10 +399,10 @@ export class EditImageNode extends BaseNode {
 
   @prop({
     type: "enum",
-    default: "gpt-image-1",
+    default: "gpt-image-2",
     title: "Model",
     description: "The model to use for image editing.",
-    values: ["gpt-image-1"]
+    values: ["gpt-image-2", "gpt-image-1.5", "gpt-image-1", "gpt-image-1-mini"]
   })
   declare model: any;
 
@@ -397,7 +424,16 @@ export class EditImageNode extends BaseNode {
   })
   declare quality: any;
 
-  async process(): Promise<Record<string, unknown>> {
+  @prop({
+    type: "bool",
+    default: false,
+    title: "Use Batch",
+    description:
+      "Submit via the OpenAI Batch API (~50% off). Polls for 5 minutes in-run, then keeps checking until the image is ready."
+  })
+  declare use_batch: any;
+
+  async process(context?: ProcessingContext): Promise<Record<string, unknown>> {
     const apiKey = getApiKey(this._secrets);
     const prompt = String(this.prompt ?? "");
     if (!prompt) throw new Error("Edit prompt cannot be empty");
@@ -407,11 +443,42 @@ export class EditImageNode extends BaseNode {
       throw new Error("Input image is required");
     }
 
-    const model = String(this.model ?? "gpt-image-1");
+    const model = String(this.model ?? "gpt-image-2");
     const size = String(this.size ?? "1024x1024");
     const quality = String(this.quality ?? "high");
+    const useBatch = Boolean(this.use_batch);
 
-    // gpt-image-1 always returns base64 and rejects `response_format`, so it
+    if (useBatch) {
+      const imageBytes = await refToBytes(image);
+      const mask = this.mask as Record<string, unknown> | undefined;
+      const maskBytes =
+        mask && (mask.data || mask.uri) ? await refToBytes(mask) : undefined;
+      const provider = new OpenAIProvider({ OPENAI_API_KEY: apiKey });
+      const nodeId = String(this.__node_id ?? "");
+      const images = await awaitImageBatchOrSuspend({
+        provider,
+        providerId: "openai",
+        nodeId,
+        params: {
+          model,
+          requests: [
+            {
+              prompt,
+              size,
+              quality,
+              images: [imageBytes],
+              ...(maskBytes ? { mask: maskBytes } : {})
+            }
+          ]
+        },
+        onSubmitted: (state) => context?.recordImageBatch(nodeId, { ...state })
+      });
+      const bytes = images[0];
+      if (!bytes) throw new Error("Image batch returned no image");
+      return { output: imageRefFromB64(Buffer.from(bytes).toString("base64")) };
+    }
+
+    // gpt-image-* always returns base64 and rejects `response_format`, so it
     // must not be sent (unlike the legacy dall-e-2 edits endpoint).
     const formData = new FormData();
     formData.append("prompt", prompt);
@@ -419,11 +486,9 @@ export class EditImageNode extends BaseNode {
     formData.append("size", size);
     formData.append("quality", quality);
 
-    // Convert image ref to blob
     const imageBlob = await refToBlob(image);
     formData.append("image", imageBlob, "image.png");
 
-    // Optional mask
     const mask = this.mask as Record<string, unknown> | undefined;
     if (mask && (mask.data || mask.uri)) {
       const maskBlob = await refToBlob(mask);
@@ -549,6 +614,12 @@ function imageRefFromB64(b64: string): Record<string, unknown> {
 /** Build an audio ref from raw base64 with an explicit mime type. */
 function audioRefFromB64(b64: string, contentType: string): Record<string, unknown> {
   return { type: "audio", data: b64, content_type: contentType };
+}
+
+/** Convert an image/audio ref object to raw bytes. */
+async function refToBytes(ref: Record<string, unknown>): Promise<Uint8Array> {
+  const blob = await refToBlob(ref);
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /** Convert an image/audio ref object to a Blob for multipart upload. */

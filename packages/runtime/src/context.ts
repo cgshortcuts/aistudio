@@ -394,6 +394,16 @@ export interface InjectedTool {
 
 export interface ProcessingContextModelInterfaces {
   getJob?: (args: { userId: string; jobId: string }) => Promise<unknown | null>;
+  /**
+   * Persist provider image-Batch ids on the Job row while the node is still
+   * running, so a disconnect can reclaim the Batch instead of failing the job.
+   */
+  recordImageBatch?: (args: {
+    userId: string;
+    jobId: string;
+    nodeId: string;
+    state: Record<string, unknown>;
+  }) => Promise<void>;
   createAsset?: (args: AssetCreateParamsLike) => Promise<unknown>;
   /**
    * Recursively list the non-folder assets contained in `folderId`. Returns
@@ -2137,6 +2147,22 @@ export class ProcessingContext {
   async getJob(jobId: string): Promise<unknown | null> {
     const fn = this.requireModelInterface("getJob");
     return fn({ userId: this.userId, jobId });
+  }
+
+  async recordImageBatch(
+    nodeId: string,
+    state: Record<string, unknown>
+  ): Promise<void> {
+    const fn = this._modelInterfaces?.recordImageBatch;
+    if (!fn) {
+      return;
+    }
+    await fn({
+      userId: this.userId,
+      jobId: this.jobId,
+      nodeId,
+      state
+    });
   }
 
   async get_job(jobId: string): Promise<unknown | null> {

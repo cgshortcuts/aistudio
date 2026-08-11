@@ -7,6 +7,11 @@ import { Job } from "../../../stores/ApiTypes";
 import { useRunningJobs } from "../../../hooks/useRunningJobs";
 import { trpcClient } from "../../../trpc/client";
 
+jest.mock("react-router-dom", () => ({
+  ...jest.requireActual("react-router-dom"),
+  useNavigate: () => jest.fn()
+}));
+
 jest.mock("../../../hooks/useRunningJobs", () => ({
   useRunningJobs: jest.fn()
 }));
@@ -21,7 +26,25 @@ jest.mock("@tanstack/react-query", () => ({
 }));
 
 jest.mock("../../../trpc/client", () => ({
-  trpcClient: { jobs: { cancel: { mutate: jest.fn().mockResolvedValue({}) } } }
+  trpcClient: {
+    jobs: {
+      cancel: { mutate: jest.fn().mockResolvedValue({}) },
+      checkBatch: {
+        mutate: jest.fn().mockResolvedValue({
+          status: "pending",
+          provider_status: "in_progress",
+          message: "Still waiting",
+          job: {}
+        })
+      }
+    }
+  }
+}));
+
+jest.mock("../../../stores/NotificationStore", () => ({
+  useNotificationStore: (
+    selector: (s: { addNotification: jest.Mock }) => unknown
+  ) => selector({ addNotification: jest.fn() })
 }));
 
 const mockUseRunningJobs = useRunningJobs as unknown as jest.Mock;
@@ -117,6 +140,31 @@ describe("QueueOverlay", () => {
     fireEvent.click(screen.getByRole("button", { name: /stop run/i }));
 
     expect(mockCancel).toHaveBeenCalledWith({ id: "a" });
+  });
+
+  it("labels a suspended provider Batch job and offers Check", () => {
+    setJobs([
+      {
+        ...job("batch-1", "suspended"),
+        suspension_reason:
+          "Provider Batch image job — can take up to 24 hours.",
+        suspension_metadata: {
+          kind: "image_batch",
+          provider: "openai",
+          batchId: "b1",
+          model: "gpt-image-2"
+        }
+      }
+    ]);
+    renderOverlay();
+    fireEvent.click(screen.getByRole("button", { name: /expand queue/i }));
+
+    expect(
+      screen.getByText(/Batch — checking until the image is ready/i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /check provider batch status/i })
+    ).toBeInTheDocument();
   });
 
   it("removes a queued job from the expanded view", () => {

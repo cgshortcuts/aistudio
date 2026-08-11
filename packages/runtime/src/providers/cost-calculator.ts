@@ -137,6 +137,11 @@ export interface UsageInfo {
   videoSeconds?: number;
   /** Number of tasks submitted (for CostType.TASK_BASED providers). */
   taskCount?: number;
+  /**
+   * When true, apply the provider Batch API discount (~50% off standard rates).
+   * Set on completed Batch downloads, not on bare submit.
+   */
+  batchDiscount?: boolean;
 }
 
 /**
@@ -294,6 +299,19 @@ export class CostCalculator {
    * @returns Cost in US dollars (0 when no price is known)
    */
   static calculate(
+    modelId: string,
+    usage: UsageInfo,
+    provider: ProviderId
+  ): number {
+    const cost = CostCalculator._calculateBase(modelId, usage, provider);
+    // OpenAI/Gemini Batch APIs bill at half the standard rate.
+    if (usage.batchDiscount === true) {
+      return cost * 0.5;
+    }
+    return cost;
+  }
+
+  private static _calculateBase(
     modelId: string,
     usage: UsageInfo,
     provider: ProviderId

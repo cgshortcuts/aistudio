@@ -26,6 +26,12 @@ import {
   getSpacingPx
 } from "../../ui_primitives";
 import type { MediaMode } from "../../../stores/MediaGenerationStore";
+// === CUSTOM FORK START: Product Profile ===
+import {
+  isChatAndAgentsHidden,
+  visibleMediaModes
+} from "../../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 interface MediaModeMenuProps {
   anchorEl: HTMLElement | null;
@@ -170,6 +176,10 @@ const MediaModeMenu: React.FC<MediaModeMenuProps> = ({
 }) => {
   const theme = useTheme();
   const cssStyles = useMemo(() => styles(theme), [theme]);
+  // === CUSTOM FORK START: Product Profile ===
+  const hideChat = isChatAndAgentsHidden();
+  const modes = visibleMediaModes(MODES, hideChat);
+  // === CUSTOM FORK END ===
   return (
     <Popover
       open={open}
@@ -187,7 +197,7 @@ const MediaModeMenu: React.FC<MediaModeMenuProps> = ({
         <Caption className="mode-menu-header" size="small">
           Mode
         </Caption>
-        {MODES.map((m) => {
+        {modes.map((m) => {
           const selected = !piSelected && m.id === value;
           return (
             <div
@@ -244,7 +254,7 @@ const MediaModeMenu: React.FC<MediaModeMenuProps> = ({
           );
         })}
 
-        {showPi && onSelectPi && (
+        {!hideChat && showPi && onSelectPi && (
           <>
             <Caption className="mode-menu-header" size="small">
               Agent

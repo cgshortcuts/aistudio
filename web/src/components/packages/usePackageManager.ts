@@ -18,6 +18,9 @@ import useNodePacksStore, {
 import useOptionalNodePacksStore from "../../stores/OptionalNodePacksStore";
 import { useNotificationStore } from "../../stores/NotificationStore";
 import { OPTIONAL_NODE_PACKS } from "../../config/optionalNodePacks";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 import { getRequiredKeyForBuiltinPack } from "../../utils/providerPacks";
 
 /** Fire a toast so Install feedback is visible even when the console is below the fold. */
@@ -85,7 +88,7 @@ const TITLES: Record<string, string> = {
 
 const SUBTITLES: Record<string, string> = {
   software:
-    "Interpreters and tools NodeTool installs into your environment. Each runtime powers its own node types.",
+    `Interpreters and tools ${APP_DISPLAY_NAME} installs into your environment. Each runtime powers its own node types.`,
   included:
     "Reveal advanced and niche node categories, and toggle local packs. Provider nodes appear automatically once you set their API key.",
   python:
@@ -528,7 +531,7 @@ export function usePackageManager(params: {
       isSoftware && !rtAvailable
         ? "Software installation runs in the desktop app (start-desktop.bat), not the browser. Open the desktop app to install Python, FFmpeg, llama.cpp, and other runtimes."
         : cat === "python" && !pyAvailable
-          ? "Installing node packs runs in the NodeTool desktop app. Open the desktop app to install, update, and remove Python node packs."
+          ? `Installing node packs runs in the ${APP_DISPLAY_NAME} desktop app. Open the desktop app to install, update, and remove Python node packs.`
           : null;
 
     const busyName = statuses.find(

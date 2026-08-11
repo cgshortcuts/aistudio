@@ -344,6 +344,51 @@ export interface TextToImageParams {
   signal?: AbortSignal;
 }
 
+/** One image request inside an OpenAI/Gemini Batch job. */
+export interface ImageBatchRequest {
+  prompt: string;
+  size?: string;
+  quality?: string;
+  aspectRatio?: string;
+  resolution?: string;
+  /**
+   * Optional reference image bytes (PNG/JPEG). OpenAI Batch edits upload these
+   * via the Files API; Gemini Batch embeds them as `inlineData`.
+   */
+  images?: Uint8Array[];
+  /** Optional OpenAI edit mask (white = edit region). Ignored by Gemini. */
+  mask?: Uint8Array;
+  /** Mime for the first reference image; defaults to image/png. */
+  mimeType?: string;
+}
+
+/** Params for submitting an async image Batch job (~50% cheaper, up to 24h). */
+export interface ImageBatchSubmitParams {
+  model: string;
+  requests: ImageBatchRequest[];
+  completionWindow?: "24h";
+  /**
+   * How long {@link BaseProvider} helpers may poll before failing.
+   * Used by `runImageBatchUntilDone` (default 30 minutes).
+   */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+
+/** Status snapshot for an image Batch job. */
+export interface ImageBatchJob {
+  batchId: string;
+  status: string;
+  outputFileId?: string | null;
+  error?: string | null;
+}
+
+/** Params for retrieving an image Batch job status. */
+export interface ImageBatchGetParams {
+  batchId: string;
+  signal?: AbortSignal;
+}
+
 export interface ImageToImageParams {
   model: ImageModel;
   prompt: string;

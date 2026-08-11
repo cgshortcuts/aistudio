@@ -7,6 +7,9 @@
  * to read instead of its own hardcoded list.
  */
 import { isElectron, isLocalhost } from "../../lib/env";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 // Provider icons vendored from @lobehub/icons-static-svg (see src/icons/providers/README.md)
 import openaiIcon from "../../icons/providers/openai.svg";
@@ -41,6 +44,9 @@ import gmiIcon from "../../icons/gmi.svg";
 // === CUSTOM FORK START: BytePlus ===
 import { BYTEPLUS_PROVIDER_META } from "../../custom/byteplus";
 // === CUSTOM FORK END ===
+// === CUSTOM FORK START: Product Profile ===
+import { isCustomerVisibleProvider } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 
 export interface ProviderMeta {
@@ -74,8 +80,14 @@ export interface ProviderMeta {
 }
 
 /** Hosted deployments can't finish a same-machine sign-in — hide those cards. */
-export const isProviderAvailable = (meta: ProviderMeta): boolean =>
-  !meta.localOnly || isLocalhost || isElectron;
+export const isProviderAvailable = (meta: ProviderMeta): boolean => {
+  // === CUSTOM FORK START: Product Profile ===
+  if (!isCustomerVisibleProvider(meta)) {
+    return false;
+  }
+  // === CUSTOM FORK END ===
+  return !meta.localOnly || isLocalhost || isElectron;
+};
 export const PROVIDER_META: ProviderMeta[] = [
   {
     key: "OPENAI_API_KEY",
@@ -251,7 +263,7 @@ export const PROVIDER_META: ProviderMeta[] = [
     section: "media",
     docsUrl: "https://fal.ai/docs",
     icon: falColorIcon,
-    note: 'For exact cost tracking, use an admin key (fal.ai dashboard → Keys → scope "Admin"). NodeTool reads each request\'s actual billing from FAL; a standard key only yields estimates.'
+    note: `For exact cost tracking, use an admin key (fal.ai dashboard → Keys → scope "Admin"). ${APP_DISPLAY_NAME} reads each request's actual billing from FAL; a standard key only yields estimates.`
   },
   {
     key: "REPLICATE_API_TOKEN",
@@ -378,14 +390,14 @@ export const PROVIDER_META: ProviderMeta[] = [
   {
     key: "RUNPOD_API_KEY",
     name: "RunPod",
-    description: "Rent GPU pods to run NodeTool workers.",
+    description: `Rent GPU pods to run ${APP_DISPLAY_NAME} workers.`,
     section: "compute",
     docsUrl: "https://docs.runpod.io/"
   },
   {
     key: "VAST_API_KEY",
     name: "Vast.ai",
-    description: "Rent marketplace GPUs to run NodeTool workers.",
+    description: `Rent marketplace GPUs to run ${APP_DISPLAY_NAME} workers.`,
     section: "compute",
     docsUrl: "https://docs.vast.ai/"
   },
@@ -438,7 +450,7 @@ export const PROVIDER_META: ProviderMeta[] = [
   {
     key: "SERVER_AUTH_TOKEN",
     name: "Server Auth Token",
-    description: "Bearer token to secure NodeTool server endpoints.",
+    description: `Bearer token to secure ${APP_DISPLAY_NAME} server endpoints.`,
     section: "advanced",
     docsUrl: "https://github.com/nodetool-ai/nodetool"
   }

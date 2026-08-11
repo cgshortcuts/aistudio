@@ -31,9 +31,19 @@ jest.mock("../../../../stores/WorkflowRunner", () => ({
 jest.mock("../../../../trpc/client", () => ({
   trpcClient: {
     jobs: {
-      cancel: { mutate: jest.fn() }
+      cancel: { mutate: jest.fn() },
+      checkBatch: { mutate: jest.fn() }
+    },
+    assets: {
+      list: { query: jest.fn().mockResolvedValue({ assets: [] }) }
     }
   }
+}));
+
+jest.mock("../../../../stores/NotificationStore", () => ({
+  useNotificationStore: (
+    selector: (s: { addNotification: jest.Mock }) => unknown
+  ) => selector({ addNotification: jest.fn() })
 }));
 
 jest.mock("@tanstack/react-query", () => ({
@@ -78,6 +88,7 @@ const mockUseWorkflow = useWorkflow as jest.MockedFunction<typeof useWorkflow>;
 const mockUseJobAssets = useJobAssets as jest.MockedFunction<typeof useJobAssets>;
 const mockGetWorkflowRunnerStore = getWorkflowRunnerStore as jest.MockedFunction<typeof getWorkflowRunnerStore>;
 const mockCancelJob = trpcClient.jobs.cancel.mutate as jest.Mock;
+const mockCheckBatch = trpcClient.jobs.checkBatch.mutate as jest.Mock;
 const mockUseQueryClient = useQueryClient as jest.MockedFunction<typeof useQueryClient>;
 
 describe("JobItem", () => {
@@ -92,6 +103,12 @@ describe("JobItem", () => {
     mockUseJobAssets.mockReturnValue({ data: [], isLoading: false, error: null } as any);
     mockGetWorkflowRunnerStore.mockReturnValue(mockRunnerStore as any);
     mockCancelJob.mockResolvedValue({} as any);
+    mockCheckBatch.mockResolvedValue({
+      status: "pending",
+      provider_status: "in_progress",
+      message: "Still waiting",
+      job: baseJob
+    } as any);
     mockUseQueryClient.mockReturnValue({ invalidateQueries: mockInvalidateQueries } as any);
   });
 
@@ -244,6 +261,56 @@ describe("JobItem", () => {
     it("shows no stop button for completed jobs", () => {
       renderWithTheme(<JobItem job={baseJob} />);
       expect(screen.queryByRole("button", { name: /stop job/i })).toBeNull();
+    });
+  });
+
+  describe("Provider image Batch suspension", () => {
+    const batchJob: Job = {
+      ...baseJob,
+      status: "suspended",
+      finished_at: null,
+      suspension_reason:
+        "Provider Batch image job — can take up to 24 hours. Open the Jobs queue and press Check when you return.",
+      suspension_metadata: {
+        kind: "image_batch",
+        provider: "openai",
+        batchId: "batch_1",
+        model: "gpt-image-2"
+      }
+    };
+
+    it("shows Check and Stop for suspended Batch jobs", () => {
+      renderWithTheme(<JobItem job={batchJob} />);
+      expect(
+        screen.getByRole("button", { name: /check batch status/i })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /stop job/i })
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Batch · Checking until the image is ready/i)).toBeInTheDocument();
+    });
+
+    it("calls jobs.checkBatch when Check is pressed", async () => {
+      mockCheckBatch.mockResolvedValue({
+        status: "completed",
+        provider_status: "completed",
+        message: "Batch completed — image saved to Assets.",
+        job: { ...batchJob, status: "completed" },
+        asset_ids: ["a1"]
+      });
+      renderWithTheme(<JobItem job={batchJob} />);
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /check batch status/i })
+        );
+      });
+      expect(mockCheckBatch).toHaveBeenCalledWith({ id: "job-123" });
+      expect(mockInvalidateQueries).toHaveBeenCalledWith({
+        queryKey: ["jobs"]
+      });
+      expect(mockInvalidateQueries).toHaveBeenCalledWith({
+        queryKey: ["assets", { job_id: "job-123" }]
+      });
     });
   });
 

@@ -12,6 +12,9 @@ import StarBorderIcon from "@mui/icons-material/StarBorder";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { trpcClient } from "../../trpc/client";
 import { WorkspaceResponse } from "../../stores/ApiTypes";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 import { useNotificationStore } from "../../stores/NotificationStore";
 import { useFolderPicker } from "./useFolderPicker";
 import ConfirmDialog from "../dialogs/ConfirmDialog";
@@ -331,7 +334,7 @@ const WorkspacesManager: React.FC = () => {
         title="Remove this workspace?"
         content={
           <Text>
-            The workspace will be removed from NodeTool. The folder itself will
+            The workspace will be removed from {APP_DISPLAY_NAME}. The folder itself will
             not be deleted.
           </Text>
         }

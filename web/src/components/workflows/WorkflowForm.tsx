@@ -10,6 +10,9 @@ import { useNotificationStore } from "../../stores/NotificationStore";
 import { useDebouncedCallback } from "../../hooks/useDebouncedCallback";
 import WorkspaceSelect from "../workspaces/WorkspaceSelect";
 import { isProduction } from "../../lib/env";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 const workspacesEnabled = !isProduction;
 
@@ -112,6 +115,9 @@ interface WorkflowFormProps {
 }
 
 const WorkflowForm = ({ workflow, onClose, availableTags = [] }: WorkflowFormProps) => {
+  // === CUSTOM FORK START: Product Profile ===
+  const showWorkspaces = workspacesEnabled && !isChatAndAgentsHidden();
+  // === CUSTOM FORK END ===
   const [localWorkflow, setLocalWorkflow] = useState<Workflow>(workflow);
   const saveWorkflow = useWorkflowManager((state) => state.saveWorkflow);
   const getNodeStore = useWorkflowManager((state) => state.getNodeStore);
@@ -289,12 +295,12 @@ const WorkflowForm = ({ workflow, onClose, availableTags = [] }: WorkflowFormPro
 
       <FormSection label="Advanced" className="settings-section">
         <Caption sx={{ display: "block" }}>
-          {workspacesEnabled
+          {showWorkspaces
             ? "Advanced configuration for workspaces and API/tool usage"
             : "Advanced configuration for API/tool usage"}
         </Caption>
 
-        {workspacesEnabled && (
+        {showWorkspaces && (
           <WorkspaceSelect
             value={localWorkflow.workspace_id ?? undefined}
             onChange={handleWorkspaceChange}

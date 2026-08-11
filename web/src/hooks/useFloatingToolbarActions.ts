@@ -20,6 +20,10 @@ import { useBottomPanelStore } from "../stores/BottomPanelStore";
 import { usePanelStore } from "../stores/PanelStore";
 import { useMiniMapStore } from "../stores/MiniMapStore";
 import { useNotificationStore } from "../stores/NotificationStore";
+import { formatErrorMessage } from "../utils/errorHandling";
+// === CUSTOM FORK START: Product Profile ===
+import { isHiddenBottomPanelView } from "../custom/product-profile";
+// === CUSTOM FORK END ===
 
 export interface FloatingToolbarActions {
   handleRun: () => Promise<void>;
@@ -285,7 +289,7 @@ export const useFloatingToolbarActions = (): FloatingToolbarActions => {
     } catch (error) {
       console.error("Failed to save workflow:", error);
       addNotification({
-        content: `Failed to save workflow: ${error instanceof Error ? error.message : "Server unreachable"}`,
+        content: formatErrorMessage(error, "Failed to save workflow"),
         type: "error",
         alert: true
       });
@@ -333,6 +337,11 @@ export const useFloatingToolbarActions = (): FloatingToolbarActions => {
   }, [isMenuOpen, openNodeMenu, closeNodeMenu]);
 
   const handleToggleTrace = useCallback(() => {
+    // === CUSTOM FORK START: Product Profile ===
+    if (isHiddenBottomPanelView("trace")) {
+      return;
+    }
+    // === CUSTOM FORK END ===
     toggleBottomPanel("trace");
   }, [toggleBottomPanel]);
 

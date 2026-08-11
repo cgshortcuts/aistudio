@@ -179,6 +179,11 @@ import {
 } from "@nodetool-ai/agents";
 import { RunNodeTool } from "./agent/run-node-tool.js";
 import { createAssetModelInterface } from "./lib/asset-model-interface.js";
+import {
+  parkImageBatchJob,
+  readImageBatchStateFromJob,
+  recordImageBatchModelInterface
+} from "./lib/image-batch-job.js";
 import type { NodeMetadata, NodeRegistry } from "@nodetool-ai/node-sdk";
 import type { PythonBridge } from "@nodetool-ai/runtime";
 import { appRouter } from "./trpc/router.js";
@@ -186,6 +191,9 @@ import { createCallerFactory } from "./trpc/index.js";
 import type { HttpApiOptions } from "./http-api.js";
 import { getAssetFileName, retrieveAssetBytes } from "./lib/asset-paths.js";
 import { handleSdkV1LifecycleRpc } from "./sdk/sdk-lifecycle-rpc-handler.js";
+// === CUSTOM FORK START: Product Profile ===
+import { isAiStudioCustomerProduct } from "./aistudio-product-profile.js";
+// === CUSTOM FORK END ===
 
 const log = createLogger("nodetool.websocket.runner");
 const DATA_URI_PATTERN = /data:([^;,]+)?;base64,[A-Za-z0-9+/=\r\n]+/gi;
@@ -1035,6 +1043,7 @@ function createRuntimeContext(opts: {
     // Shared with MCP sessions and workflow runs (lib/asset-model-interface):
     // one persistence path, one home-folder default.
     createAsset: createAssetModelInterface,
+    recordImageBatch: recordImageBatchModelInterface,
     createMessage: async ({ userId, req }) => {
       // Persist an AgentNode thread message. `content` / `tool_calls` are stored
       // raw — the `content` column is a jsonText type that serializes them, so
@@ -4152,8 +4161,13 @@ export class UnifiedWebSocketRunner {
       // completed, and the replay-unavailable note rides alongside as an
       // `error` string explaining only the missing events.
       //
-      // Every other row status (queued, scheduled, running, recovering,
-      // suspended, paused) is reported as failed: nothing is left that could
+      // Suspended rows are durable by design (e.g. provider image Batch waiting
+      // on Check): echo them as suspended with the stored reason — never fail
+      // them. Reporting "failed" here made the editor toast a false failure
+      // while the Jobs queue still held a live suspended row.
+      //
+      // Every other in-flight row status (queued, scheduled, running,
+      // recovering, paused) is reported as failed: nothing is left that could
       // ever send this client another frame, and reporting the row as-is
       // parks the UI in a state that never settles — a `queued` row from a
       // dead connection's drained queue reads as "running" with a live Stop
@@ -4163,6 +4177,41 @@ export class UnifiedWebSocketRunner {
       // nor settled below.
       const row = (await Job.get(jobId)) as Job | null;
       const job = row && row.user_id === (this.userId ?? "1") ? row : null;
+      const batchState = job ? readImageBatchStateFromJob(job) : null;
+      if (
+        job &&
+        batchState &&
+        (job.status === "running" ||
+          job.status === "queued" ||
+          job.status === "scheduled" ||
+          job.status === "recovering" ||
+          job.status === "paused")
+      ) {
+        parkImageBatchJob(job, batchState);
+        try {
+          await job.save();
+        } catch (error) {
+          this.logError("image batch park on reconnect failed", error);
+        }
+      }
+      if (job?.status === "suspended") {
+        await this.sendMessage({
+          type: "job_update",
+          status: "suspended",
+          job_id: jobId,
+          workflow_id: workflowId ?? job.workflow_id ?? null,
+          message:
+            job.suspension_reason ??
+            "Workflow suspended — waiting for external input",
+          run_state: {
+            status: "suspended",
+            suspended_node_id: job.suspended_node_id,
+            suspension_reason: job.suspension_reason,
+            is_resumable: true
+          }
+        });
+        return;
+      }
       const settled =
         job != null &&
         (job.status === "completed" ||
@@ -4177,8 +4226,8 @@ export class UnifiedWebSocketRunner {
       // reattaches, and re-reports the same loss forever. A row claimed by
       // another instance is left alone: on a multi-instance deployment this
       // connection may simply have been balanced away from a run that is
-      // still executing. Suspended rows are durable by design — never touched.
-      if (job && !settled && job.status !== "suspended") {
+      // still executing.
+      if (job && !settled) {
         const instanceId = getInstanceId();
         const ownedHere =
           !job.runner_instance ||
@@ -5282,29 +5331,36 @@ export class UnifiedWebSocketRunner {
     // Assemble the fixed, always-on toolbelt. There is no per-message tool
     // selection anymore — the agent reasons over the full toolbelt and the
     // permission gate (below) governs execution.
-    registerBuiltinTools();
+    // === CUSTOM FORK START: Product Profile ===
+    const hideChatTools = isAiStudioCustomerProduct();
+    // === CUSTOM FORK END ===
+    if (!hideChatTools) {
+      registerBuiltinTools();
+    }
     // Google Workspace runs on the token from the user's Google sign-in, so it
     // only exists on deployments that have a login. Local mode never sees it.
     const googleWorkspace = isGoogleWorkspaceEnabled();
-    if (googleWorkspace) registerGoogleWorkspaceTools();
+    if (googleWorkspace && !hideChatTools) registerGoogleWorkspaceTools();
     const chatProviders = await this.getConfiguredProviders(userId);
-    const rawToolbelt: Tool[] = [
-      ...getAgentToolbelt(),
-      ...(googleWorkspace ? getGoogleWorkspaceTools() : []),
-      ...getAllMcpTools({
-        registry: this.nodeRegistry,
-        providers: chatProviders,
-        ...mcpToolHostDeps()
-      }),
-      new ListCollectionsTool(),
-      new QueryCollectionTool(),
-      new RunNodeTool((nodeType, inputs) =>
-        this.runSingleNode(nodeType, inputs, userId, threadId)
-      )
-    ];
+    const rawToolbelt: Tool[] = hideChatTools
+      ? []
+      : [
+          ...getAgentToolbelt(),
+          ...(googleWorkspace ? getGoogleWorkspaceTools() : []),
+          ...getAllMcpTools({
+            registry: this.nodeRegistry,
+            providers: chatProviders,
+            ...mcpToolHostDeps()
+          }),
+          new ListCollectionsTool(),
+          new QueryCollectionTool(),
+          new RunNodeTool((nodeType, inputs) =>
+            this.runSingleNode(nodeType, inputs, userId, threadId)
+          )
+        ];
     // GraphPlanner as a chat tool: builds a workflow graph from an objective
     // using the session's provider/model. Needs the in-process node registry.
-    if (this.nodeRegistry) {
+    if (!hideChatTools && this.nodeRegistry) {
       rawToolbelt.push(
         new PlanWorkflowGraphTool({
           provider,

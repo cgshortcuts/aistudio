@@ -1,3 +1,7 @@
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../custom/branding";
+// === CUSTOM FORK END ===
+
 export const isHuggingFaceProvider = (provider?: string): boolean => {
   if (!provider) {return false;}
   return (
@@ -108,7 +112,7 @@ export const formatGenericProviderName = (provider?: string): string => {
     "point-e": "Point-E",
     meshy: "Meshy AI",
     "meshy-ai": "Meshy AI",
-    nodetool: "NodeTool",
+    nodetool: APP_DISPLAY_NAME,
     rodin: "Rodin AI",
     "rodin-ai": "Rodin AI",
     mlx: "MLX"

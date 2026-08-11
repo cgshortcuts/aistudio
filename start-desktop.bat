@@ -7,6 +7,8 @@ REM   Run NodeTool as the Electron desktop app (dev mode).
 REM   Folder buttons and other desktop APIs work here — unlike start.bat (Brave).
 REM
 REM   Double-click or: start-desktop.bat
+REM   Customer product (no chat/agents) is the default.
+REM   Full product: start-desktop.bat full
 REM   Re-run to stop listeners on :3000 / :7777 and start again.
 
 echo NodeTool start-desktop.bat
@@ -89,6 +91,16 @@ if "%PORT%"=="" set "PORT=7777"
 if "%WEB_PORT%"=="" set "WEB_PORT=3000"
 if "%NT_WEB_DEV_SERVER_URL%"=="" set "NT_WEB_DEV_SERVER_URL=http://127.0.0.1:!WEB_PORT!"
 
+REM Unpackaged Electron stays "full" unless this is set. The usual desktop bat
+REM previews the customer product (no chat/agent). Pass "full" to see everything.
+if /i "%~1"=="full" (
+  set "AISTUDIO_PRODUCT=full"
+) else if /i "%~1"=="customer" (
+  set "AISTUDIO_PRODUCT=customer"
+) else if "%AISTUDIO_PRODUCT%"=="" (
+  set "AISTUDIO_PRODUCT=customer"
+)
+
 echo ==^> Stopping anything already on ports !PORT! and !WEB_PORT! ^(restart^)
 call :free_port !PORT!
 call :free_port !WEB_PORT!
@@ -98,6 +110,7 @@ call :kill_repo_electron
 echo ==^> Starting Electron desktop app ^(dev^)
 echo    Web UI:  !NT_WEB_DEV_SERVER_URL!
 echo    API:     http://127.0.0.1:!PORT!
+echo    Product: !AISTUDIO_PRODUCT!  ^(start-desktop.bat full  for chat/agents^)
 echo    Ctrl-C to stop.
 echo.
 echo    Optional: conda activate nodetool  ^(only needed for Python nodes^)

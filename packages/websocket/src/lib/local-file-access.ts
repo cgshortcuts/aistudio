@@ -122,6 +122,10 @@ export function localPathDenialMessage(reason: LocalPathDenial): string {
  * but the stat/stream that follows would traverse it. realpath runs against
  * the deepest existing ancestor so a not-yet-created leaf still gets its
  * parent chain verified.
+ *
+ * In the Electron desktop app (`NODETOOL_ELECTRON=1`) any absolute path is
+ * allowed except the sensitive denylist — the OS already scoped the user's
+ * file picks, and media often lives outside `$HOME` (e.g. `D:\Videos`).
  */
 export async function resolveLocalPath(
   userPath: string,
@@ -136,7 +140,9 @@ export async function resolveLocalPath(
     ? path.resolve(expanded)
     : path.resolve(roots[0], expanded);
 
-  if (!isWithinAnyRoot(resolved, roots)) {
+  const isElectronDesktop = process.env["NODETOOL_ELECTRON"] === "1";
+
+  if (!isElectronDesktop && !isWithinAnyRoot(resolved, roots)) {
     return { ok: false, reason: "outside_roots" };
   }
   if (isSensitivePath(resolved)) {
@@ -154,7 +160,7 @@ export async function resolveLocalPath(
       // Re-anchor the not-yet-resolved tail onto the real ancestor so a link
       // in the middle of the path can't smuggle the leaf out of the roots.
       const realResolved = path.join(real, path.relative(probe, resolved));
-      if (!isWithinAnyRoot(realResolved, resolvedRoots)) {
+      if (!isElectronDesktop && !isWithinAnyRoot(realResolved, resolvedRoots)) {
         return { ok: false, reason: "outside_roots" };
       }
       if (isSensitivePath(realResolved)) {

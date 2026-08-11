@@ -900,6 +900,8 @@ export interface JobResponse {
   cost?: number | null;
   suspended_node_id?: string | null;
   suspension_reason?: string | null;
+  /** Opaque suspend metadata — image Batch stores `{ kind: "image_batch", … }`. */
+  suspension_metadata?: Record<string, unknown> | null;
   error_message?: string | null;
   execution_strategy?: string | null;
   is_resumable?: boolean;

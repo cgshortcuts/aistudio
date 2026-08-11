@@ -61,7 +61,7 @@ describe("Logo", () => {
       />
     );
     // === CUSTOM FORK START: AiStudio Branding ===
-    const img = screen.getByAltText("AiStudio");
+    const img = screen.getByAltText("Ai Studio");
     expect(img).toBeInTheDocument();
     expect(img).toHaveAttribute("src", "/cgshortcuts-ai-logo-color.svg");
     // === CUSTOM FORK END ===
@@ -78,7 +78,7 @@ describe("Logo", () => {
         enableText
       />
     );
-    const text = screen.getByText(/NODE/);
+    const text = screen.getByText(/Ai/);
     expect(text).toBeInTheDocument();
   });
 });

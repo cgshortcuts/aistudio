@@ -31,6 +31,7 @@ import { useSelectionActions } from "./useSelectionActions";
 import { useNodeFocus } from "./useNodeFocus";
 import type { MenuEventData } from "../window";
 import { useSketchCanvasRefStore } from "../stores/sketch/SketchCanvasRefStore";
+import { formatErrorMessage } from "../utils/errorHandling";
 
 /**
  * Registers the node editor's keyboard shortcuts with KeyPressedStore, using the
@@ -263,7 +264,7 @@ export const useNodeEditorShortcuts = (
       } catch (error) {
         console.error("Failed to save workflow:", error);
         addNotification({
-          content: `Failed to save workflow: ${error instanceof Error ? error.message : "Server unreachable"}`,
+          content: formatErrorMessage(error, "Failed to save workflow"),
           type: "error",
           alert: true
         });

@@ -32,6 +32,9 @@ import { useDocumentUndoShortcuts } from "../hooks/useDocumentUndoShortcuts";
 import { useScriptAgentBridge } from "../hooks/script/useScriptAgentBridge";
 import { useAssembleScriptTimeline } from "../hooks/script/useAssembleScriptTimeline";
 import StudioShell from "./StudioShell";
+// === CUSTOM FORK START: Product Profile ===
+import { filterHiddenChatTabs } from "../custom/product-profile";
+// === CUSTOM FORK END ===
 
 type DockTab = "cast" | "assistant";
 
@@ -64,12 +67,16 @@ const StudioScriptPage = () => {
     useAssembleScriptTimeline();
 
   const dockTabs = useMemo(
-    () => [
-      { value: "cast", label: "Cast", icon: <GroupsIcon /> },
-      { value: "assistant", label: "Assistant", icon: <AutoAwesomeIcon /> }
-    ],
+    () =>
+      filterHiddenChatTabs([
+        { value: "cast", label: "Cast", icon: <GroupsIcon /> },
+        { value: "assistant", label: "Assistant", icon: <AutoAwesomeIcon /> }
+      ]),
     []
   );
+  const effectiveDockTab = dockTabs.some((t) => t.value === dockTab)
+    ? dockTab
+    : "cast";
 
   const createVideo = (
     <Tooltip
@@ -113,22 +120,24 @@ const StudioScriptPage = () => {
             borderLeft: `1px solid ${theme.vars.palette.divider}`
           }}
         >
-          <TabGroup
-            tabs={dockTabs}
-            value={dockTab}
-            onChange={(value) => setDockTab(value as DockTab)}
-            size="small"
-            fullWidth
-            sx={{
-              flexShrink: 0,
-              borderBottom: `1px solid ${theme.vars.palette.divider}`
-            }}
-          />
+          {dockTabs.length > 1 && (
+            <TabGroup
+              tabs={dockTabs}
+              value={effectiveDockTab}
+              onChange={(value) => setDockTab(value as DockTab)}
+              size="small"
+              fullWidth
+              sx={{
+                flexShrink: 0,
+                borderBottom: `1px solid ${theme.vars.palette.divider}`
+              }}
+            />
+          )}
           <FlexColumn
             fullWidth
             sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}
           >
-            {dockTab === "cast" ? (
+            {effectiveDockTab === "cast" ? (
               <ScriptCastPanel
                 scriptId={scriptId}
                 cast={cast}

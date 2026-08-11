@@ -288,12 +288,12 @@ export async function assertMetadataLoaded(page: Page): Promise<void> {
 }
 
 /**
- * Wait for the "Loading NodeTool…" overlay (shown until /api/nodes/metadata
+ * Wait for the "Loading Ai Studio…" overlay (shown until /api/nodes/metadata
  * resolves) to disappear, then a short network-idle + animation settle.
  */
 export async function waitForAppReady(page: Page): Promise<void> {
   const loadingOverlay = page.locator(
-    '[role="status"][aria-label="Loading NodeTool"]'
+    '[role="status"][aria-label="Loading Ai Studio"]'
   );
   if ((await loadingOverlay.count()) > 0) {
     await loadingOverlay

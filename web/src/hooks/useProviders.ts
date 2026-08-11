@@ -2,6 +2,9 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { trpc } from "../lib/trpc";
 import { ProviderInfo } from "../stores/ApiTypes";
+// === CUSTOM FORK START: product-profile ===
+import { visibleCustomerModelProviders } from "../custom/product-profile";
+// === CUSTOM FORK END ===
 
 interface UseProvidersResult {
   providers: ProviderInfo[];
@@ -27,8 +30,15 @@ export const useProviders = (): UseProvidersResult => {
     refetchOnWindowFocus: false
   });
 
+  // === CUSTOM FORK START: product-profile ===
+  const visibleProviders = useMemo(
+    () => visibleCustomerModelProviders(providers || EMPTY_PROVIDERS),
+    [providers]
+  );
+  // === CUSTOM FORK END ===
+
   return {
-    providers: providers || EMPTY_PROVIDERS,
+    providers: visibleProviders,
     isLoading,
     isFetching,
     error

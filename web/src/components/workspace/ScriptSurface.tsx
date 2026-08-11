@@ -28,6 +28,12 @@ import {
 import ScriptDocumentPane from "../script/ScriptDocumentPane";
 import ScriptCastPanel from "../script/ScriptCastPanel";
 import ScriptAgentPanel from "../script/ScriptAgentPanel";
+// === CUSTOM FORK START: Product Profile ===
+import {
+  filterHiddenChatTabs,
+  isChatAndAgentsHidden
+} from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 interface ScriptSurfaceProps {
   refId: string;
@@ -86,30 +92,40 @@ const ScriptSurface = ({ refId, mode, active }: ScriptSurfaceProps) => {
     setTabTitle(refId, "script", title || "Untitled script");
   }, [setTabTitle, refId, title]);
 
+  const hideChat = isChatAndAgentsHidden();
   const dockTabs = useMemo(
-    () => [
-      { value: "cast", label: "Cast", icon: <GroupsIcon /> },
-      { value: "assistant", label: "Assistant", icon: <AutoAwesomeIcon /> }
-    ],
-    []
+    () =>
+      filterHiddenChatTabs(
+        [
+          { value: "cast", label: "Cast", icon: <GroupsIcon /> },
+          { value: "assistant", label: "Assistant", icon: <AutoAwesomeIcon /> }
+        ],
+        hideChat
+      ),
+    [hideChat]
   );
 
-  const dockTabGroup = (
-    <TabGroup
-      tabs={dockTabs}
-      value={dockTab}
-      onChange={(value) => setDockTab(value as DockTab)}
-      size="small"
-      fullWidth
-      sx={{
-        flexShrink: 0,
-        borderBottom: `1px solid ${theme.vars.palette.divider}`
-      }}
-    />
-  );
+  const effectiveDockTab = dockTabs.some((t) => t.value === dockTab)
+    ? dockTab
+    : "cast";
+
+  const dockTabGroup =
+    dockTabs.length > 1 ? (
+      <TabGroup
+        tabs={dockTabs}
+        value={effectiveDockTab}
+        onChange={(value) => setDockTab(value as DockTab)}
+        size="small"
+        fullWidth
+        sx={{
+          flexShrink: 0,
+          borderBottom: `1px solid ${theme.vars.palette.divider}`
+        }}
+      />
+    ) : null;
 
   const dockPanel =
-    dockTab === "cast" ? (
+    effectiveDockTab === "cast" ? (
       <ScriptCastPanel scriptId={refId} cast={cast} readOnly={readOnly} />
     ) : (
       <ScriptAgentPanel scriptId={refId} />
@@ -141,14 +157,16 @@ const ScriptSurface = ({ refId, mode, active }: ScriptSurfaceProps) => {
               >
                 Cast
               </EditorButton>
-              <EditorButton
-                size="small"
-                variant="contained"
-                startIcon={<AutoAwesomeIcon fontSize="small" />}
-                onClick={() => openSheet("assistant")}
-              >
-                Assistant
-              </EditorButton>
+              {!hideChat && (
+                <EditorButton
+                  size="small"
+                  variant="contained"
+                  startIcon={<AutoAwesomeIcon fontSize="small" />}
+                  onClick={() => openSheet("assistant")}
+                >
+                  Assistant
+                </EditorButton>
+              )}
             </FlexRow>
             <MobileBottomSheet
               open={sheetOpen}

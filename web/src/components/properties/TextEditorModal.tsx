@@ -54,6 +54,9 @@ import type { LanguageModel, Message } from "../../stores/ApiTypes";
 import { useEditorMode } from "../../hooks/editor/useEditorMode";
 import { useFullscreenMode } from "../../hooks/editor/useFullscreenMode";
 import { useAssistantVisibility } from "../../hooks/editor/useAssistantVisibility";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 import { useModalResize } from "../../hooks/editor/useModalResize";
 import { useMonacoEditor } from "../../hooks/editor/useMonacoEditor";
 import { useEditorActions } from "../../hooks/editor/useEditorActions";
@@ -1172,7 +1175,8 @@ const TextEditorModal = ({
     : null;
   const languageLabel = LANGUAGE_LABELS[language] ?? language;
   const showVariablesPanel = variablesVisible && !focusMode;
-  const showAssistant = assistantVisible && !focusMode;
+  const hideChat = isChatAndAgentsHidden();
+  const showAssistant = assistantVisible && !focusMode && !hideChat;
 
   const content = (
     <div
@@ -1256,25 +1260,27 @@ const TextEditorModal = ({
                   <DownloadIcon />
                 </button>
               </Tooltip>
-              <Tooltip
-                delay={TOOLTIP_ENTER_DELAY}
-                title={assistantVisible ? "Hide Assistant" : "Show Assistant"}
-              >
-                <button
-                  type="button"
-                  className={`button ${assistantVisible ? "active" : ""}`}
-                  onClick={toggleAssistantVisible}
-                  aria-label={
-                    assistantVisible ? "Hide Assistant" : "Show Assistant"
-                  }
+              {!hideChat && (
+                <Tooltip
+                  delay={TOOLTIP_ENTER_DELAY}
+                  title={assistantVisible ? "Hide Assistant" : "Show Assistant"}
                 >
-                  {assistantVisible ? (
-                    <ChatBubbleIcon />
-                  ) : (
-                    <ChatBubbleOutlineIcon />
-                  )}
-                </button>
-              </Tooltip>
+                  <button
+                    type="button"
+                    className={`button ${assistantVisible ? "active" : ""}`}
+                    onClick={toggleAssistantVisible}
+                    aria-label={
+                      assistantVisible ? "Hide Assistant" : "Show Assistant"
+                    }
+                  >
+                    {assistantVisible ? (
+                      <ChatBubbleIcon />
+                    ) : (
+                      <ChatBubbleOutlineIcon />
+                    )}
+                  </button>
+                </Tooltip>
+              )}
               <Tooltip
                 delay={TOOLTIP_ENTER_DELAY}
                 title={focusMode ? "Exit focus mode" : "Focus mode (hide panels)"}

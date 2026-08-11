@@ -159,8 +159,11 @@ async function handleLocalFileStream(
  * JSON ops (list, info) have moved to the tRPC `files` router.
  */
 export async function handleFileRequest(request: Request): Promise<Response> {
-  // File browser exposes the local filesystem — disabled in production
-  if (process.env["NODETOOL_ENV"] === "production") {
+  // File browser exposes the local filesystem — disabled in cloud/production,
+  // but allowed in the Electron desktop app (NODETOOL_ELECTRON=1) where the
+  // user already has full local file access.
+  const isElectronDesktop = process.env["NODETOOL_ELECTRON"] === "1";
+  if (process.env["NODETOOL_ENV"] === "production" && !isElectronDesktop) {
     return errorResponse(403, "File browser is disabled in production");
   }
 

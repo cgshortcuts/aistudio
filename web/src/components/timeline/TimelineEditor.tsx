@@ -67,6 +67,9 @@ import { PreviewArea } from "./preview/PreviewArea";
 import { TimelineInspector } from "./Inspector/TimelineInspector";
 import TimelineAgentPanel from "./TimelineAgentPanel";
 import TimelineVersionHistoryPanel from "./TimelineVersionHistoryPanel";
+// === CUSTOM FORK START: Product Profile ===
+import { filterHiddenChatTabs } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 import { useTimelineAgentBridge } from "../../hooks/timeline/useTimelineAgentBridge";
 import { TranscriptPanel } from "./TranscriptPanel";
 import { useHasScript } from "../../hooks/timeline/useHasScript";
@@ -296,7 +299,10 @@ const InspectorRegion: React.FC<{ sequenceId: string | undefined }> = memo(
   const theme = useTheme();
   const [tab, setTab] = useState<InspectorTab>("inspector");
 
-  const tabs = INSPECTOR_TABS;
+  // === CUSTOM FORK START: Product Profile ===
+  const tabs = filterHiddenChatTabs(INSPECTOR_TABS);
+  const activeTab = tabs.some((t) => t.value === tab) ? tab : "inspector";
+  // === CUSTOM FORK END ===
 
   return (
     <FlexColumn
@@ -306,7 +312,7 @@ const InspectorRegion: React.FC<{ sequenceId: string | undefined }> = memo(
     >
       <TabGroup
         tabs={tabs}
-        value={tab}
+        value={activeTab}
         onChange={(value) => setTab(value as InspectorTab)}
         size="small"
         fullWidth
@@ -316,9 +322,9 @@ const InspectorRegion: React.FC<{ sequenceId: string | undefined }> = memo(
         }}
       />
       <FlexColumn fullWidth sx={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-        {tab === "inspector" ? (
+        {activeTab === "inspector" ? (
           <TimelineInspector />
-        ) : tab === "agent" ? (
+        ) : activeTab === "agent" ? (
           <TimelineAgentPanel />
         ) : (
           <TimelineVersionHistoryPanel sequenceId={sequenceId} />
@@ -366,12 +372,18 @@ const MobilePanelSheet: React.FC<{
 }> = memo(({ open, onClose, sequenceId, tab, onTabChange }) => {
   const hasScript = useHasScript();
   const tabs = useMemo(
-    () => (hasScript ? [...INSPECTOR_TABS, SCRIPT_TAB] : INSPECTOR_TABS),
+    () =>
+      filterHiddenChatTabs(
+        hasScript ? [...INSPECTOR_TABS, SCRIPT_TAB] : INSPECTOR_TABS
+      ),
     [hasScript]
   );
 
   // A sequence can lose its script while the Script tab is showing.
-  const activeTab = tab === "script" && !hasScript ? "inspector" : tab;
+  const activeTab =
+    (tab === "script" && !hasScript) || !tabs.some((t) => t.value === tab)
+      ? "inspector"
+      : tab;
 
   const tabRail = (
     <TabGroup

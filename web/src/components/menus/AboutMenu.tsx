@@ -8,6 +8,13 @@ import { VERSION, GIT_COMMIT_HASH, BUILD_NUMBER } from "../../config/constants";
 import { isElectron, isProduction } from "../../lib/env";
 import { useNotificationStore } from "../../stores/NotificationStore";
 import { FlexRow, FlexColumn, Text, Caption, LoadingSpinner, Chip, Box } from "../ui_primitives";
+// === CUSTOM FORK START: AiStudio Branding ===
+import {
+  APP_DISPLAY_NAME,
+  APP_GITHUB_OWNER,
+  APP_GITHUB_REPO
+} from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 // Note: This interface mirrors the SystemInfo type from window.d.ts
 // We use a local copy to avoid type export complexity
@@ -204,7 +211,7 @@ const AboutMenu: React.FC = memo(() => {
       return;
     }
 
-    const text = `NodeTool System Information
+    const text = `${APP_DISPLAY_NAME} System Information
 =============================
 Version: ${VERSION}
 Git Commit: ${GIT_COMMIT_HASH}
@@ -413,7 +420,7 @@ Ollama: ${systemInfo.ollamaInstalled ? systemInfo.ollamaVersion || "Installed" :
           }}
         >
           <a
-            href="https://github.com/nodetool-ai/nodetool"
+            href={`https://github.com/${APP_GITHUB_OWNER}/${APP_GITHUB_REPO}`}
             target="_blank"
             rel="noopener noreferrer"
             style={{
@@ -432,7 +439,7 @@ Ollama: ${systemInfo.ollamaInstalled ? systemInfo.ollamaVersion || "Installed" :
               textDecoration: "none"
             }}
           >
-            NodeTool Forum
+            Community Forum
           </a>
           <a
             href="https://nodetool.ai"

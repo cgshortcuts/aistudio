@@ -22,11 +22,17 @@ jest.mock("../../../lib/dragdrop", () => ({
   extractFiles: jest.fn(() => [])
 }));
 
+jest.mock("../../../utils/localFile", () => ({
+  getLocalFilePath: jest.fn(() => null),
+  pathToFileUri: jest.fn((path: string) => `file://${path}`)
+}));
+
 import {
   deserializeDragData,
   hasExternalFiles,
   extractFiles
 } from "../../../lib/dragdrop";
+import { getLocalFilePath } from "../../../utils/localFile";
 
 const mockDeserialize = deserializeDragData as jest.MockedFunction<
   typeof deserializeDragData
@@ -37,9 +43,13 @@ const mockHasExternalFiles = hasExternalFiles as jest.MockedFunction<
 const mockExtractFiles = extractFiles as jest.MockedFunction<
   typeof extractFiles
 >;
+const mockGetLocalFilePath = getLocalFilePath as jest.MockedFunction<
+  typeof getLocalFilePath
+>;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockGetLocalFilePath.mockReturnValue(null);
 });
 
 function createMockDragEvent(overrides?: Record<string, any>) {
@@ -260,5 +270,71 @@ describe("useFileDrop", () => {
         content: expect.stringContaining("image")
       })
     );
+  });
+
+  it("accepts video files with empty MIME via filename extension", () => {
+    mockDeserialize.mockReturnValue(null);
+    mockHasExternalFiles.mockReturnValue(true);
+    const mockFile = new File(["content"], "clip.mp4", { type: "" });
+    mockExtractFiles.mockReturnValue([mockFile]);
+
+    const { result } = renderHook(() =>
+      useFileDrop({
+        type: "video",
+        uploadAsset: true
+      })
+    );
+
+    act(() => {
+      result.current.onDrop(
+        createMockDragEvent({
+          dataTransfer: {
+            items: [],
+            files: { length: 1 },
+            getData: jest.fn(() => "")
+          }
+        })
+      );
+    });
+
+    expect(mockUploadAsset).toHaveBeenCalled();
+    const uploadedFile = mockUploadAsset.mock.calls[0][0].file as File;
+    expect(uploadedFile.name).toBe("clip.mp4");
+    expect(uploadedFile.type).toBe("video/mp4");
+  });
+
+  it("uses local file:// URI when onChangeLocalFile is provided", () => {
+    mockDeserialize.mockReturnValue(null);
+    mockHasExternalFiles.mockReturnValue(true);
+    const mockFile = new File(["content"], "clip.mp4", { type: "video/mp4" });
+    mockExtractFiles.mockReturnValue([mockFile]);
+    mockGetLocalFilePath.mockReturnValue("C:\\Videos\\clip.mp4");
+
+    const onChangeLocalFile = jest.fn();
+    const { result } = renderHook(() =>
+      useFileDrop({
+        type: "video",
+        uploadAsset: true,
+        onChangeLocalFile
+      })
+    );
+
+    act(() => {
+      result.current.onDrop(
+        createMockDragEvent({
+          dataTransfer: {
+            items: [],
+            files: { length: 1 },
+            getData: jest.fn(() => "")
+          }
+        })
+      );
+    });
+
+    expect(onChangeLocalFile).toHaveBeenCalledWith(
+      "file://C:\\Videos\\clip.mp4",
+      mockFile
+    );
+    expect(mockUploadAsset).not.toHaveBeenCalled();
   });
 });

@@ -222,6 +222,7 @@ describe("ImageGenerationNode", () => {
     const d = node.serialize();
     expect(d.prompt).toBe("");
     expect(d.model).toBe("gemini-3.1-flash-image");
+    expect(d.image).toEqual([]);
     expect(d.aspect_ratio).toBe("1:1");
     expect(d.resolution).toBe("1K");
   });
@@ -301,6 +302,50 @@ describe("ImageGenerationNode", () => {
       imageSize: "2K"
     });
     expect((result.output as Record<string, unknown>).data).toBe("imagedata");
+  });
+
+  it("sends multiple reference images as content parts", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        candidates: [
+          {
+            content: {
+              parts: [{ inlineData: { data: "composed" } }]
+            }
+          }
+        ]
+      })
+    });
+
+    const node = new ImageGenerationNode();
+    node.assign({
+      prompt: "combine these",
+      model: "gemini-3.1-flash-image",
+      image: [
+        { type: "image", data: Buffer.from("a").toString("base64") },
+        { type: "image", data: Buffer.from("b").toString("base64") }
+      ]
+    });
+    node.setDynamic("_secrets", { GEMINI_API_KEY: "test-key" });
+    await node.process();
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.contents[0].parts).toEqual([
+      { text: "combine these" },
+      {
+        inlineData: {
+          mimeType: "image/png",
+          data: Buffer.from("a").toString("base64")
+        }
+      },
+      {
+        inlineData: {
+          mimeType: "image/png",
+          data: Buffer.from("b").toString("base64")
+        }
+      }
+    ]);
   });
 
   it("handles PROHIBITED_CONTENT response", async () => {

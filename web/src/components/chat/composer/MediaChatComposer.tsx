@@ -94,6 +94,9 @@ import { StopGenerationButton } from "./StopGenerationButton";
 import PermissionSelector from "./PermissionSelector";
 import { useElapsedTime } from "../../../hooks/useElapsedTime";
 import { useAutoFocusEnabled } from "../../../hooks/useAutoFocusEnabled";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 function formatElapsed(seconds: number): string {
   if (seconds < 5) return "Starting…";
@@ -210,12 +213,41 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
   // workspace-aware Pi agent and routes sends through the agent socket.
   const globalMode = useGlobalChatStore((s) => s.mode);
   const setGlobalMode = useGlobalChatStore((s) => s.setMode);
+  // === CUSTOM FORK START: Product Profile ===
+  const hideChat = isChatAndAgentsHidden();
+  // === CUSTOM FORK END ===
 
   // Pure-chat panels force chat mode and ignore the global media/pi mode.
-  const mode = hideModePicker ? "chat" : storeMode;
-  const isPi = hideModePicker ? false : globalMode === "pi";
+  // Customer product has no chat/agent mode: treat a persisted "chat" as Image.
+  const mode = hideModePicker
+    ? "chat"
+    : hideChat && storeMode === "chat"
+      ? "image"
+      : storeMode;
+  const isPi = hideModePicker || hideChat ? false : globalMode === "pi";
 
   const addRecentModel = useModelPreferencesStore((s) => s.addRecent);
+
+  // === CUSTOM FORK START: Product Profile ===
+  useEffect(() => {
+    if (!hideChat || hideModePicker) {
+      return;
+    }
+    if (globalMode === "pi") {
+      setGlobalMode("chat");
+    }
+    if (storeMode === "chat") {
+      setMode("image");
+    }
+  }, [
+    hideChat,
+    hideModePicker,
+    globalMode,
+    storeMode,
+    setGlobalMode,
+    setMode
+  ]);
+  // === CUSTOM FORK END ===
 
   // When the selected mode's capability has no configured provider, surface a
   // setup banner and route the send into the provider-onboarding dialog
@@ -1084,7 +1116,7 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
                   setMode(m);
                   setGlobalMode("chat");
                 }}
-                showPi={piModeAvailable}
+                showPi={piModeAvailable && !hideChat}
                 piSelected={isPi}
                 onSelectPi={() => {
                   setMode("chat");

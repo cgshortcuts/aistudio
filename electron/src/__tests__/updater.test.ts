@@ -456,7 +456,7 @@ describe("Auto-updater Module", () => {
 
       await downloadedHandler({ version: "1.2.3" });
 
-      const clickHandler = clickHandlers["NodeTool Update Ready"];
+      const clickHandler = clickHandlers["Ai Studio Update Ready"];
       expect(clickHandler).toBeDefined();
 
       clickHandler();

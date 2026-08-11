@@ -1,6 +1,9 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import nodePath from "node:path";
 import { loadPythonPackageMetadata } from "@nodetool-ai/node-sdk";
+// === CUSTOM FORK START: Product Profile ===
+import { isAiStudioHiddenExampleRecord } from "./aistudio-product-profile.js";
+// === CUSTOM FORK END ===
 
 export interface ExampleWorkflowLoadOptions {
   examplesDir?: string;
@@ -149,18 +152,23 @@ export function loadExampleGraph(
   exampleRef: string,
   options: ExampleWorkflowLoadOptions = {}
 ): Record<string, unknown> | null {
+  let loaded: Record<string, unknown> | null = null;
   if (options.examplesDir && existsSync(options.examplesDir)) {
-    const fromDir = loadExampleGraphFromDir(options.examplesDir, exampleRef);
-    if (fromDir) {
-      return fromDir;
-    }
+    loaded = loadExampleGraphFromDir(options.examplesDir, exampleRef);
   }
-
-  if (packageName) {
-    return loadExampleGraphFromPythonPackage(packageName, exampleRef, options);
+  if (!loaded && packageName) {
+    loaded = loadExampleGraphFromPythonPackage(
+      packageName,
+      exampleRef,
+      options
+    );
   }
-
-  return null;
+  // === CUSTOM FORK START: Product Profile ===
+  if (loaded && isAiStudioHiddenExampleRecord(loaded)) {
+    return null;
+  }
+  // === CUSTOM FORK END ===
+  return loaded;
 }
 
 export function defaultExamplePackageName(

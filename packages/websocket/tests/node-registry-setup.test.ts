@@ -13,6 +13,10 @@ import {
   mergePythonBridgeMetadata,
   registerBuiltInNodes
 } from "../src/node-registry-setup.js";
+import {
+  AISTUDIO_PRODUCT_ENV,
+  applyAiStudioNodePolicy
+} from "../src/aistudio-product-profile.js";
 
 function allEnabled(): Record<string, boolean> {
   return Object.fromEntries(BUILTIN_NODE_PACKS.map((p) => [p.id, true]));
@@ -333,5 +337,52 @@ describe("applyCloudNodePolicy", () => {
     expect(registry.list()).toContain("nodetool.input.DocumentFileInput");
     applyCloudNodePolicy(registry);
     expectNoNativePathPickers(registry);
+  });
+});
+
+describe("applyAiStudioNodePolicy", () => {
+  const originalProduct = process.env[AISTUDIO_PRODUCT_ENV];
+
+  afterEach(() => {
+    if (originalProduct === undefined) delete process.env[AISTUDIO_PRODUCT_ENV];
+    else process.env[AISTUDIO_PRODUCT_ENV] = originalProduct;
+  });
+
+  function fullRegistry(): NodeRegistry {
+    const registry = new NodeRegistry();
+    registerBuiltInNodes(registry, {
+      enabledOverrides: Object.fromEntries(
+        BUILTIN_NODE_PACKS.map((p) => [p.id, true])
+      )
+    });
+    return registry;
+  }
+
+  it("is a no-op when the customer product is off", () => {
+    delete process.env[AISTUDIO_PRODUCT_ENV];
+    const registry = fullRegistry();
+    const before = registry.list();
+    expect(before.some((t) => t.startsWith("nodetool.agents."))).toBe(true);
+    applyAiStudioNodePolicy(registry);
+    expect(registry.list()).toEqual(before);
+  });
+
+  it("unregisters agent namespaces when AISTUDIO_PRODUCT=customer", () => {
+    process.env[AISTUDIO_PRODUCT_ENV] = "customer";
+    const registry = fullRegistry();
+    expect(registry.list()).toContain("nodetool.agents.ShellAgent");
+    applyAiStudioNodePolicy(registry);
+    const remaining = registry.list();
+    expect(remaining.some((t) => t.startsWith("nodetool.agents."))).toBe(false);
+    expect(remaining.some((t) => t.startsWith("openai.agents."))).toBe(false);
+    expect(remaining.some((t) => t.startsWith("nodetool.script."))).toBe(false);
+    expect(remaining.some((t) => t.startsWith("nodetool.workspace."))).toBe(
+      false
+    );
+    expect(remaining.some((t) => t.startsWith("vector."))).toBe(false);
+    expect(remaining.some((t) => t.startsWith("openai.text."))).toBe(false);
+    expect(remaining.some((t) => t.startsWith("nodetool.code."))).toBe(false);
+    expect(remaining.some((t) => t.startsWith("fal."))).toBe(true);
+    expect(remaining.some((t) => t.startsWith("openai.image."))).toBe(true);
   });
 });

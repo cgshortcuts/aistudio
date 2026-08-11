@@ -67,6 +67,7 @@ import {
   assetsToPreviewValue,
   useNodeResultHistory
 } from "../../hooks/nodes/useNodeResultHistory";
+import { isImageBatchPreviewValue } from "../../utils/imageBatch";
 import { useNodes } from "../../contexts/NodeContext";
 import { useConnectedEdgesSelector } from "../../hooks/nodes/useConnectedEdges";
 
@@ -688,16 +689,19 @@ const ContentCardBodyInner: React.FC<ContentCardBodyProps> = ({
   // the indexed history asset.
   const liveResolvedResult = useMemo(() => {
     if (result === undefined) return undefined;
-    return resolvePreviewValue(result, primaryOutput?.name);
+    if (isImageBatchPreviewValue(result)) return undefined;
+    const resolved = resolvePreviewValue(result, primaryOutput?.name);
+    if (isImageBatchPreviewValue(resolved)) return undefined;
+    return resolved;
   }, [result, primaryOutput?.name]);
 
   // Fallback for non-media variants (text/generic) where there's no history
   // navigator: show the latest job's saved assets when the in-memory result
   // is gone after a page reload.
   const fallbackPreviewValue = useMemo(() => {
-    if (result !== undefined) return liveResolvedResult;
+    if (liveResolvedResult !== undefined) return liveResolvedResult;
     return assetsToPreviewValue(lastJobAssets);
-  }, [result, liveResolvedResult, lastJobAssets]);
+  }, [liveResolvedResult, lastJobAssets]);
 
   const isMediaVariant = MEDIA_VARIANTS.includes(variant);
   // Only nodes that persist their outputs have a gallery to browse. Media

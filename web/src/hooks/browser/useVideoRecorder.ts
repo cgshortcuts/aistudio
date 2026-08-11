@@ -20,6 +20,10 @@ export interface VideoRecorderReturn {
   isRecording: boolean;
   isPreviewing: boolean;
   isLoading: boolean;
+  /** False until the user opts into camera access. */
+  isCameraEnabled: boolean;
+  enableCamera: () => void;
+  disableCamera: () => void;
   startPreview: () => Promise<void>;
   stopStream: () => void;
   videoInputDevices: VideoDevice[];
@@ -30,6 +34,22 @@ export interface VideoRecorderReturn {
   selectedAudioDeviceId: string;
   handleVideoDeviceChange: (deviceId: string) => void;
   handleAudioDeviceChange: (deviceId: string) => void;
+}
+
+const NO_VIDEO_DEVICES_MESSAGE = "No video input devices found.";
+
+export { NO_VIDEO_DEVICES_MESSAGE };
+
+function isDeviceNotFoundError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const name = "name" in error ? String((error as { name?: string }).name) : "";
+  return (
+    name === "NotFoundError" ||
+    /requested device not found/i.test(error.message) ||
+    /device not found/i.test(error.message)
+  );
 }
 
 export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<VideoRecorderReturn> {
@@ -45,6 +65,7 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const [isPreviewing, setIsPreviewing] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isCameraEnabled, setIsCameraEnabled] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [videoInputDevices, setVideoInputDevices] = useState<VideoDevice[]>([]);
   const [audioInputDevices, setAudioInputDevices] = useState<VideoDevice[]>([]);
@@ -52,6 +73,8 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
     useState<string>("");
   const [selectedAudioDeviceId, setSelectedAudioDeviceId] =
     useState<string>("");
+  const [isDeviceListVisible, setIsDeviceListVisible] =
+    useState<boolean>(false);
 
   const fetchDevices = useCallback(() => {
     if (!navigator.mediaDevices) {
@@ -62,8 +85,9 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
     const abortCtrl = new AbortController();
     abortControllerRef.current = abortCtrl;
 
+    // Prefer video-only for enumeration so a missing mic does not block camera use.
     navigator.mediaDevices
-      .getUserMedia({ video: true, audio: true })
+      .getUserMedia({ video: true })
       .then((stream) => {
         if (abortCtrl.signal.aborted) {
           stream.getTracks().forEach((track) => track.stop());
@@ -75,7 +99,7 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
       })
       .then((devices) => {
         if (!devices) {
-          setError("No devices found");
+          setError(NO_VIDEO_DEVICES_MESSAGE);
           return;
         }
         const videoInputs = devices.filter(
@@ -165,17 +189,23 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
         });
 
         if (videoInputs.length === 0) {
-          setTimeout(() => {
-            setError("No video input devices found");
-          }, 2000);
+          setError(NO_VIDEO_DEVICES_MESSAGE);
         }
       })
       .catch((fetchError) => {
         if (fetchError.name === "AbortError") {
           console.info("Fetch aborted");
-        } else {
-          setError(`Error enumerating devices: ${fetchError.message}`);
+          return;
         }
+        if (isDeviceNotFoundError(fetchError)) {
+          setError(NO_VIDEO_DEVICES_MESSAGE);
+          return;
+        }
+        const message =
+          fetchError instanceof Error
+            ? fetchError.message
+            : "Failed to access camera";
+        setError(message);
       });
   }, []);
 
@@ -190,6 +220,29 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
     setIsPreviewing(false);
   }, []);
 
+  const enableCamera = useCallback(() => {
+    setIsCameraEnabled(true);
+    setError(null);
+    fetchDevices();
+  }, [fetchDevices]);
+
+  const disableCamera = useCallback(() => {
+    if (mediaRecorderRef.current?.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    stopStream();
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsCameraEnabled(false);
+    setIsDeviceListVisible(false);
+    setIsRecording(false);
+    setError(null);
+    setVideoInputDevices([]);
+    setAudioInputDevices([]);
+  }, [stopStream]);
+
   const startPreview = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -201,7 +254,7 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
           : true,
         audio: selectedAudioDeviceId
           ? { deviceId: { exact: selectedAudioDeviceId } }
-          : true
+          : audioInputDevices.length > 0
       };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -216,14 +269,18 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
       setIsPreviewing(true);
       setIsLoading(false);
     } catch (previewError) {
-      const errorMessage =
-        previewError instanceof Error
-          ? previewError.message
-          : "Failed to start preview";
-      setError(errorMessage);
+      if (isDeviceNotFoundError(previewError)) {
+        setError(NO_VIDEO_DEVICES_MESSAGE);
+      } else {
+        const errorMessage =
+          previewError instanceof Error
+            ? previewError.message
+            : "Failed to start preview";
+        setError(errorMessage);
+      }
       setIsLoading(false);
     }
-  }, [selectedVideoDeviceId, selectedAudioDeviceId]);
+  }, [selectedVideoDeviceId, selectedAudioDeviceId, audioInputDevices.length]);
 
   const handleRecord = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {
@@ -300,8 +357,6 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
   ]);
 
   useEffect(() => {
-    fetchDevices();
-
     return () => {
       if (mediaRecorderRef.current) {
         if (mediaRecorderRef.current.state === "recording") {
@@ -314,15 +369,14 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
         abortControllerRef.current = null;
       }
     };
-  }, [fetchDevices, stopStream]);
-
-  const [isDeviceListVisible, setIsDeviceListVisible] =
-    useState<boolean>(false);
+  }, [stopStream]);
 
   const toggleDeviceListVisibility = useCallback(() => {
     setIsDeviceListVisible((prevState) => !prevState);
-    fetchDevices();
-  }, [fetchDevices]);
+    if (isCameraEnabled) {
+      fetchDevices();
+    }
+  }, [fetchDevices, isCameraEnabled]);
 
   const handleVideoDeviceChange = useCallback((deviceId: string) => {
     setSelectedVideoDeviceId(deviceId);
@@ -340,6 +394,9 @@ export function useVideoRecorder({ onChange }: VideoRecorderProps): Readonly<Vid
     isRecording,
     isPreviewing,
     isLoading,
+    isCameraEnabled,
+    enableCamera,
+    disableCamera,
     startPreview,
     stopStream,
     videoInputDevices,

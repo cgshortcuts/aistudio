@@ -8,6 +8,7 @@ import {
   useLanguageModelProviders,
   useTTSProviders
 } from "../useProviders";
+import * as runtimeConfig from "../../lib/runtimeConfig";
 
 jest.mock("../../lib/trpc", () => ({
   trpc: {
@@ -67,6 +68,46 @@ describe("useProviders", () => {
 
       expect(result.current.providers).toEqual(mockProviders);
       expect(result.current.error).toBeNull();
+    });
+
+    it("drops Codex and LM Studio when chat and agents are hidden", async () => {
+      const current = runtimeConfig.getRuntimeConfig();
+      const spy = jest.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue({
+        ...current,
+        hideChatAndAgents: true
+      });
+      mockQuery.mockResolvedValueOnce([
+        {
+          provider: "fal_ai",
+          capabilities: ["text_to_image"]
+        },
+        {
+          provider: "codex",
+          capabilities: ["generate_message", "text_to_image"]
+        },
+        {
+          provider: "lmstudio",
+          capabilities: ["generate_message"]
+        },
+        {
+          provider: "openai",
+          capabilities: ["text_to_image"]
+        }
+      ] as never);
+
+      const { result } = renderHook(() => useProviders(), {
+        wrapper: createWrapper()
+      });
+
+      await waitFor(() => {
+        expect(result.current.isLoading).toBe(false);
+      });
+
+      expect(result.current.providers.map((p) => p.provider)).toEqual([
+        "fal_ai",
+        "openai"
+      ]);
+      spy.mockRestore();
     });
 
     it("returns empty array when no providers", async () => {

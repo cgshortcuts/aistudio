@@ -160,11 +160,13 @@ const Logo = memo(function Logo({
         <div className="nt" onMouseEnter={handleMouseEnter} aria-hidden="true">
           <div className="nodetool" aria-hidden="true">
             {!singleLine && (
+              // === CUSTOM FORK START: AiStudio Branding ===
               <>
-                {"NODE"}
+                {"Ai"}
                 <br />
-                {"TOOL"}
+                {"Studio"}
               </>
+              // === CUSTOM FORK END ===
             )}
           </div>
         </div>

@@ -19,6 +19,9 @@
  */
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+// === CUSTOM FORK START: Product Profile ===
+import { isAiStudioCustomerProduct } from "./aistudio-product-profile.js";
+// === CUSTOM FORK END ===
 import { z } from "zod";
 import type { JsonSchema, ProcessingContext } from "@nodetool-ai/runtime";
 import { ProcessingContext as ProcessingContextImpl } from "@nodetool-ai/runtime";
@@ -58,6 +61,7 @@ import {
 import { join } from "node:path";
 import { getAssetAdapter } from "./lib/storage.js";
 import { createAssetModelInterface } from "./lib/asset-model-interface.js";
+import { recordImageBatchModelInterface } from "./lib/image-batch-job.js";
 import type { McpServerOptions } from "./mcp-server.js";
 
 export type FrontendDocumentToolExecutor = (
@@ -105,6 +109,7 @@ function buildAgentToolContext(userId: string): ProcessingContext {
   });
   context.setModelInterfaces({
     createAsset: createAssetModelInterface,
+    recordImageBatch: recordImageBatchModelInterface,
     getAssetInfo: async ({ userId, assetId }) => {
       const asset = await Asset.find(userId, assetId);
       if (!asset) return null;
@@ -364,6 +369,12 @@ export function registerAgentMcpTools(
     );
     return;
   }
+  // === CUSTOM FORK START: Product Profile ===
+  if (isAiStudioCustomerProduct()) {
+    log.info("Agent MCP tools not registered: AiStudio customer product");
+    return;
+  }
+  // === CUSTOM FORK END ===
   const context = buildAgentToolContext(scope.userId);
 
   // Populated lazily on first `find_model` call — provider probing hits the

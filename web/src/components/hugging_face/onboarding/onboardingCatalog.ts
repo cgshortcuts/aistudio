@@ -13,6 +13,9 @@
  * a genuine {@link UnifiedModel} the download service understands.
  */
 import type { UnifiedModel } from "../../../stores/ApiTypes";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../../custom/branding";
+// === CUSTOM FORK END ===
 
 /** What a model is for — drives the capability grouping in the UI. */
 export type OnboardingCapability =
@@ -67,7 +70,7 @@ export const ONBOARDING_ENGINES: readonly OnboardingEngine[] = [
     tagline: "One-click local LLMs",
     formats: ["GGUF"],
     description:
-      "Run chat and reasoning models locally after installing Ollama from ollama.com. NodeTool talks to it at localhost:11434 — it is not shipped inside the desktop app.",
+      `Run chat and reasoning models locally after installing Ollama from ollama.com. ${APP_DISPLAY_NAME} talks to it at localhost:11434 — it is not shipped inside the desktop app.`,
     docsUrl: "https://ollama.com"
   },
   {
@@ -76,7 +79,7 @@ export const ONBOARDING_ENGINES: readonly OnboardingEngine[] = [
     tagline: "GGUF models in-process",
     formats: ["GGUF"],
     description:
-      "Runs GGUF language models directly inside the NodeTool backend — no separate server. Install from Package Manager → Software → AI libraries. On Windows the download is large (~640 MB).",
+      `Runs GGUF language models directly inside the ${APP_DISPLAY_NAME} backend — no separate server. Install from Package Manager → Software → AI libraries. On Windows the download is large (~640 MB).`,
     runtimeId: "node-llama-cpp",
     docsUrl: "https://github.com/withcatai/node-llama-cpp"
   },
@@ -263,7 +266,7 @@ export const ONBOARDING_MODELS: readonly OnboardingModel[] = [
   ollama(
     "gpt-oss:20b",
     "GPT-OSS 20B",
-    "OpenAI's open-weight reasoning model. NodeTool's default local chat model.",
+    `OpenAI's open-weight reasoning model. ${APP_DISPLAY_NAME}'s default local chat model.`,
     14.0,
     16,
     "chat",

@@ -1,6 +1,11 @@
 import { BaseNode, prop } from "@nodetool-ai/node-sdk";
 import { tagAsServer } from "@nodetool-ai/nodes-utils";
-import { safeFetch } from "@nodetool-ai/runtime";
+import {
+  GeminiProvider,
+  safeFetch,
+  type ProcessingContext
+} from "@nodetool-ai/runtime";
+import { awaitImageBatchOrSuspend } from "../lib/image-batch.js";
 
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -24,10 +29,25 @@ function getImageBytes(image: Record<string, unknown>): Uint8Array | null {
   if (typeof image.data === "string" && image.data.length > 0) {
     return Uint8Array.from(Buffer.from(image.data, "base64"));
   }
-  if (image.data instanceof Uint8Array) {
+  if (image.data instanceof Uint8Array && image.data.length > 0) {
     return image.data;
   }
   return null;
+}
+
+/**
+ * Accept a list[image] (or a legacy single ImageRef) and return non-empty
+ * inline byte buffers for Gemini content parts / Batch requests.
+ */
+function collectImageBytes(value: unknown): Uint8Array[] {
+  const items = Array.isArray(value) ? value : value != null ? [value] : [];
+  const out: Uint8Array[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const bytes = getImageBytes(item as Record<string, unknown>);
+    if (bytes) out.push(bytes);
+  }
+  return out;
 }
 
 function isRefSet(ref: unknown): boolean {
@@ -226,7 +246,7 @@ export class ImageGenerationNode extends BaseNode {
   static readonly inlineFields = [];
   static readonly inputFields = ["prompt", "image"];
   static readonly description =
-    "Generate an image using Google's Imagen model via the Gemini API.\n    google, image generation, ai, imagen\n\n    Use cases:\n    - Create images from text descriptions\n    - Generate assets for creative projects\n    - Explore AI-powered image synthesis";
+    "Generate an image using Google's Gemini / Imagen models.\n    google, image generation, ai, imagen, nano banana, batch\n\n    Use cases:\n    - Create images from text descriptions\n    - Edit or compose from one or more reference images (gemini-* models)\n    - Generate assets for creative projects\n\n    Wire a list[image] (or a single Image, auto-wrapped) as references — gemini-* models accept multiple. Enable Use Batch on gemini-* models for ~50% off (slower — waits in the provider queue). Reference images are included in Batch.";
   static readonly metadataOutputTypes = {
     output: "image"
   };
@@ -256,16 +276,11 @@ export class ImageGenerationNode extends BaseNode {
   declare model: any;
 
   @prop({
-    type: "image",
-    default: {
-      type: "image",
-      uri: "",
-      asset_id: null,
-      data: null,
-      metadata: null
-    },
-    title: "Image",
-    description: "The image to use as a base for the generation."
+    type: "list[image]",
+    default: [],
+    title: "Images",
+    description:
+      "Optional reference images for gemini-* models (text-to-image when empty). Accepts a list, or a single Image (auto-wrapped). Imagen models ignore this input."
   })
   declare image: any;
 
@@ -302,21 +317,62 @@ export class ImageGenerationNode extends BaseNode {
   })
   declare resolution: any;
 
-  async process(): Promise<Record<string, unknown>> {
+  @prop({
+    type: "bool",
+    default: false,
+    title: "Use Batch",
+    description:
+      "Submit via the Gemini Batch API (~50% off). Polls for 5 minutes in-run, then keeps checking until the image is ready. Supported for gemini-* image models only."
+  })
+  declare use_batch: any;
+
+  async process(context?: ProcessingContext): Promise<Record<string, unknown>> {
     const apiKey = getGeminiApiKey(this._secrets);
     const prompt = String(this.prompt ?? "");
     const model = String(this.model ?? "gemini-3.1-flash-image");
-    const image = (this.image ?? {}) as Record<string, unknown>;
+    const referenceImages = collectImageBytes(this.image);
     const aspectRatio = String(this.aspect_ratio ?? "1:1");
     const resolution = String(this.resolution ?? "1K");
+    const useBatch = Boolean(this.use_batch);
 
     if (!prompt) throw new Error("The input prompt cannot be empty.");
+
+    if (useBatch) {
+      if (!model.startsWith("gemini-")) {
+        throw new Error(
+          "Use Batch is only supported for gemini-* image models (not imagen-*)."
+        );
+      }
+      const provider = new GeminiProvider({ GEMINI_API_KEY: apiKey });
+      const nodeId = String(this.__node_id ?? "");
+      const images = await awaitImageBatchOrSuspend({
+        provider,
+        providerId: "gemini",
+        nodeId,
+        params: {
+          model,
+          requests: [
+            {
+              prompt,
+              aspectRatio,
+              resolution,
+              ...(referenceImages.length > 0 ? { images: referenceImages } : {})
+            }
+          ]
+        },
+        onSubmitted: (state) => context?.recordImageBatch(nodeId, { ...state })
+      });
+      const bytes = images[0];
+      if (!bytes) throw new Error("Image batch returned no image");
+      return {
+        output: { type: "image", data: Buffer.from(bytes).toString("base64") }
+      };
+    }
 
     if (model.startsWith("gemini-")) {
       const contentParts: Array<Record<string, unknown>> = [{ text: prompt }];
 
-      const imageBytes = getImageBytes(image);
-      if (imageBytes) {
+      for (const imageBytes of referenceImages) {
         contentParts.push({
           inlineData: {
             mimeType: "image/png",

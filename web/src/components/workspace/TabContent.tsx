@@ -1,7 +1,10 @@
 import React, { Suspense } from "react";
 import type { WorkspaceTab } from "../../stores/WorkspaceTabsStore";
-import { LoadingSpinner } from "../ui_primitives";
+import { FlexColumn, LoadingSpinner, Text } from "../ui_primitives";
 import { isPageTabKey } from "./pageTabs";
+// === CUSTOM FORK START: Product Profile ===
+import { isHiddenWorkspaceTabType } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 // One surface per document type, each behind its own chunk. Imported eagerly
 // they landed in the workspace chunk together — opening the app downloaded the
@@ -26,7 +29,27 @@ interface TabContentProps {
   active: boolean;
 }
 
+// === CUSTOM FORK START: Product Profile ===
+const HIDDEN_TAB_LABEL: Record<string, string> = {
+  chat: "Chat",
+  storyboard: "Storyboard",
+  script: "Script"
+};
+// === CUSTOM FORK END ===
+
 const surfaceFor = (tab: WorkspaceTab, active: boolean) => {
+  // === CUSTOM FORK START: Product Profile ===
+  if (isHiddenWorkspaceTabType(tab.type)) {
+    return (
+      <FlexColumn fullWidth fullHeight align="center" justify="center">
+        <Text color="secondary">
+          {HIDDEN_TAB_LABEL[tab.type] ?? "This surface"} is not available in
+          this product.
+        </Text>
+      </FlexColumn>
+    );
+  }
+  // === CUSTOM FORK END ===
   switch (tab.type) {
     case "workflow":
       return <WorkflowEditorSurface workflowId={tab.ref} active={active} />;

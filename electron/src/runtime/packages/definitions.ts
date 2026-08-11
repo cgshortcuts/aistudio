@@ -4,6 +4,9 @@ import { CondaRuntimePackage } from "./CondaRuntimePackage";
 import { NpmRuntimePackage } from "./NpmRuntimePackage";
 import { ElectronRuntimePackage } from "./ElectronRuntimePackage";
 import type { RuntimePackage } from "./types";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 /** Concrete runtime package definitions. */
 export const RUNTIME_PACKAGES: Record<RuntimePackageId, RuntimePackage> = {
@@ -199,7 +202,7 @@ export const RUNTIME_PACKAGES: Record<RuntimePackageId, RuntimePackage> = {
     id: "node-llama-cpp",
     name: "llama.cpp (in-process)",
     description:
-      "Runs GGUF models inside the NodeTool server — no separate llama.cpp server. Click Install and watch the console at the top of this list; on Windows/Linux the download is ~640 MB (CPU + Vulkan + CUDA builds) and can take several minutes.",
+      `Runs GGUF models inside the ${APP_DISPLAY_NAME} server — no separate llama.cpp server. Click Install and watch the console at the top of this list; on Windows/Linux the download is ~640 MB (CPU + Vulkan + CUDA builds) and can take several minutes.`,
     category: "library",
     versionRange: "3.x",
     npmPackages: ["node-llama-cpp@3.19.1"],

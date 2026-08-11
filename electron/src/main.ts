@@ -63,7 +63,7 @@ import { IpcChannels } from "./types.d";
 import { updateSetting, readSettingsAsync } from "./settings";
 import { isElectronDevMode, getWebDevServerUrl } from "./devMode";
 // === CUSTOM FORK START: AiStudio Branding ===
-import { APP_DISPLAY_NAME, APP_ID } from "./custom/branding";
+import { APP_DISPLAY_NAME, APP_PRODUCT_NAME, APP_ID } from "./custom/branding";
 // === CUSTOM FORK END ===
 
 async function initializeBackendServerWithKeychainRetry(): Promise<void> {
@@ -482,7 +482,7 @@ let isInitialized = false;
 
 app.on("ready", async () => {
   // === CUSTOM FORK START: AiStudio Branding ===
-  app.setName(APP_DISPLAY_NAME);
+  app.setName(APP_PRODUCT_NAME);
   if (process.platform === "win32") {
     app.setAppUserModelId(APP_ID);
   }

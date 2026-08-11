@@ -39,7 +39,7 @@ Applied in priority order, recorded per app as C1/C2/C3:
 | Model Arena | Model Arena | `compare` | TextInput, Columns, Markdown ×3 | C1 C2 | OpenAI + Anthropic + Gemini keys |
 | Dataset Builder | Data Generator | `generate` | TextInput, NumberInput, Table | C1 | OpenAI |
 
-Nine of eleven bind more than one workflow. Two are usable with no cloud key
+Eleven curated apps. Nine of them bind more than one workflow. Two are usable with no cloud key
 (`Photo Studio`'s `enhance`, `Ask Your Documents` in local mode).
 
 ## Per-app detail

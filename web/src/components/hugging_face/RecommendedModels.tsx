@@ -11,6 +11,9 @@ import {
   openOllamaPath
 } from "../../utils/fileExplorer";
 import { isLocalhost } from "../../lib/env";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 import { useHfCacheStatusStore } from "../../stores/HfCacheStatusStore";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -168,7 +171,7 @@ const RecommendedModelsInner: React.FC<RecommendedModelsProps> = ({
       >
         Gated or private Hugging Face models need access on huggingface.co (accept
         the license or request access) plus a read token for the server process:
-        set HF_TOKEN before starting NodeTool, or run huggingface-cli login once.
+        set HF_TOKEN before starting {APP_DISPLAY_NAME}, or run huggingface-cli login once.
         If a download fails, open the progress panel and use Copy message to share
         the details.
       </Text>

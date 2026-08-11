@@ -12,6 +12,9 @@ import MenuBookIcon from "@mui/icons-material/MenuBook";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutline";
 import CardGiftcardIcon from "@mui/icons-material/CardGiftcard";
 import ShieldIcon from "@mui/icons-material/Shield";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 import useSecretsStore from "../../stores/SecretsStore";
 import type { SecretValidation } from "../../stores/SecretsStore";
@@ -471,7 +474,7 @@ const ProviderHero = memo(function ProviderHero({ theme }: { theme: Theme }) {
           Models &amp; Providers
         </Text>
         <Caption sx={{ opacity: 0.65, lineHeight: 1.5, maxWidth: 520 }}>
-          Connect the AI providers you want to use. NodeTool unlocks their
+          Connect the AI providers you want to use. {APP_DISPLAY_NAME} unlocks their
           language, image, video, audio, and embedding models across the editor
           and your workflows.
         </Caption>

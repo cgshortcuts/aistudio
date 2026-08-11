@@ -572,4 +572,17 @@ describe("displayableGenerations", () => {
       "err-with-output"
     ]);
   });
+
+  it("drops a suspend payload that is only image-batch metadata", () => {
+    const list = [
+      g("ok", "completed", { output: { type: "image", uri: "x.png" } }),
+      g("batch", "completed", {
+        kind: "image_batch",
+        provider: "gemini",
+        batchId: "b1",
+        model: "gemini-3.1-flash-image"
+      })
+    ];
+    expect(displayableGenerations(list).map((x) => x.id)).toEqual(["ok"]);
+  });
 });

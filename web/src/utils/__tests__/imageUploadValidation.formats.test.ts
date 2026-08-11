@@ -157,7 +157,7 @@ describe("imageUploadValidation (formats)", () => {
       expect(prepared.file).toBe(file);
     });
 
-    it("returns application/octet-stream when file has no declared MIME", async () => {
+    it("returns application/octet-stream when file has no declared MIME and no extension", async () => {
       const file = new File([RANDOM_BYTES], "noext", { type: "" });
 
       const prepared = await prepareUploadFile(file, "file");
@@ -165,6 +165,15 @@ describe("imageUploadValidation (formats)", () => {
       expect(prepared.finalMime).toBe("application/octet-stream");
       expect(prepared.sniffedMime).toBeNull();
       expect(prepared.declaredMime).toBe("");
+    });
+
+    it("infers video/mp4 from filename when MIME is empty", async () => {
+      const file = new File([RANDOM_BYTES], "clip.mp4", { type: "" });
+
+      const prepared = await prepareUploadFile(file, "file");
+
+      expect(prepared.finalMime).toBe("video/mp4");
+      expect(prepared.file.type).toBe("video/mp4");
     });
 
     it("does not throw for empty file", async () => {

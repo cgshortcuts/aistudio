@@ -14,6 +14,9 @@ import { getTorchIndexUrl } from "./torchPlatformCache";
 // without dragging the @nodetool-ai/runtime barrel (and every provider's
 // heavy SDK) into the main process.
 import { MIN_NODETOOL_CORE_VERSION } from "@nodetool-ai/protocol/bridge-protocol";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 /**
  * Python environment manager for the Electron shell.
@@ -295,7 +298,7 @@ function normalizePythonPackageName(packageName: string): string {
 async function installRequiredPythonPackages(
   additionalPackages: string[] = []
 ): Promise<void> {
-  emitBootMessage("Installing Nodetool Python packages...");
+  emitBootMessage(`Installing ${APP_DISPLAY_NAME} Python packages...`);
 
   const uvExecutable = getUVPath();
 

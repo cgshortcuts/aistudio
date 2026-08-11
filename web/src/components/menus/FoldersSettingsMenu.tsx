@@ -23,6 +23,12 @@ import { isElectron } from "../../utils/browser";
 import { isLocalhost } from "../../lib/env";
 import { NavButton, NodeTextField, ToolbarIconButton } from "../ui_primitives";
 import { SettingWithValue } from "../../stores/RemoteSettingStore";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 interface FolderButtonProps {
   label: string;
@@ -202,15 +208,15 @@ const FoldersSettings = () => {
                 System Folders
               </Text>
               <Text className="description" sx={{ mb: 2 }}>
-                Open important Nodetool directories in your file explorer.
+                Open important {APP_DISPLAY_NAME} directories in your file explorer.
               </Text>
               <FlexColumn gap={1.5}>
                 <FolderButton
-                  label="Nodetool Installation"
+                  label={`${APP_DISPLAY_NAME} Installation`}
                   onClick={openInstallationPath}
                 />
                 <FolderButton
-                  label="Nodetool Logs"
+                  label={`${APP_DISPLAY_NAME} Logs`}
                   onClick={openLogsPath}
                 />
                 <FolderButton
@@ -234,10 +240,14 @@ const FoldersSettings = () => {
                   label="HuggingFace Models"
                   onClick={openHuggingfacePath}
                 />
-                <FolderButton
-                  label="Ollama Models"
-                  onClick={openOllamaPath}
-                />
+                {/* === CUSTOM FORK START: Product Profile === */}
+                {!isChatAndAgentsHidden() && (
+                  <FolderButton
+                    label="Ollama Models"
+                    onClick={openOllamaPath}
+                  />
+                )}
+                {/* === CUSTOM FORK END === */}
               </FlexColumn>
             </div>
           )}

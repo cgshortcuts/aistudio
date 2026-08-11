@@ -6,6 +6,9 @@ import { shell } from "electron";
 import { logMessage, LOG_FILE } from "./logger";
 import { getCondaEnvPath, getDefaultAssetsPath } from "./config";
 import type { FileExplorerResult, ModelDirectory, SystemDirectory } from "./types";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 const DEFAULT_HF_SUBDIR = path.join(".cache", "huggingface", "hub");
 
@@ -300,13 +303,13 @@ export async function openSystemDirectory(
   
   if (target === "installation") {
     dir = await getInstallationDir();
-    label = "Nodetool installation";
+    label = `${APP_DISPLAY_NAME} installation`;
   } else if (target === "logs") {
     dir = await getLogsDir();
-    label = "Nodetool logs";
+    label = `${APP_DISPLAY_NAME} logs`;
   } else if (target === "assets") {
     dir = getDefaultAssetsPath();
-    label = "Nodetool assets";
+    label = `${APP_DISPLAY_NAME} assets`;
   } else {
     return {
       status: "error",

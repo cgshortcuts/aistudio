@@ -30,9 +30,11 @@ const gridFillStyles = css({
     minHeight: 0
   },
   ".dropzone": {
-    // Override the grid's viewport-relative cap (and its mobile media-query
-    // variant) so the grid fills the remaining height instead of leaving a gap.
-    maxHeight: "none !important"
+    // Override the grid's viewport-relative cap so the grid fills the remaining
+    // height. minHeight: 0 keeps the flex child from growing with every asset.
+    maxHeight: "none !important",
+    minHeight: 0,
+    overflow: "hidden"
   }
 });
 

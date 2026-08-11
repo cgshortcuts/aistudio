@@ -1,4 +1,5 @@
 import type { Asset, ProviderCost } from "../stores/ApiTypes";
+import { isImageBatchPreviewValue } from "./imageBatch";
 
 /**
  * Convert a saved asset into the value shape the preview components expect
@@ -255,10 +256,22 @@ const hasOutputs = (outputs: Record<string, unknown>): boolean =>
  * (the spinner) and any generation that carries outputs — including an error
  * that still produced something — are kept.
  */
+const isImageBatchGeneration = (gen: Generation): boolean => {
+  if (isImageBatchPreviewValue(gen.outputs)) {
+    return true;
+  }
+  const values = Object.values(gen.outputs);
+  return values.length > 0 && values.every(isImageBatchPreviewValue);
+};
+
 export const displayableGenerations = (
   generations: Generation[]
 ): Generation[] =>
-  generations.filter((g) => g.status !== "error" || hasOutputs(g.outputs));
+  generations.filter(
+    (g) =>
+      !isImageBatchGeneration(g) &&
+      (g.status !== "error" || hasOutputs(g.outputs))
+  );
 
 /**
  * A group of generations that belong to one workflow run. A regular generator

@@ -56,7 +56,7 @@ describe('package descriptions', () => {
       description: 'Core system',
     });
 
-    expect(description).toContain('Essential NodeTool core nodes');
+    expect(description).toContain('Essential Ai Studio core nodes');
   });
 
   test('keeps non-overridden registry descriptions trimmed', () => {

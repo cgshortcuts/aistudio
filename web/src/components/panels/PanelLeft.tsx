@@ -46,6 +46,13 @@ import { ExpandableRailToolbar } from "../../custom/rail-hover-labels";
 // === CUSTOM FORK START: Left Panel Clickaway ===
 import { useCloseLeftPanelOnClickAway } from "../../custom/left-panel-clickaway";
 // === CUSTOM FORK END ===
+// === CUSTOM FORK START: Product Profile ===
+import {
+  CUSTOMER_HIDDEN_LEFT_PANEL_VIEWS,
+  isChatAndAgentsHidden,
+  isHiddenLeftPanelView
+} from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 import {
   LeftPanelView,
@@ -788,10 +795,18 @@ const PanelLeft: React.FC = () => {
       ? "workflows"
       : (activeView as LeftPanelView);
 
-  const hiddenViews = useMemo<readonly LeftPanelView[] | undefined>(
-    () => (isWorkflowEditActive ? undefined : WORKFLOW_EDIT_ONLY_VIEWS),
-    [isWorkflowEditActive]
-  );
+  const hiddenViews = useMemo<readonly LeftPanelView[] | undefined>(() => {
+    const views: LeftPanelView[] = [];
+    if (!isWorkflowEditActive) {
+      views.push(...WORKFLOW_EDIT_ONLY_VIEWS);
+    }
+    // === CUSTOM FORK START: Product Profile ===
+    if (isChatAndAgentsHidden()) {
+      views.push(...CUSTOMER_HIDDEN_LEFT_PANEL_VIEWS);
+    }
+    // === CUSTOM FORK END ===
+    return views.length ? views : undefined;
+  }, [isWorkflowEditActive]);
 
   const onViewChange = useCallback(
     (view: LeftPanelView) => {
@@ -819,6 +834,11 @@ const PanelLeft: React.FC = () => {
     if (!isWorkflowEditActive && isWorkflowEditOnlyView(activeView)) {
       setActiveView("workflows");
     }
+    // === CUSTOM FORK START: Product Profile ===
+    if (isHiddenLeftPanelView(activeView)) {
+      setActiveView("workflows");
+    }
+    // === CUSTOM FORK END ===
   }, [activeView, isWorkflowEditActive, setActiveView]);
 
   // === CUSTOM FORK START: Left Panel Clickaway ===

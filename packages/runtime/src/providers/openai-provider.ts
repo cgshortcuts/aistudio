@@ -66,6 +66,9 @@ import type {
   ProviderTool,
   StreamingAudioChunk,
   TextToImageParams,
+  ImageBatchSubmitParams,
+  ImageBatchGetParams,
+  ImageBatchJob,
   TextToVideoParams,
   ToolCall,
   TTSModel,
@@ -1776,6 +1779,275 @@ export class OpenAIProvider extends BaseProvider {
     }
 
     throw new Error("OpenAI image generation returned no image data.");
+  }
+
+  /**
+   * Submit an async Batch job for image generations or edits (~50% off, up to 24h).
+   * Text-only requests use `/v1/images/generations`. Requests with reference
+   * images upload those files first and use `/v1/images/edits` (Batch cannot
+   * mix both endpoints in one job).
+   */
+  async submitImageBatch(
+    params: ImageBatchSubmitParams
+  ): Promise<ImageBatchJob> {
+    if (!params.requests.length) {
+      throw new Error("Image batch requires at least one request");
+    }
+    const model = params.model || "gpt-image-2";
+    const hasRefs = params.requests.some(
+      (req) => Array.isArray(req.images) && req.images.some((b) => b?.length)
+    );
+    const allHaveRefs = params.requests.every(
+      (req) => Array.isArray(req.images) && req.images.some((b) => b?.length)
+    );
+    if (hasRefs && !allHaveRefs) {
+      throw new Error(
+        "OpenAI image Batch cannot mix text-only generations and image edits in one job"
+      );
+    }
+    const endpoint = hasRefs ? "/v1/images/edits" : "/v1/images/generations";
+    const client = this.getClient();
+    const lines: string[] = [];
+    for (let i = 0; i < params.requests.length; i++) {
+      const req = params.requests[i];
+      const prompt = req.prompt?.trim();
+      if (!prompt) {
+        throw new Error(`Image batch request ${i} has an empty prompt`);
+      }
+      const body: Record<string, unknown> = { model, prompt, n: 1 };
+      if (req.size) body.size = req.size;
+      if (req.quality) body.quality = req.quality;
+      if (hasRefs) {
+        const sources = (req.images ?? []).filter((b) => b && b.length > 0);
+        const imageRefs: Array<{ file_id: string }> = [];
+        for (let j = 0; j < sources.length; j++) {
+          const uploaded = await client.files.create(
+            {
+              file: await toFile(
+                Buffer.from(sources[j]),
+                `batch-ref-${i}-${j}.png`,
+                { type: req.mimeType ?? "image/png" }
+              ),
+              purpose: "vision"
+            },
+            { signal: params.signal }
+          );
+          if (!uploaded?.id) {
+            throw new Error(
+              `OpenAI batch reference upload returned no file id (request ${i})`
+            );
+          }
+          imageRefs.push({ file_id: uploaded.id });
+        }
+        body.images = imageRefs;
+        if (req.mask && req.mask.length > 0) {
+          const maskBytes = await this.toOpenAiEditMask(req.mask);
+          const maskFile = await client.files.create(
+            {
+              file: await toFile(Buffer.from(maskBytes), `batch-mask-${i}.png`, {
+                type: "image/png"
+              }),
+              purpose: "vision"
+            },
+            { signal: params.signal }
+          );
+          if (!maskFile?.id) {
+            throw new Error(
+              `OpenAI batch mask upload returned no file id (request ${i})`
+            );
+          }
+          body.mask = { file_id: maskFile.id };
+        }
+      }
+      lines.push(
+        JSON.stringify({
+          custom_id: `img-${i}`,
+          method: "POST",
+          url: endpoint,
+          body
+        })
+      );
+    }
+    const jsonl = lines.join("\n");
+    const file = await client.files.create(
+      {
+        file: await toFile(Buffer.from(jsonl, "utf8"), "image-batch.jsonl", {
+          type: "application/jsonl"
+        }),
+        purpose: "batch"
+      },
+      { signal: params.signal }
+    );
+    if (!file?.id) {
+      throw new Error("OpenAI batch file upload returned no file id");
+    }
+    const batch = await client.batches.create(
+      {
+        input_file_id: file.id,
+        endpoint,
+        completion_window: params.completionWindow ?? "24h"
+      },
+      { signal: params.signal }
+    );
+    if (!batch?.id) {
+      throw new Error("OpenAI batch create returned no batch id");
+    }
+    return {
+      batchId: batch.id,
+      status: String(batch.status ?? "validating"),
+      outputFileId: batch.output_file_id ?? null,
+      error: batch.errors ? JSON.stringify(batch.errors) : null
+    };
+  }
+
+  /**
+   * Submit an image Batch job and poll until completed (or timeout). Returns
+   * decoded image bytes. Throws if the job does not complete in time.
+   */
+  async runImageBatchUntilDone(
+    params: ImageBatchSubmitParams
+  ): Promise<Uint8Array[]> {
+    const timeoutMs = Math.max(0, params.timeoutMs ?? 1_800_000);
+    const job = await this.submitImageBatch(params);
+    const pending = new Set([
+      "validating",
+      "in_progress",
+      "finalizing",
+      "cancelling"
+    ]);
+    const start = Date.now();
+    let current = job;
+    while (pending.has(current.status) && Date.now() - start < timeoutMs) {
+      const remaining = timeoutMs - (Date.now() - start);
+      if (remaining <= 0) break;
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, Math.min(2000, remaining))
+      );
+      current = await this.getImageBatch({
+        batchId: job.batchId,
+        signal: params.signal
+      });
+    }
+    if (current.status !== "completed") {
+      throw new Error(
+        `Image batch '${job.batchId}' did not complete within ` +
+          `${Math.round(timeoutMs / 1000)}s (status=${current.status}). ` +
+          `Re-run later or check the OpenAI Batch dashboard.`
+      );
+    }
+    return this.downloadImageBatchResults({
+      batchId: job.batchId,
+      model: params.model,
+      quality: params.requests[0]?.quality,
+      signal: params.signal
+    });
+  }
+
+  /** Retrieve status for an image Batch job. */
+  async getImageBatch(params: ImageBatchGetParams): Promise<ImageBatchJob> {
+    const batchId = params.batchId?.trim();
+    if (!batchId) {
+      throw new Error("batchId is required");
+    }
+    const batch = await this.getClient().batches.retrieve(batchId, {
+      signal: params.signal
+    });
+    return {
+      batchId: batch.id,
+      status: String(batch.status ?? "unknown"),
+      outputFileId: batch.output_file_id ?? null,
+      error: batch.errors ? JSON.stringify(batch.errors) : null
+    };
+  }
+
+  /**
+   * Download completed Batch results and decode images. Tracks usage with
+   * `batchDiscount: true` (~50% off). Throws if the job is not completed or
+   * has no output file.
+   */
+  async downloadImageBatchResults(
+    params: ImageBatchGetParams & { model?: string; quality?: string }
+  ): Promise<Uint8Array[]> {
+    const job = await this.getImageBatch(params);
+    if (job.status !== "completed") {
+      throw new Error(
+        `Image batch '${job.batchId}' is not completed (status=${job.status})`
+      );
+    }
+    if (!job.outputFileId) {
+      throw new Error(
+        `Image batch '${job.batchId}' completed with no output file`
+      );
+    }
+    const client = this.getClient();
+    const content = await client.files.content(job.outputFileId, {
+      signal: params.signal
+    });
+    const text = await content.text();
+    const images: Uint8Array[] = [];
+    let failures = 0;
+    for (const line of text.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let parsed: {
+        error?: unknown;
+        response?: {
+          body?: {
+            data?: Array<{ b64_json?: string; url?: string }>;
+          };
+        };
+      };
+      try {
+        parsed = JSON.parse(trimmed) as typeof parsed;
+      } catch {
+        failures += 1;
+        continue;
+      }
+      if (parsed.error) {
+        failures += 1;
+        continue;
+      }
+      const item = parsed.response?.body?.data?.[0];
+      if (!item) {
+        failures += 1;
+        continue;
+      }
+      if (item.b64_json) {
+        images.push(Uint8Array.from(Buffer.from(item.b64_json, "base64")));
+        continue;
+      }
+      if (item.url) {
+        const fetchResponse = await this._fetch(item.url, {
+          signal: params.signal
+        });
+        if (!fetchResponse.ok) {
+          failures += 1;
+          continue;
+        }
+        images.push(new Uint8Array(await fetchResponse.arrayBuffer()));
+        continue;
+      }
+      failures += 1;
+    }
+    if (failures > 0) {
+      log.warn("OpenAI image batch had failed or empty result lines", {
+        batchId: job.batchId,
+        failures,
+        images: images.length
+      });
+    }
+    if (images.length === 0) {
+      throw new Error(
+        `Image batch '${job.batchId}' produced no images` +
+          (job.error ? `: ${job.error}` : "")
+      );
+    }
+    this.trackUsage(params.model || "gpt-image-2", {
+      imageCount: images.length,
+      imageQuality: params.quality,
+      batchDiscount: true
+    });
+    return images;
   }
 
   /**

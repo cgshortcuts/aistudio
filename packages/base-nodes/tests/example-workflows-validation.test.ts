@@ -53,6 +53,21 @@ const ALLOWED_UNREGISTERED_TYPES = new Set<string>([
   // ── 1. Sibling packages not loaded in base-nodes tests ─────────────────
   "kie.image.NanoBanana",
   "fal.text_to_image.NanoBanana2",
+  "fal.text_to_image.PatinaMaterial",
+  "fal.image_to_image.FluxProFill",
+  "fal.image_to_image.FluxProV1Erase",
+  "fal.image_to_video.KlingVideoV3ProImageToVideo",
+  "fal.image_to_video.MinimaxH3ReferenceToVideo",
+  "fal.video_to_video.KlingVideoV3ProMotionControl",
+  "fal.video_to_video.Veo31FastExtendVideo",
+  "fal.video_to_video.TopazUpscaleVideo",
+  "fal.video_to_video.WanVace14bDepth",
+  "fal.video_to_video.HunyuanVideoFoley",
+  "fal.text_to_3d.Hunyuan3dV3TextTo3d",
+  "fal.image_to_3d.Hunyuan3dV31ProImageTo3d",
+  "fal.3d_to_3d.MeshyV5Retexture",
+  "fal.text_to_audio.ElevenLabsSoundEffectsV2",
+  "fal.text_to_audio.ElevenLabsMusic",
   "vector.chroma.HybridSearch",
 
   // ── 2. UI annotation node (no runtime behaviour) ───────────────────────

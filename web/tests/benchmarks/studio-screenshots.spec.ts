@@ -50,7 +50,7 @@ async function openSequence(page: Page, sequenceId: string): Promise<void> {
   await page.goto(`/timeline/${sequenceId}`);
 
   const loadingOverlay = page.locator(
-    '[role="status"][aria-label="Loading NodeTool"]'
+    '[role="status"][aria-label="Loading Ai Studio"]'
   );
   if ((await loadingOverlay.count()) > 0) {
     await loadingOverlay

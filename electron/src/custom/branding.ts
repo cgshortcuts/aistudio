@@ -2,12 +2,17 @@
  * AiStudio product branding for the Electron shell (fork).
  * Keep in sync with web/src/custom/branding/constants.ts and electron-builder.json.
  *
+ * APP_DISPLAY_NAME — user-visible label. Window titles, menus, copy.
+ * APP_PRODUCT_NAME — technical name matching electron-builder `productName`.
+ *   Use for app.setName / userData so install paths stay stable.
+ *
  * Window / package icons come from `electron/resources/` (generated from
  * `web/public/ai-icon.svg` via generate_icons_from_svg.mjs).
  */
 import path from "path";
 
-export const APP_DISPLAY_NAME = "AiStudio";
+export const APP_DISPLAY_NAME = "Ai Studio";
+export const APP_PRODUCT_NAME = "AiStudio";
 export const APP_ID = "com.aistudio.desktop";
 export const APP_SETUP_ARTIFACT = "AiStudio-Setup.exe";
 

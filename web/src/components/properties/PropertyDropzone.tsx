@@ -1,10 +1,10 @@
 /** @jsxImportSource @emotion/react */
 import { css } from "@emotion/react";
 import type { Theme } from "@mui/material/styles";
-import { memo, useCallback, useMemo, useState, useRef, ChangeEvent } from "react";
+import { useEffect, memo, useCallback, useMemo, useState, useRef, ChangeEvent } from "react";
 import { Asset } from "../../stores/ApiTypes";
 import { useFileDrop } from "../../hooks/handlers/useFileDrop";
-import { Tooltip, ToolbarIconButton, MOTION, SPACING, BORDER_RADIUS, Z_INDEX, getSpacingPx } from "../ui_primitives";
+import { Tooltip, ToolbarIconButton, Text, LoadingSpinner, MOTION, SPACING, BORDER_RADIUS, Z_INDEX, getSpacingPx } from "../ui_primitives";
 import FolderOpenIcon from "@mui/icons-material/FolderOpen";
 import ImageDimensions from "../node/ImageDimensions";
 import { useTheme } from "@mui/material/styles";
@@ -18,11 +18,16 @@ import { isElectron } from "../../utils/browser";
 import { useAssetUpload } from "../../serverState/useAssetUpload";
 import { CopyAssetButton } from "../common/CopyAssetButton";
 import { alphaSurfaceBg } from "../../styles/AlphaSurface";
+import { pathToFileUri } from "../../utils/localFile";
 
 interface PropertyDropzoneProps {
   asset: Asset | undefined;
   uri: string | undefined;
-  onChange: (value: { uri: string; type: string }) => void;
+  onChange: (value: {
+    uri: string;
+    type: string;
+    asset_id?: string | null;
+  }) => void;
   contentType: string;
   props: PropertyProps;
   showRecorder?: boolean;
@@ -37,21 +42,50 @@ const PropertyDropzone = ({
   showRecorder = true
 }: PropertyDropzoneProps) => {
   const theme = useTheme();
-  const onChangeAsset = (asset: Asset) =>
-    props.onChange({ asset_id: asset.id, uri: asset.get_url, type: "audio" });
+  const mediaType = contentType.split("/")[0];
 
-  const { onDrop, onDragOver, filename } = useFileDrop({
+  const onChangeRecorderAsset = useCallback(
+    (recorded: Asset) => {
+      props.onChange({
+        asset_id: recorded.id,
+        uri: recorded.get_url,
+        type: mediaType
+      });
+    },
+    [mediaType, props.onChange]
+  );
+
+  const { onDrop, onDragOver, filename, uploading } = useFileDrop({
     uploadAsset: true,
-    onChangeAsset: (asset: Asset) =>
-      onChange({ uri: asset.get_url || "", type: contentType }),
-    type: contentType as "image" | "audio" | "video" | "all"
+    onChangeAsset: (uploaded: Asset) =>
+      onChange({
+        uri: uploaded.get_url || "",
+        type: mediaType,
+        asset_id: uploaded.id
+      }),
+    // Desktop: bind the real disk path. Preview streams via /api/files/local
+    // (Electron backend sets NODETOOL_ELECTRON=1 so paths outside $HOME work).
+    onChangeLocalFile: isElectron
+      ? (localUri) =>
+          onChange({
+            uri: localUri,
+            type: mediaType,
+            asset_id: null
+          })
+      : undefined,
+    type: mediaType as "image" | "audio" | "video" | "all"
   });
 
   const [openViewer, setOpenViewer] = useState(false);
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   const imageRef = useRef<HTMLImageElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const id = `audio-${props.property.name}-${props.propertyIndex}`;
+
+  useEffect(() => {
+    setPreviewError(null);
+  }, [uri]);
 
   const styles = (theme: Theme) =>
     css({
@@ -239,8 +273,12 @@ const PropertyDropzone = ({
     const file = files[0];
     uploadAssetFn({
       file,
-      onCompleted: (asset) => {
-        onChange({ uri: asset.get_url || "", type: contentType });
+      onCompleted: (uploaded) => {
+        onChange({
+          uri: uploaded.get_url || "",
+          type: mediaType,
+          asset_id: uploaded.id
+        });
       },
       onFailed: (error) => {
         console.error("Failed to upload asset:", error);
@@ -251,7 +289,7 @@ const PropertyDropzone = ({
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
-  }, [contentType, onChange, uploadAssetFn]);
+  }, [mediaType, onChange, uploadAssetFn]);
 
   const handleNativeFilePicker = useCallback(async () => {
     if (!window.api?.dialog?.openFile) {
@@ -290,38 +328,18 @@ const PropertyDropzone = ({
 
       if (!result.canceled && result.filePaths.length > 0) {
         const filePath = result.filePaths[0];
-
-        const fileData = await window.api.clipboard?.readFileBuffer(filePath);
-
-        if (!fileData) {
-          console.error("Failed to read file");
-          return;
-        }
-
-        const pathSegments = filePath.split(/[\\/]/);
-        let fileName = pathSegments[pathSegments.length - 1];
-
-        if (!fileName) {
-          const ext = contentType.split("/")[1] || "bin";
-          fileName = `file.${ext}`;
-        }
-
-        const file = new File([fileData.buffer as BlobPart], fileName, { type: contentType });
-
-        uploadAssetFn({
-          file,
-          onCompleted: (asset) => {
-            onChange({ uri: asset.get_url || "", type: contentType });
-          },
-          onFailed: (error) => {
-            console.error("Failed to upload asset:", error);
-          }
+        // Desktop: reference on disk — same path as drag-drop, previewed via
+        // /api/files/local (NODETOOL_ELECTRON unlocks paths outside $HOME).
+        onChange({
+          uri: pathToFileUri(filePath),
+          type: mediaType,
+          asset_id: null
         });
       }
     } catch (error) {
       console.error("Error opening file picker:", error);
     }
-  }, [contentType, onChange, uploadAssetFn]);
+  }, [contentType, mediaType, onChange]);
 
   const handleDropzoneClick = useCallback(() => {
     if (isElectron && window.api?.dialog?.openFile) {
@@ -406,14 +424,32 @@ const PropertyDropzone = ({
                   onClose={handleCloseViewer}
                 />
                 <video
+                  key={uri}
                   style={{ width: "100%", height: "auto" }}
                   controls
+                  preload="metadata"
                   src={uri}
-                  aria-label={filename || "Video"}
+                  aria-label={filename || asset?.name || "Video"}
+                  onLoadedData={() => setPreviewError(null)}
+                  onError={() =>
+                    setPreviewError(
+                      "Could not load video preview. Try another file (H.264 MP4 works best)."
+                    )
+                  }
                 >
                   Your browser does not support the video element.
                 </video>
-                <p className="centered uppercase">{filename}</p>
+                {(filename || asset?.name) && (
+                  <p className="centered uppercase">{filename || asset?.name}</p>
+                )}
+                {previewError && (
+                  <Text
+                    size="smaller"
+                    sx={{ color: "var(--palette-error-main)", padding: "0.5em" }}
+                  >
+                    {previewError}
+                  </Text>
+                )}
               </>
             ) : (
               <p className="centered uppercase">Drop video</p>
@@ -456,7 +492,7 @@ const PropertyDropzone = ({
       default:
         return null;
     }
-  }, [contentType, uri, openViewer, asset, id, filename, handleImageLoad, handleDoubleClick, handleCloseViewer, imageDimensions, handleVolumeChange]);
+  }, [contentType, uri, openViewer, asset, id, filename, handleImageLoad, handleDoubleClick, handleCloseViewer, imageDimensions, handleVolumeChange, previewError]);
 
   return (
     <div css={styles(theme)}>
@@ -472,7 +508,7 @@ const PropertyDropzone = ({
         <div
           role={uri ? undefined : "button"}
           tabIndex={uri ? undefined : 0}
-          className={`dropzone ${uri ? "dropped" : ""} ${isDragOver ? "drag-over" : ""
+          className={`dropzone nodrag ${uri ? "dropped" : ""} ${isDragOver ? "drag-over" : ""
             }`}
           style={{
             borderWidth: uri === "" ? "1px" : "0px",
@@ -484,7 +520,22 @@ const PropertyDropzone = ({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
         >
-          {uri || contentType.split("/")[0] === "audio" ? (
+          {uploading && (
+            <Text
+              size="smaller"
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: getSpacingPx(SPACING.xs),
+                padding: getSpacingPx(SPACING.sm),
+                color: "var(--palette-grey-300)"
+              }}
+            >
+              <LoadingSpinner size="small" />
+              Uploading{filename ? ` ${filename}` : "…"}
+            </Text>
+          )}
+          {!uploading && (uri || mediaType === "audio") ? (
             <>
               {renderViewer}
               {uri && (
@@ -512,17 +563,17 @@ const PropertyDropzone = ({
                 </div>
               )}
             </>
-          ) : (
+          ) : !uploading ? (
             <Tooltip title="Click to select a file or drag and drop">
               <p className="prop-drop centered uppercase">Click or drop {contentType}</p>
             </Tooltip>
-          )}
+          ) : null}
         </div>
-        {contentType.split("/")[0] === "audio" && showRecorder && (
-          <WaveRecorder onChange={onChangeAsset} />
+        {mediaType === "audio" && showRecorder && (
+          <WaveRecorder onChange={onChangeRecorderAsset} />
         )}
-        {contentType.split("/")[0] === "video" && showRecorder && (
-          <VideoRecorder onChange={onChangeAsset} />
+        {mediaType === "video" && showRecorder && (
+          <VideoRecorder onChange={onChangeRecorderAsset} />
         )}
       </div>
     </div>

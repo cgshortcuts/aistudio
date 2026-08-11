@@ -8,6 +8,9 @@ import { getMainWindow } from "./state";
 import { IpcChannels } from "./types.d";
 import { getUpdateChannel, readSettingsAsync } from "./settings";
 import { errorMessage } from "./utils";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 /**
  * Auto-updater Module
@@ -200,10 +203,10 @@ function setupAutoUpdaterEvents(): void {
       if (Notification.isSupported()) {
         const autoUpdateEnabled = await isAutoUpdatesEnabledAsync();
         const notification = new Notification({
-          title: "NodeTool Update Available",
+          title: `${APP_DISPLAY_NAME} Update Available`,
           body: autoUpdateEnabled
             ? `Version ${info.version} is available. Downloading in the background...`
-            : `Version ${info.version} is available. Click to open NodeTool.`,
+            : `Version ${info.version} is available. Click to open ${APP_DISPLAY_NAME}.`,
         });
         notification.on("click", () => {
           const win = getMainWindow();
@@ -258,7 +261,7 @@ function setupAutoUpdaterEvents(): void {
       // Show native notification
       if (Notification.isSupported()) {
         const notification = new Notification({
-          title: "NodeTool Update Ready",
+          title: `${APP_DISPLAY_NAME} Update Ready`,
           body: `Version ${info.version} has been downloaded. Click to restart and install.`,
         });
         notification.on("click", () => {

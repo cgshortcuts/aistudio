@@ -39,27 +39,67 @@ describe("useVideoRecorder", () => {
     mockEnumerateDevices.mockReset();
   });
 
-  it("initializes with default state", () => {
-    // Mock getUserMedia to reject to avoid hanging
-    mockGetUserMedia.mockRejectedValue(new Error("Mock rejection"));
-
+  it("initializes with camera disabled and does not probe devices", () => {
     const { result } = renderHook(() =>
       useVideoRecorder({ onChange: mockOnChange })
     );
 
+    expect(result.current.isCameraEnabled).toBe(false);
     expect(result.current.isRecording).toBe(false);
     expect(result.current.isPreviewing).toBe(false);
     expect(result.current.isLoading).toBe(false);
     expect(result.current.isDeviceListVisible).toBe(false);
     expect(result.current.videoInputDevices).toEqual([]);
     expect(result.current.audioInputDevices).toEqual([]);
-    expect(result.current.selectedVideoDeviceId).toBe("");
-    expect(result.current.selectedAudioDeviceId).toBe("");
+    expect(result.current.error).toBeNull();
+    expect(mockGetUserMedia).not.toHaveBeenCalled();
+  });
+
+  it("probes devices only after enableCamera", async () => {
+    mockGetUserMedia.mockResolvedValue({
+      getTracks: () => [{ stop: jest.fn() }]
+    });
+    mockEnumerateDevices.mockResolvedValue([
+      {
+        kind: "videoinput",
+        deviceId: "cam-1",
+        label: "Camera 1"
+      }
+    ]);
+
+    const { result } = renderHook(() =>
+      useVideoRecorder({ onChange: mockOnChange })
+    );
+
+    await act(async () => {
+      result.current.enableCamera();
+    });
+
+    expect(result.current.isCameraEnabled).toBe(true);
+    expect(mockGetUserMedia).toHaveBeenCalledWith({ video: true });
+  });
+
+  it("maps device-not-found to a single clear message", async () => {
+    const notFound = new Error("Requested device not found");
+    (notFound as Error & { name: string }).name = "NotFoundError";
+    mockGetUserMedia.mockRejectedValue(notFound);
+
+    const { result } = renderHook(() =>
+      useVideoRecorder({ onChange: mockOnChange })
+    );
+
+    await act(async () => {
+      result.current.enableCamera();
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current.error).toBe("No video input devices found.");
   });
 
   it("provides handleRecord function", () => {
-    mockGetUserMedia.mockRejectedValue(new Error("Mock rejection"));
-
     const { result } = renderHook(() =>
       useVideoRecorder({ onChange: mockOnChange })
     );
@@ -68,8 +108,6 @@ describe("useVideoRecorder", () => {
   });
 
   it("provides startPreview function", () => {
-    mockGetUserMedia.mockRejectedValue(new Error("Mock rejection"));
-
     const { result } = renderHook(() =>
       useVideoRecorder({ onChange: mockOnChange })
     );
@@ -78,8 +116,6 @@ describe("useVideoRecorder", () => {
   });
 
   it("provides stopStream function", () => {
-    mockGetUserMedia.mockRejectedValue(new Error("Mock rejection"));
-
     const { result } = renderHook(() =>
       useVideoRecorder({ onChange: mockOnChange })
     );
@@ -88,8 +124,6 @@ describe("useVideoRecorder", () => {
   });
 
   it("toggles device list visibility", () => {
-    mockGetUserMedia.mockRejectedValue(new Error("Mock rejection"));
-
     const { result } = renderHook(() =>
       useVideoRecorder({ onChange: mockOnChange })
     );
@@ -110,8 +144,6 @@ describe("useVideoRecorder", () => {
   });
 
   it("handles video device change", () => {
-    mockGetUserMedia.mockRejectedValue(new Error("Mock rejection"));
-
     const { result } = renderHook(() =>
       useVideoRecorder({ onChange: mockOnChange })
     );
@@ -124,8 +156,6 @@ describe("useVideoRecorder", () => {
   });
 
   it("handles audio device change", () => {
-    mockGetUserMedia.mockRejectedValue(new Error("Mock rejection"));
-
     const { result } = renderHook(() =>
       useVideoRecorder({ onChange: mockOnChange })
     );
@@ -138,8 +168,6 @@ describe("useVideoRecorder", () => {
   });
 
   it("sets error when no stream available and trying to record", () => {
-    mockGetUserMedia.mockRejectedValue(new Error("Mock rejection"));
-
     const { result } = renderHook(() =>
       useVideoRecorder({ onChange: mockOnChange })
     );
@@ -154,8 +182,6 @@ describe("useVideoRecorder", () => {
   });
 
   it("provides videoRef for video element attachment", () => {
-    mockGetUserMedia.mockRejectedValue(new Error("Mock rejection"));
-
     const { result } = renderHook(() =>
       useVideoRecorder({ onChange: mockOnChange })
     );

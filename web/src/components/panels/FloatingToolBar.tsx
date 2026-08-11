@@ -49,6 +49,15 @@ import useCanvasChatDockStore, {
 import CanvasMediaComposer from "./CanvasMediaComposer";
 import ConversationOverlay from "./ConversationOverlay";
 import TriggerActivationButton from "./TriggerActivationButton";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: Instant Update ===
+import {
+  isInstantUpdateAllowed,
+  useForceInstantUpdateOff
+} from "../../custom/instant-update";
+// === CUSTOM FORK END ===
 
 const MOBILE_DOCK_POSITION: DockPosition = { x: 0, y: 0 };
 const MOBILE_DOCK_LAYER_STYLE: React.CSSProperties = {
@@ -311,12 +320,18 @@ const FloatingToolBar: React.FC = memo(function FloatingToolBar() {
         setEditorViewMode: state.setEditorViewMode
       }))
     );
+  // === CUSTOM FORK START: Instant Update ===
+  useForceInstantUpdateOff();
+  // === CUSTOM FORK END ===
 
   const isMiniMapVisible = useMiniMapStore((state) => state.visible);
 
   const workflow = useNodes((state) => state.workflow);
 
   const isRunningish = isWorkflowRunning || isPaused || isSuspended;
+  // === CUSTOM FORK START: Product Profile ===
+  const hideChat = isChatAndAgentsHidden();
+  // === CUSTOM FORK END ===
 
   // Conversation overlay: floats above the composer, showing the active chat
   // thread. It surfaces dynamically — auto-opening whenever a new message
@@ -348,7 +363,7 @@ const FloatingToolBar: React.FC = memo(function FloatingToolBar() {
     );
   const workflowId = workflow?.id ?? null;
   useEffect(() => {
-    if (!workflowId) {
+    if (hideChat || !workflowId) {
       return;
     }
     if (!threadsLoaded) {
@@ -356,7 +371,7 @@ const FloatingToolBar: React.FC = memo(function FloatingToolBar() {
       return;
     }
     void openWorkflowThread(workflowId);
-  }, [workflowId, threadsLoaded, openWorkflowThread, fetchThreads]);
+  }, [hideChat, workflowId, threadsLoaded, openWorkflowThread, fetchThreads]);
 
   // Leaving the editor clears the workflow binding so the full-page chat starts
   // workflow-agnostic (it lists every thread, not just the last workflow's).
@@ -388,10 +403,10 @@ const FloatingToolBar: React.FC = memo(function FloatingToolBar() {
     }))
   );
   useEffect(() => {
-    if (chatBusy) {
+    if (!hideChat && chatBusy) {
       setConversationCollapsed(false);
     }
-  }, [chatBusy, setConversationCollapsed]);
+  }, [hideChat, chatBusy, setConversationCollapsed]);
 
   // The composer is the canvas chat entry point now that the left chat panel
   // is gone, so the conversation toggle is always available — opening the
@@ -529,26 +544,28 @@ const FloatingToolBar: React.FC = memo(function FloatingToolBar() {
         </Tooltip>
       )}
 
-      <Tooltip
-        title={conversationOpen ? "Hide conversation" : "Show conversation"}
-        placement="top"
-        delay={TOOLTIP_ENTER_DELAY}
-      >
-        <button
-          type="button"
-          className={cn("composer-convo", conversationOpen && "active")}
-          onClick={() => setConversationCollapsed(!conversationCollapsed)}
-          aria-label="Toggle conversation"
-          aria-pressed={conversationOpen}
+      {!hideChat && (
+        <Tooltip
+          title={conversationOpen ? "Hide conversation" : "Show conversation"}
+          placement="top"
+          delay={TOOLTIP_ENTER_DELAY}
         >
-          <ForumOutlinedIcon />
-          {conversationCount > 0 && (
-            <span className="convo-badge" aria-hidden>
-              {conversationCount}
-            </span>
-          )}
-        </button>
-      </Tooltip>
+          <button
+            type="button"
+            className={cn("composer-convo", conversationOpen && "active")}
+            onClick={() => setConversationCollapsed(!conversationCollapsed)}
+            aria-label="Toggle conversation"
+            aria-pressed={conversationOpen}
+          >
+            <ForumOutlinedIcon />
+            {conversationCount > 0 && (
+              <span className="convo-badge" aria-hidden>
+                {conversationCount}
+              </span>
+            )}
+          </button>
+        </Tooltip>
+      )}
 
       {isRunningish && (
         <Tooltip
@@ -654,12 +671,12 @@ const FloatingToolBar: React.FC = memo(function FloatingToolBar() {
           className="floating-toolbar canvas-chat-dock"
           style={{ width: dockWidthCss }}
         >
-          {conversationOpen && (
+          {!hideChat && conversationOpen && (
             <ConversationOverlay
               onCollapse={() => setConversationCollapsed(true)}
             />
           )}
-          {chatError && (
+          {!hideChat && chatError && (
             <AlertBanner
               severity="error"
               compact
@@ -695,12 +712,16 @@ const FloatingToolBar: React.FC = memo(function FloatingToolBar() {
           }
           onClick={runWithClose(handleToggleViewMode)}
         />
-        <MenuItemPrimitive
-          label="Instant Update"
-          icon={<BoltIcon fontSize="small" />}
-          secondary={instantUpdate ? "On" : "Off"}
-          onClick={runWithClose(handleToggleInstantUpdate)}
-        />
+        {/* === CUSTOM FORK START: Instant Update === */}
+        {isInstantUpdateAllowed() && (
+          <MenuItemPrimitive
+            label="Instant Update"
+            icon={<BoltIcon fontSize="small" />}
+            secondary={instantUpdate ? "On" : "Off"}
+            onClick={runWithClose(handleToggleInstantUpdate)}
+          />
+        )}
+        {/* === CUSTOM FORK END === */}
         {(isPaused || isSuspended) && (
           <MenuItemPrimitive
             label="Resume"

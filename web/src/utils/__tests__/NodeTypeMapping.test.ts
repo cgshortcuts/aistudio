@@ -21,6 +21,19 @@ describe('NodeTypeMapping utilities', () => {
       expect(contentTypeToNodeType('application/octet-stream', 'mesh.glb')).toBe('model_3d');
     });
 
+    test('maps empty MIME video by filename extension', () => {
+      expect(contentTypeToNodeType('', 'clip.mp4')).toBe('video');
+      expect(contentTypeToNodeType('application/octet-stream', 'clip.mov')).toBe(
+        'video'
+      );
+    });
+
+    test('maps bare video/audio/image types', () => {
+      expect(contentTypeToNodeType('video', 'clip.mp4')).toBe('video');
+      expect(contentTypeToNodeType('audio')).toBe('audio');
+      expect(contentTypeToNodeType('image')).toBe('image');
+    });
+
     test('returns null for unknown content type', () => {
       expect(contentTypeToNodeType('application/unknown')).toBeNull();
       expect(contentTypeToNodeType('application/octet-stream', 'archive.bin')).toBeNull();

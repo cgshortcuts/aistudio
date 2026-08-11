@@ -75,7 +75,7 @@ describe('WorkflowRunner', () => {
     expect(decoded.data.workflow_id).toBe('123');
 
     expect(Notification).toHaveBeenCalledWith({
-      title: 'Nodetool',
+      title: 'Ai Studio',
       body: 'Running Test',
       silent: false,
       urgency: 'normal',
@@ -92,7 +92,7 @@ describe('WorkflowRunner', () => {
     expect(notes[0]).toMatchObject({ type: 'info', content: 'hello' });
 
     expect(Notification).toHaveBeenCalledWith({
-      title: 'Nodetool',
+      title: 'Ai Studio',
       body: 'hello',
       silent: false,
       urgency: 'normal',

@@ -1,5 +1,8 @@
 import React from "react";
 import type { PackageUpdateInfo } from "../types";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../custom/branding";
+// === CUSTOM FORK END ===
 
 interface PackageUpdatesNotificationProps {
   updates: PackageUpdateInfo[];
@@ -68,7 +71,7 @@ const PackageUpdatesNotification: React.FC<PackageUpdatesNotificationProps> = ({
   return (
     <div style={containerStyle}>
       <div style={headerStyle}>
-        <p style={titleStyle}>New Nodetool packs available</p>
+        <p style={titleStyle}>New {APP_DISPLAY_NAME} packs available</p>
         <button
           type="button"
           aria-label="Dismiss package update notice"

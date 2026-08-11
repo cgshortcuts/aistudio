@@ -8,6 +8,9 @@ import TTSModelSelect from "../properties/TTSModelSelect";
 import ASRModelSelect from "../properties/ASRModelSelect";
 import VideoModelSelect from "../properties/VideoModelSelect";
 import { CODE_MODEL_PREFERENCE } from "../../hooks/useCodeAuthoringModel";
+// === CUSTOM FORK START: Product Profile ===
+import { isHiddenDefaultModelType } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 const MODEL_TYPE_CONFIG = [
   {
@@ -58,7 +61,11 @@ function DefaultModelsMenu() {
       </Text>
 
       <div className="default-models-list">
-        {MODEL_TYPE_CONFIG.map((config) => (
+        {MODEL_TYPE_CONFIG.filter(
+          // === CUSTOM FORK START: Product Profile ===
+          (config) => !isHiddenDefaultModelType(config.type)
+          // === CUSTOM FORK END ===
+        ).map((config) => (
           <DefaultModelRow
             key={config.type}
             modelType={config.type}

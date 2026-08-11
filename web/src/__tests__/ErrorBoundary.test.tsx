@@ -176,7 +176,7 @@ describe("ErrorBoundary", () => {
     );
 
     // === CUSTOM FORK START: AiStudio Branding ===
-    const logo = screen.getByAltText("AiStudio Logo");
+    const logo = screen.getByAltText("Ai Studio Logo");
     // === CUSTOM FORK END ===
     expect(logo).toBeInTheDocument();
     expect(logo).toHaveAttribute("src", "/ai-icon.svg");

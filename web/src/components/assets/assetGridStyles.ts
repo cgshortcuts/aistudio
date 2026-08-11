@@ -11,6 +11,8 @@ export const assetGridStyles = (theme: Theme) => {
       flexDirection: "column",
       justifyContent: "flex-start",
       height: "100%",
+      minHeight: 0,
+      minWidth: 0,
       containerType: "inline-size"
     },
 
@@ -20,9 +22,11 @@ export const assetGridStyles = (theme: Theme) => {
       outline: "none",
       flexDirection: "column",
       position: "relative",
-      flexGrow: 1,
-      flexShrink: 1,
+      flex: "1 1 0",
+      minHeight: 0,
+      minWidth: 0,
       width: "100%",
+      overflow: "hidden",
       maxHeight: "calc(-260px + 100vh)"
     },
     ".audio-controls-container": {

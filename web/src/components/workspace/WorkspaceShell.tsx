@@ -9,6 +9,7 @@ import { useWorkspaceTabsStore } from "../../stores/WorkspaceTabsStore";
 import { useWorkflowManager } from "../../contexts/WorkflowManagerContext";
 import { usePanelStore } from "../../stores/PanelStore";
 import { useWorkspaceMenuShortcuts } from "../../hooks/useWorkspaceMenuShortcuts";
+import { useImageBatchAutoCheck } from "../../hooks/useImageBatchAutoCheck";
 import {
   HEADER_HEIGHT,
   TOOLBAR_WIDTH,
@@ -127,6 +128,7 @@ const WorkspaceShell = () => {
   // Cmd+W ("Close Tab") closes the active tab for every surface, not just the
   // node editor.
   useWorkspaceMenuShortcuts();
+  useImageBatchAutoCheck();
 
   const activeTab = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId) ?? null,

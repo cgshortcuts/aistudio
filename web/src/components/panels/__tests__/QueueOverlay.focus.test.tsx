@@ -7,6 +7,11 @@ import { Job } from "../../../stores/ApiTypes";
 import { useRunningJobs } from "../../../hooks/useRunningJobs";
 import useWorkflowRunsStore from "../../../stores/WorkflowRunsStore";
 
+jest.mock("react-router-dom", () => ({
+  ...jest.requireActual("react-router-dom"),
+  useNavigate: () => jest.fn()
+}));
+
 jest.mock("../../../hooks/useRunningJobs", () => ({
   useRunningJobs: jest.fn()
 }));
@@ -21,7 +26,18 @@ jest.mock("@tanstack/react-query", () => ({
 }));
 
 jest.mock("../../../trpc/client", () => ({
-  trpcClient: { jobs: { cancel: { mutate: jest.fn().mockResolvedValue({}) } } }
+  trpcClient: {
+    jobs: {
+      cancel: { mutate: jest.fn().mockResolvedValue({}) },
+      checkBatch: { mutate: jest.fn().mockResolvedValue({}) }
+    }
+  }
+}));
+
+jest.mock("../../../stores/NotificationStore", () => ({
+  useNotificationStore: (
+    selector: (s: { addNotification: jest.Mock }) => unknown
+  ) => selector({ addNotification: jest.fn() })
 }));
 
 // Mock useWorkflowManager to return currentWorkflowId "wf"

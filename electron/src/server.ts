@@ -42,6 +42,15 @@ import {
   getActiveVault,
   getActiveVaultEnv,
 } from "./vaults";
+// === CUSTOM FORK START: Product Profile ===
+import {
+  AISTUDIO_PRODUCT_ENV,
+  resolveAiStudioProduct,
+} from "./custom/product-profile";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "./custom/branding";
+// === CUSTOM FORK END ===
 
 let backendWatchdog: Watchdog | null = null;
 
@@ -128,9 +137,9 @@ async function findExistingServerPid(): Promise<number | null> {
 async function promptUserAboutExistingServer(pid: number): Promise<boolean> {
   const result = await dialog.showMessageBox({
     type: "question",
-    title: "NodeTool Server Already Running",
-    message: "A NodeTool server is already running.",
-    detail: `An existing NodeTool server process (PID ${pid}) was detected. Would you like to stop it and start a new server, or connect to the existing server?`,
+    title: `${APP_DISPLAY_NAME} Server Already Running`,
+    message: `A ${APP_DISPLAY_NAME} server is already running.`,
+    detail: `An existing ${APP_DISPLAY_NAME} server process (PID ${pid}) was detected. Would you like to stop it and start a new server, or connect to the existing server?`,
     buttons: ["Stop and Start New", "Use Existing Server"],
     defaultId: 0,
     cancelId: 1,
@@ -289,11 +298,19 @@ async function startServer(): Promise<void> {
     HOST: "127.0.0.1",
     STATIC_FOLDER: webPath,
     NODETOOL_PYTHON: pythonPath,
+    // Desktop backend: allow /api/files/local for file:// media previews.
+    // The web/cloud production guard must not apply to the local Electron app.
+    NODETOOL_ELECTRON: "1",
     NODE_ENV: isDevMode() ? "development" : "production",
     NODE_OPTIONS: nodeOptionsParts.filter(Boolean).join(" "),
     NODE_PATH: backendNodePath,
     NODETOOL_OPTIONAL_NODE_MODULES: optionalNodeModules,
   };
+
+  // === CUSTOM FORK START: Product Profile ===
+  backendEnv[AISTUDIO_PRODUCT_ENV] = resolveAiStudioProduct(app.isPackaged);
+  logMessage(`AiStudio product: ${backendEnv[AISTUDIO_PRODUCT_ENV]}`);
+  // === CUSTOM FORK END ===
 
   // Point the backend at the active vault's database/assets/vector store.
   // Vaults are SQLite-only, so skip this when an external DATABASE_URL

@@ -15,6 +15,9 @@ import type { StoreApi } from "zustand";
 
 import { formatErrorMessage } from "../utils/errorHandling";
 import { trpcClient } from "../trpc/client";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../custom/branding";
+// === CUSTOM FORK END ===
 
 /** Display names for the runtimes the server reports (it sends bare ids). */
 const SERVER_RUNTIME_LABELS: Record<string, string> = {
@@ -74,7 +77,7 @@ type SetState = StoreApi<RuntimePackagesStore>["setState"];
 type GetState = StoreApi<RuntimePackagesStore>["getState"];
 
 const DESKTOP_REQUIRED_MSG =
-  "Software installs need the AiStudio / NodeTool desktop app (not the browser). Use start-desktop.bat, then try Install again.";
+  `Software installs need the ${APP_DISPLAY_NAME} desktop app (not the browser). Use start-desktop.bat, then try Install again.`;
 
 /** Human-readable size hint for long npm runtime installs. */
 function installSizeHint(id: string): string {

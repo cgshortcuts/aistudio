@@ -23,6 +23,9 @@ import {
 import { trpc } from "../trpc/client";
 import { useStudioCredits } from "./useStudioCredits";
 import StudioShell from "./StudioShell";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../custom/branding";
+// === CUSTOM FORK END ===
 
 const TOPUP_CREDITS = 1_000;
 
@@ -95,7 +98,7 @@ const StudioAccountPage = () => {
                 )}
               </FlexRow>
               <Text size="smaller" color="secondary" sx={{ mt: SPACING.md }}>
-                Credits meter NodeTool's managed models only — bring your own
+                Credits meter {APP_DISPLAY_NAME}'s managed models only — bring your own
                 provider keys and those calls stay unmetered.
               </Text>
             </Card>

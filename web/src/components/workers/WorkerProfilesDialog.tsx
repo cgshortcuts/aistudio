@@ -20,6 +20,9 @@ import type {
   WorkerTarget,
   TokenPolicy
 } from "../../hooks/useWorkers";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 // The secret each provider's API needs before a worker can be provisioned.
 const API_KEY_BY_TARGET: Record<WorkerTarget, string> = {
@@ -40,8 +43,8 @@ const COMFY_WORKER_IMAGE = "ghcr.io/nodetool-ai/nodetool-worker-comfy:latest";
 // Sentinel select value that keeps the free-text image field for a custom build.
 const CUSTOM_IMAGE = "__custom_image__";
 const IMAGE_PRESETS = [
-  { value: DEFAULT_WORKER_IMAGE, label: "NodeTool Worker" },
-  { value: COMFY_WORKER_IMAGE, label: "NodeTool Worker + ComfyUI" },
+  { value: DEFAULT_WORKER_IMAGE, label: `${APP_DISPLAY_NAME} Worker` },
+  { value: COMFY_WORKER_IMAGE, label: `${APP_DISPLAY_NAME} Worker + ComfyUI` },
   { value: CUSTOM_IMAGE, label: "Custom…" }
 ] as const;
 const DEFAULT_IDLE_TIMEOUT = "30";

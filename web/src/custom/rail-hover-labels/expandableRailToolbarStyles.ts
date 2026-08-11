@@ -38,22 +38,53 @@ export const expandableRailToolbarStyles = (theme: Theme) =>
       paddingBottom: getSpacingPx(SPACING.lg),
       overflow: "hidden",
       boxShadow: "none",
-      transition: `width ${RAIL_EXPAND_MOTION}, box-shadow ${RAIL_EXPAND_MOTION}`,
+      transition: `width ${MOTION.fast}, box-shadow ${MOTION.fast}`,
       ...reducedMotion({ transition: MOTION.none }),
 
-      "&.expanded": {
+      "& .rail-app-logo": {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        width: "40px",
+        height: "40px",
+        margin: `0 ${theme.spacing(SPACING.micro)}`
+      },
+
+      "& .toolbar-scroll": {
+        display: "flex",
+        flexDirection: "column",
+        flex: 1,
+        minHeight: 0,
+        gap: getSpacingPx(SPACING.md),
+        overflowX: "hidden",
+        overflowY: "auto",
+        overscrollBehavior: "contain",
+        scrollbarWidth: "thin"
+      },
+
+      "& .toolbar-spacer": {
+        flexGrow: 1,
+        minHeight: 0
+      },
+
+      "&:hover, &:has(:focus-visible), &.expanded": {
         width: `${TOOLBAR_EXPANDED_WIDTH}px`,
         zIndex: Z_INDEX.overlay,
-        boxShadow: "4px 0 16px rgba(0, 0, 0, 0.12)"
+        boxShadow: "4px 0 16px rgba(0, 0, 0, 0.12)",
+        transition: `width ${RAIL_EXPAND_MOTION}, box-shadow ${RAIL_EXPAND_MOTION}`,
+        ...reducedMotion({ transition: MOTION.none })
       },
 
       "& .toolbar-divider": {
         height: "1px",
+        flexShrink: 0,
         margin: `${getSpacingPx(SPACING.md)} ${getSpacingPx(SPACING.lg)}`,
         backgroundColor: theme.vars.palette.divider
       },
 
       "& .MuiIconButton-root, .MuiButton-root": {
+        flexShrink: 0,
         padding: `${theme.spacing(1)}`,
         margin: `0 ${theme.spacing(SPACING.xs)}`,
         borderRadius: BORDER_RADIUS.lg,
@@ -89,6 +120,7 @@ export const expandableRailToolbarStyles = (theme: Theme) =>
       "& .rail-menu-item": {
         display: "flex",
         alignItems: "center",
+        flexShrink: 0,
         gap: getSpacingPx(SPACING.md),
         width: `calc(100% - ${getSpacingPx(SPACING.md)})`,
         minHeight: getSpacingPx(SPACING.xxl),
@@ -144,9 +176,10 @@ export const expandableRailToolbarStyles = (theme: Theme) =>
         }
       },
 
-      "&.expanded .rail-menu-item-label": {
-        opacity: 1,
-        ...reducedMotion({ opacity: 1 })
-      }
+      "&:hover .rail-menu-item .rail-menu-item-label, &:has(:focus-visible) .rail-menu-item .rail-menu-item-label, &.expanded .rail-menu-item .rail-menu-item-label":
+        {
+          opacity: 1,
+          ...reducedMotion({ opacity: 1 })
+        }
     }
   });

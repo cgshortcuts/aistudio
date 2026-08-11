@@ -592,6 +592,80 @@ describe("UnifiedWebSocketRunner lifecycle — job status/cancel/reconnect", () 
     );
   });
 
+  it("reconnectJob echoes a suspended Batch job instead of failing it", async () => {
+    const job = await Job.create({
+      id: "batch-suspended",
+      workflow_id: "wf",
+      user_id: "1",
+      status: "running"
+    });
+    job.markSuspended(
+      "node-1",
+      "Provider Batch image job — can take up to 24 hours. Open the Jobs queue and press Check when you return.",
+      {
+        kind: "image_batch",
+        provider: "openai",
+        batchId: "batch_1",
+        model: "gpt-image-2",
+        submittedAt: "2026-01-01T00:00:00.000Z"
+      },
+      {
+        kind: "image_batch",
+        provider: "openai",
+        batchId: "batch_1",
+        model: "gpt-image-2"
+      }
+    );
+    await job.save();
+
+    await runner.reconnectJob("batch-suspended");
+
+    expect(decodeAll(ws)).toContainEqual(
+      expect.objectContaining({
+        type: "job_update",
+        status: "suspended",
+        job_id: "batch-suspended",
+        message: expect.stringMatching(/Provider Batch/i)
+      })
+    );
+    const reloaded = (await Job.get("batch-suspended")) as Job;
+    expect(reloaded.status).toBe("suspended");
+    expect(reloaded.error).toBeNull();
+  });
+
+  it("reconnectJob parks a running job that already has an image Batch id", async () => {
+    const job = await Job.create({
+      id: "batch-running",
+      workflow_id: "wf",
+      user_id: "1",
+      status: "running"
+    });
+    job.metadata_json = {
+      kind: "image_batch",
+      provider: "gemini",
+      batchId: "batches/job-9",
+      model: "gemini-3.1-flash-image",
+      submittedAt: "2026-01-01T00:00:00.000Z",
+      nodeId: "node-img"
+    };
+    await job.save();
+
+    await runner.reconnectJob("batch-running");
+
+    expect(decodeAll(ws)).toContainEqual(
+      expect.objectContaining({
+        type: "job_update",
+        status: "suspended",
+        job_id: "batch-running",
+        message: expect.stringMatching(/Provider Batch/i)
+      })
+    );
+    const reloaded = (await Job.get("batch-running")) as Job;
+    expect(reloaded.status).toBe("suspended");
+    expect(reloaded.suspended_node_id).toBe("node-img");
+    expect(reloaded.error).toBeNull();
+  });
+
   it("reconnectJob still fails a row stuck at running with nothing executing", async () => {
     await Job.create({
       id: "orphaned-job",

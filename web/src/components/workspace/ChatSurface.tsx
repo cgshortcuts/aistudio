@@ -9,6 +9,9 @@ import useGlobalChatStore, {
 } from "../../stores/GlobalChatStore";
 import type { Message, LanguageModel } from "../../stores/ApiTypes";
 import { useWorkspaceTabsStore } from "../../stores/WorkspaceTabsStore";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 interface ChatSurfaceProps {
   refId: string;
@@ -197,6 +200,16 @@ const ChatSurface = ({ refId, active }: ChatSurfaceProps) => {
       </FlexColumn>
     );
   }
+
+  // === CUSTOM FORK START: Product Profile ===
+  if (isChatAndAgentsHidden()) {
+    return (
+      <FlexColumn fullWidth fullHeight align="center" justify="center">
+        <Text color="secondary">Chat is not available in this product.</Text>
+      </FlexColumn>
+    );
+  }
+  // === CUSTOM FORK END ===
 
   return (
     <FlexColumn fullWidth fullHeight sx={{ minHeight: 0, overflow: "hidden" }}>

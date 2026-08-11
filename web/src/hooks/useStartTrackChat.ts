@@ -10,6 +10,9 @@ import {
   WELCOME_TRACKS,
   type WelcomeTrackId
 } from "../components/portal/welcomeTracks";
+// === CUSTOM FORK START: Product Profile ===
+import { isHiddenWelcomeTrack } from "../custom/product-profile";
+// === CUSTOM FORK END ===
 
 /**
  * Opens a welcome-flow track as a chat tab: a fresh thread in the track's
@@ -28,6 +31,11 @@ export const useStartTrackChat = (): ((
       if (!track) {
         return;
       }
+      // === CUSTOM FORK START: Product Profile ===
+      if (isHiddenWelcomeTrack(track.id)) {
+        return;
+      }
+      // === CUSTOM FORK END ===
       useOnboardingStore.getState().markStep("open-template");
 
       // The composer reads both axes: the media mode decides what the send

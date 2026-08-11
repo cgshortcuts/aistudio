@@ -6,10 +6,11 @@ import type { ImageRef } from "../types.js";
 // Create Image — openai.image.CreateImage
 export interface CreateImageInputs {
   prompt?: Connectable<string>;
-  model?: Connectable<"gpt-image-1">;
+  model?: Connectable<"gpt-image-2" | "gpt-image-1.5" | "gpt-image-1" | "gpt-image-1-mini">;
   size?: Connectable<"1024x1024" | "1536x1024" | "1024x1536">;
   background?: Connectable<"transparent" | "opaque" | "auto">;
   quality?: Connectable<"high" | "medium" | "low">;
+  use_batch?: Connectable<boolean>;
 }
 
 export interface CreateImageOutputs {
@@ -25,9 +26,10 @@ export interface EditImageInputs {
   image?: Connectable<ImageRef>;
   mask?: Connectable<ImageRef>;
   prompt?: Connectable<string>;
-  model?: Connectable<"gpt-image-1">;
+  model?: Connectable<"gpt-image-2" | "gpt-image-1.5" | "gpt-image-1" | "gpt-image-1-mini">;
   size?: Connectable<"1024x1024" | "1536x1024" | "1024x1536">;
   quality?: Connectable<"high" | "medium" | "low">;
+  use_batch?: Connectable<boolean>;
 }
 
 export interface EditImageOutputs {

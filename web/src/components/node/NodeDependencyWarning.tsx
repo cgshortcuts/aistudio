@@ -14,6 +14,9 @@ import {
   ensureRuntimeStatuses,
   getCachedRuntimeStatuses
 } from "./NodeDependencyWarning.helpers";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 const warningStyles = (theme: Theme) =>
   css({
@@ -171,7 +174,7 @@ const NodeDependencyWarning: FC<NodeDependencyWarningProps> = ({
         </button>
       ) : (
         <div className="warning-text">
-          Install it on the machine running the NodeTool server to use this
+          Install it on the machine running the {APP_DISPLAY_NAME} server to use this
           node.
         </div>
       )}

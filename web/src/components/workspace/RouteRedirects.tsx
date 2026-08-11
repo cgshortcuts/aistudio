@@ -3,6 +3,9 @@ import { Navigate, useParams } from "react-router-dom";
 
 import { useWorkspaceTabsStore } from "../../stores/WorkspaceTabsStore";
 import { usePanelStore } from "../../stores/PanelStore";
+// === CUSTOM FORK START: Product Profile ===
+import { isChatAndAgentsHidden } from "../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 /**
  * Legacy `/editor/:workflow` links now resolve into the workspace: open the
@@ -39,6 +42,11 @@ export const ChatThreadRedirect = () => {
   const handleViewChange = usePanelStore((state) => state.handleViewChange);
 
   useEffect(() => {
+    // === CUSTOM FORK START: Product Profile ===
+    if (isChatAndAgentsHidden()) {
+      return;
+    }
+    // === CUSTOM FORK END ===
     if (threadId) {
       openTab({ type: "chat", ref: threadId, mode: "view" });
     } else {

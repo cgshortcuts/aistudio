@@ -1,14 +1,26 @@
-import { useCallback, useState, type FocusEvent } from "react";
+import { useCallback, useState, type FocusEvent, type MouseEvent } from "react";
+
+function isLeaveInside(
+  event: Pick<MouseEvent<HTMLElement>, "currentTarget" | "relatedTarget">
+): boolean {
+  const { currentTarget, relatedTarget } = event;
+  return (
+    relatedTarget instanceof Node && currentTarget.contains(relatedTarget)
+  );
+}
 
 /**
- * Hover + focus-within expand state for the left icon rail overlay.
- * Collapses as soon as the pointer or focus leaves the rail.
+ * Hover + keyboard-focus expand state for the left icon rail overlay.
+ * Pointer leave collapses even if a rail control still has click-focus,
+ * but not when the pointer only moved to a child.
  */
 export function useRailExpand(): {
   railExpanded: boolean;
   railExpandHandlers: {
+    onPointerEnter: () => void;
+    onPointerLeave: (event: MouseEvent<HTMLDivElement>) => void;
     onMouseEnter: () => void;
-    onMouseLeave: () => void;
+    onMouseLeave: (event: MouseEvent<HTMLDivElement>) => void;
     onFocus: () => void;
     onBlur: (event: FocusEvent<HTMLDivElement>) => void;
   };
@@ -17,12 +29,16 @@ export function useRailExpand(): {
   const [focusWithin, setFocusWithin] = useState(false);
   const railExpanded = hovered || focusWithin;
 
-  const onMouseEnter = useCallback(() => {
+  const expand = useCallback(() => {
     setHovered(true);
   }, []);
 
-  const onMouseLeave = useCallback(() => {
+  const collapse = useCallback((event: MouseEvent<HTMLDivElement>) => {
+    if (isLeaveInside(event)) {
+      return;
+    }
     setHovered(false);
+    setFocusWithin(false);
   }, []);
 
   const onFocus = useCallback(() => {
@@ -38,6 +54,13 @@ export function useRailExpand(): {
 
   return {
     railExpanded,
-    railExpandHandlers: { onMouseEnter, onMouseLeave, onFocus, onBlur }
+    railExpandHandlers: {
+      onPointerEnter: expand,
+      onPointerLeave: collapse,
+      onMouseEnter: expand,
+      onMouseLeave: collapse,
+      onFocus,
+      onBlur
+    }
   };
 }

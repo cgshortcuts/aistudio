@@ -112,7 +112,7 @@
         "maintainer": "hello@nodetool.ai",
         "desktop": {
             "entry": {
-                "Name": "AiStudio",
+                "Name": "Ai Studio",
                 "Comment": "Visual Builder for AI Workflows and Agents",
                 "GenericName": "AI Workflow Editor",
                 "Keywords": "AI;Development;Workflow;Node;Editor;Machine Learning;",

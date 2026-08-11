@@ -50,6 +50,15 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import SettingsSidebar from "./SettingsSidebar";
 import useSecretsStore from "../../stores/SecretsStore";
 import { settingsStyles } from "./settingsMenuStyles";
+// === CUSTOM FORK START: Product Profile ===
+import {
+  isChatAndAgentsHidden,
+  showAgentIntegrations
+} from "../../custom/product-profile";
+// === CUSTOM FORK END ===
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 
 // Tab indices. Models, Collections, Workspaces, and the Package Manager now
 // live as standalone full-screen pages reachable from the logo menu.
@@ -73,11 +82,6 @@ const CLOSE_BEHAVIOR_OPTIONS = [
   { value: "ask", label: "Ask Every Time" },
   { value: "quit", label: "Quit Application" },
   { value: "background", label: "Keep Running in Background" }
-] as const;
-
-const PAN_CONTROLS_OPTIONS = [
-  { value: "LMB", label: "Pan canvas" },
-  { value: "RMB", label: "Select nodes (box)" }
 ] as const;
 
 const SELECTION_MODE_OPTIONS = [
@@ -172,7 +176,7 @@ function SettingsPage() {
       case TAB_API_KEYS:
         return "Provider API keys and credentials.";
       case TAB_INTEGRATIONS:
-        return "Service endpoints, MCP servers, storage, and the Nodetool API.";
+        return `Service endpoints, MCP servers, storage, and the ${APP_DISPLAY_NAME} API.`;
       default:
         return "Manage API keys, providers, and editor preferences.";
     }
@@ -188,7 +192,6 @@ function SettingsPage() {
   const setConnectionSnap = useSettingsStore(
     (state) => state.setConnectionSnap
   );
-  const setPanControls = useSettingsStore((state) => state.setPanControls);
   const setSelectionMode = useSettingsStore((state) => state.setSelectionMode);
   const setTimeFormat = useSettingsStore((state) => state.setTimeFormat);
   const setSelectNodesOnDrag = useSettingsStore(
@@ -387,13 +390,6 @@ function SettingsPage() {
     [setConnectionSnap]
   );
 
-  const handlePanControlsChange = useCallback(
-    (value: string) => {
-      setPanControls(value);
-    },
-    [setPanControls]
-  );
-
   const handleSelectionModeChange = useCallback(
     (value: string) => {
       setSelectionMode(value);
@@ -415,7 +411,7 @@ function SettingsPage() {
         addNotification({
           type: "info",
           alert: true,
-          content: "Nodetool API Token copied to Clipboard!"
+          content: `${APP_DISPLAY_NAME} API Token copied to Clipboard!`
         });
       } catch (error) {
         console.error("Failed to copy to clipboard:", error);
@@ -511,7 +507,7 @@ function SettingsPage() {
     ];
     return [
       { category: "Configuration", items: configItems },
-      ...(isLocalhost
+      ...(isLocalhost && showAgentIntegrations()
         ? [
             {
               category: "Servers",
@@ -527,7 +523,7 @@ function SettingsPage() {
             {
               category: "Credentials",
               items: [
-                { id: "nodetool-api-token", label: "Nodetool API Token" }
+                { id: "nodetool-api-token", label: `${APP_DISPLAY_NAME} API Token` }
               ]
             }
           ]
@@ -628,17 +624,21 @@ function SettingsPage() {
                       <Text size="big" id="editor" className="settings-heading">
                         Editor
                       </Text>
-                      <SearchItem
-                        search={generalSearch}
-                        keywords="editor workspace show welcome screen startup"
-                      >
-                        <LabeledSwitch
-                          label="Show Welcome Screen"
-                          checked={!!settings.showWelcomeOnStartup}
-                          onChange={handleShowWelcomeChange}
-                          description="Start on the dashboard, with the welcome screen and templates, until getting started is finished. When off, the app opens straight into the workspace."
-                        />
-                      </SearchItem>
+                      {/* === CUSTOM FORK START: Product Profile === */}
+                      {!isChatAndAgentsHidden() && (
+                        <SearchItem
+                          search={generalSearch}
+                          keywords="editor workspace show welcome screen startup"
+                        >
+                          <LabeledSwitch
+                            label="Show Welcome Screen"
+                            checked={!!settings.showWelcomeOnStartup}
+                            onChange={handleShowWelcomeChange}
+                            description="Start on the dashboard, with the welcome screen and templates, until getting started is finished. When off, the app opens straight into the workspace."
+                          />
+                        </SearchItem>
+                      )}
+                      {/* === CUSTOM FORK END === */}
 
                       <SearchItem
                         search={generalSearch}
@@ -856,27 +856,19 @@ function SettingsPage() {
                       </Text>
                       <SearchItem
                         search={generalSearch}
-                        keywords="canvas navigation pan controls mouse select left click drag"
+                        keywords="canvas navigation pan controls mouse select left click drag alt"
                       >
-                        <SelectField
-                          label="Left-Click Drag"
-                          value={settings.panControls}
-                          onChange={handlePanControlsChange}
-                          options={PAN_CONTROLS_OPTIONS}
-                        />
+                        {/* === CUSTOM FORK START: canvas-pan-select === */}
+                        <Text>Canvas Drag</Text>
                         <div className="description">
                           <Text>
-                            What dragging with the left mouse button does on
-                            empty canvas.
-                          </Text>
-                          <Text>
-                            <b>Pan canvas:</b> left-drag moves the view.
-                            <br />
-                            <b>Select nodes:</b> left-drag draws a selection box;
-                            pan with the right or middle mouse button (and
-                            two-finger scroll on a trackpad).
+                            Left-drag on empty canvas draws a selection box.
+                            Hold Alt and left-drag to pan. Right-click or
+                            middle-click drag also pans (and two-finger scroll
+                            on a trackpad).
                           </Text>
                         </div>
+                        {/* === CUSTOM FORK END === */}
                       </SearchItem>
 
                       <SearchItem
@@ -1091,7 +1083,7 @@ function SettingsPage() {
                   <FoldersSettings />
 
                   {/* Servers (localhost only): MCP + Browser Extension. */}
-                  {isLocalhost && (
+                  {isLocalhost && showAgentIntegrations() && (
                     <>
                       <Text
                         size="big"
@@ -1121,13 +1113,13 @@ function SettingsPage() {
                         id="nodetool-api-token"
                         className="settings-heading"
                       >
-                        Nodetool API
+                        {APP_DISPLAY_NAME} API
                       </Text>
                       <Text
                         className="explanation"
                         sx={{ margin: "0 0 1em 0" }}
                       >
-                        Use the Nodetool API to execute workflows
+                        Use the {APP_DISPLAY_NAME} API to execute workflows
                         programmatically.
                         <br />
                         <br />
@@ -1154,12 +1146,12 @@ function SettingsPage() {
                             color: theme.palette.text.primary
                           }}
                         >
-                          Nodetool API Token
+                          {APP_DISPLAY_NAME} API Token
                         </Text>
                         <div className="description">
                           <Text>
                             This token is used to authenticate your account
-                            with the Nodetool API.
+                            with the {APP_DISPLAY_NAME} API.
                           </Text>
                           <div className="secrets">
                             <WarningIcon

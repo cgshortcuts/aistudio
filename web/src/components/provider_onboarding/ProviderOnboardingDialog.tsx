@@ -23,6 +23,9 @@ import {
 import { useSecrets } from "../../hooks/useSecrets";
 import useProviderOnboardingStore from "../../stores/ProviderOnboardingStore";
 import { openSettingsPage } from "../../utils/openSettingsPage";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 import ollamaIcon from "../../icons/providers/ollama.svg";
 import ProviderOnboardingCard from "./ProviderOnboardingCard";
 import CostGuide from "./CostGuide";
@@ -132,7 +135,7 @@ const ProviderOnboardingDialog: React.FC = () => {
     >
       <FlexColumn gap={SPACING.lg} sx={{ mt: SPACING.xs }}>
         <Caption sx={{ opacity: 0.75, lineHeight: 1.55 }}>
-          NodeTool connects to AI providers with your own account. Pick one
+          {APP_DISPLAY_NAME} connects to AI providers with your own account. Pick one
           below — your credentials are encrypted and stored locally, and you can
           add more or switch anytime.
         </Caption>

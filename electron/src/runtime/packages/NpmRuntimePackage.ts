@@ -5,6 +5,9 @@ import { fileExists } from "../../utils";
 import { logMessage } from "../../logger";
 import { emitServerLog } from "../../events";
 import { getProcessEnv, resolveNpmInvocation } from "../../config";
+// === CUSTOM FORK START: AiStudio Branding ===
+import { APP_DISPLAY_NAME } from "../../custom/branding";
+// === CUSTOM FORK END ===
 import {
   RuntimePackage,
   RuntimeContext,
@@ -141,7 +144,7 @@ export class NpmRuntimePackage implements RuntimePackage {
     const npm = resolveNpmInvocation();
     if (!npm) {
       throw new Error(
-        "npm not found. Reinstall the NodeTool environment to restore the bundled Node.js/npm runtime."
+        `npm not found. Reinstall the ${APP_DISPLAY_NAME} environment to restore the bundled Node.js/npm runtime.`
       );
     }
     await this.ensureRoot(ctx);
