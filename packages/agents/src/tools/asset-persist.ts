@@ -89,6 +89,7 @@ export async function persistOutput(
     namePrefix: string;
     mime: string;
     outputFile?: string;
+    metadata?: Record<string, unknown> | null;
   }
 ): Promise<SavedOutput> {
   const ext = MIME_TO_EXT[opts.mime] ?? "bin";
@@ -100,7 +101,8 @@ export async function persistOutput(
       const asset = (await context.createAsset({
         name,
         contentType: opts.mime,
-        content: bytes
+        content: bytes,
+        metadata: opts.metadata ?? null
       })) as { id?: string };
       if (asset && typeof asset.id === "string") {
         result.asset_id = asset.id;

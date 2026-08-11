@@ -20,9 +20,16 @@ jest.mock("../../../components/ui/ThemeToggle", () => ({
   default: () => <button type="button">Switch to light mode</button>
 }));
 
-jest.mock("../../../stores/KeyPressedStore", () => ({
-  useCombo: jest.fn()
-}));
+jest.mock("../../../stores/KeyPressedStore", () => {
+  const state = { isPaused: false };
+  const useKeyPressedStore = Object.assign((selector: (s: { isPaused: boolean }) => unknown) => selector(state), {
+    getState: () => state
+  });
+  return {
+    useCombo: jest.fn(),
+    useKeyPressedStore
+  };
+});
 
 jest.mock("../../../stores/AppHeaderStore", () => ({
   useAppHeaderStore: () => ({
@@ -61,7 +68,7 @@ const renderToolbar = (showAppMenu = true) =>
 it("places app destinations above the panel toggle when the app menu is shown", () => {
   renderToolbar(true);
 
-  const dashboard = screen.getByRole("button", { name: "Dashboard" });
+  const dashboard = screen.getByRole("button", { name: /^Dashboard\b/ });
   const themeToggle = screen.getByRole("button", {
     name: "Switch to light mode"
   });
@@ -84,7 +91,7 @@ it("omits app destinations when showAppMenu is false", () => {
   renderToolbar(false);
 
   expect(
-    screen.queryByRole("button", { name: "Dashboard" })
+    screen.queryByRole("button", { name: /^Dashboard\b/ })
   ).not.toBeInTheDocument();
   expect(screen.queryByTestId("rail-logo")).not.toBeInTheDocument();
   expect(

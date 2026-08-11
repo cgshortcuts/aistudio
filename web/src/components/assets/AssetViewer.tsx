@@ -25,11 +25,15 @@ import {
   reducedMotion,
   BORDER_RADIUS,
   SPACING,
-  Z_INDEX
+  Z_INDEX,
+  FlexColumn,
+  FlexRow,
+  ToolbarIconButton,
+  CloseButton,
+  DownloadButton,
+  DeleteButton
 } from "../ui_primitives";
 //icons
-import KeyboardArrowLeftIcon from "@mui/icons-material/KeyboardArrowLeft";
-import KeyboardArrowRightIcon from "@mui/icons-material/KeyboardArrowRight";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import CheckIcon from "@mui/icons-material/Check";
 import CompareIcon from "@mui/icons-material/Compare";
@@ -43,6 +47,7 @@ import { ImageComparer } from "../widgets";
 //store
 import { Asset } from "../../stores/ApiTypes";
 import { useWorkspaceTabsStore } from "../../stores/WorkspaceTabsStore";
+import { useAssetGridStore } from "../../stores/AssetGridStore";
 //utils
 import useAssets from "../../serverState/useAssets";
 import { useCombo } from "../../stores/KeyPressedStore";
@@ -56,12 +61,13 @@ import { useNavigate } from "react-router-dom";
 import { isEditableModel3DAsset } from "../model_editor/isEditableModel3D";
 import { isElectron } from "../../utils/browser";
 import { copyAssetToClipboard, isClipboardSupported } from "../../utils/clipboardUtils";
+// === CUSTOM FORK START: asset-viewer-lightbox ===
 import {
-  ToolbarIconButton,
-  CloseButton,
-  DownloadButton,
-  FlexRow
-} from "../ui_primitives";
+  ShortcutHintsBar,
+  toggleRegisteredMediaPlay,
+  useAssetViewerLightboxStore
+} from "../../custom/asset-viewer-lightbox";
+// === CUSTOM FORK END ===
 
 const containerStyles = css({
   width: "100%",
@@ -112,76 +118,118 @@ const styles = (theme: Theme) =>
     ".current-folder": {
       top: "20px"
     },
+    // === CUSTOM FORK START: asset-viewer-lightbox ===
+    ".viewer-body": {
+      position: "absolute",
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: "120px",
+      display: "flex",
+      flexDirection: "row",
+      alignItems: "stretch",
+      minHeight: 0,
+      pointerEvents: "auto"
+    },
+    ".preview-column": {
+      flex: "1 1 auto",
+      minWidth: 0,
+      minHeight: 0,
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "stretch",
+      position: "relative"
+    },
+    ".preview-stage": {
+      flex: "1 1 auto",
+      minHeight: 0,
+      width: "100%",
+      position: "relative",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      overflow: "hidden"
+    },
+    ".preview-stage .image-viewer": {
+      height: "100%"
+    },
+    ".preview-stage .video-viewer": {
+      height: "100%",
+      marginTop: 0,
+      width: "100%"
+    },
+    ".preview-stage .video-viewer video": {
+      width: "auto",
+      maxWidth: "90%",
+      maxHeight: "100%"
+    },
+    ".preview-stage .audio-viewer": {
+      width: "min(80vw, 100%)",
+      margin: "0 auto",
+      maxHeight: "100%",
+      justifyContent: "center"
+    },
     ".actions": {
       zIndex: Z_INDEX.tooltip,
-      position: "absolute",
-      top: "1em",
-      right: "2em"
+      flex: "0 0 auto",
+      position: "relative",
+      top: "auto",
+      right: "auto",
+      width: "100%",
+      boxSizing: "border-box",
+      marginTop: theme.spacing(SPACING.xl),
+      marginBottom: theme.spacing(SPACING.xl),
+      paddingLeft: theme.spacing(SPACING.xl),
+      paddingRight: theme.spacing(SPACING.xl),
+      pointerEvents: "auto"
+    },
+    ".actions-buttons": {
+      flex: "0 0 auto",
+      marginLeft: "auto"
     },
     ".actions .button": {
-      width: "2em",
-      height: "2em",
+      width: theme.spacing(SPACING.xxl),
+      height: theme.spacing(SPACING.xxl),
+      minWidth: theme.spacing(SPACING.xxl),
       backgroundColor: theme.vars.palette.background.paper,
-      color: theme.vars.palette.text.primary,
+      color: theme.vars.palette.grey[400],
       border: `1px solid ${theme.vars.palette.action.disabledBackground}`,
-      borderRadius: BORDER_RADIUS.circle,
-      padding: "0.3em"
+      borderRadius: BORDER_RADIUS.sm,
+      padding: theme.spacing(SPACING.micro)
     },
     ".actions button svg": {
-      fontSize: "1.2em"
+      fontSize: theme.fontSizeBig
     },
     ".actions .button:hover": {
       backgroundColor: theme.vars.palette.action.hover,
-      color: theme.vars.palette.primary.main
+      color: theme.vars.palette.grey[200]
     },
+    ".info-panel-sidebar": {
+      flex: "0 0 280px",
+      height: "100%",
+      overflowY: "auto",
+      zIndex: Z_INDEX.raised,
+      backgroundColor: theme.vars.palette.grey[900],
+      borderLeft: `1px solid ${theme.vars.palette.grey[700]}`,
+      pointerEvents: "auto"
+    },
+    ".info-panel-sidebar .asset-info-panel, .info-panel-sidebar > div": {
+      maxHeight: "none",
+      height: "100%",
+      width: "100%",
+      borderLeft: "none"
+    },
+    // === CUSTOM FORK END ===
     // -------------------
     ".asset-navigation": {
       position: "absolute",
       width: "100%",
       height: "120px",
       padding: "0 0 .5em 0",
-      backgroundColor: theme.vars.palette.grey[800],
+      backgroundColor: theme.vars.palette.grey[900],
       bottom: 0,
-      zIndex: Z_INDEX.overlay
-    },
-    ".prev-next-button": {
-      position: "absolute",
-      top: "40%",
-      width: "2em",
-      height: "2em",
-      zIndex: Z_INDEX.toast,
-      cursor: "pointer",
-      color: theme.vars.palette.grey[200],
-      backgroundColor: theme.vars.palette.background.paper,
-      border: `2px solid ${theme.vars.palette.action.disabledBackground}`,
-      transition: `transform var(--motion-fast) ${EASE_OUT_QUINT}, ${MOTION.background}, ${MOTION.opacity}`
-    },
-    ".prev-next-button:active": {
-      transform: "scale(0.88)"
-    },
-    ".prev-next-button img": {
-      cursor: "pointer !important",
-      pointerEvents: "none"
-    },
-    ".prev-next-button:hover": {
-      backgroundColor: theme.vars.palette.action.hover,
-      color: theme.vars.palette.primary.main
-    },
-    ".prev-next-button.Mui-disabled": {
-      color: theme.vars.palette.action.disabled,
-      backgroundColor: theme.vars.palette.action.disabledBackground,
-      cursor: "default",
-      border: `1px solid ${theme.vars.palette.action.disabledBackground}`,
-      pointerEvents: "none"
-    },
-    ".prev-next-button svg": {
-      fontSize: "2em"
-    },
-    ".prev-next-button.left": {
-      left: "1em"
-    },
-    ".prev-next-button.right": {
-      right: "1em"
+      zIndex: Z_INDEX.overlay,
+      pointerEvents: "auto"
     },
     ".prev-next-items": {
       width: "430px",
@@ -243,7 +291,7 @@ const styles = (theme: Theme) =>
         animation: "none",
         transition: "none"
       },
-      ".prev-next-items .item:hover, .prev-next-items .item:active, .prev-next-button:active": {
+      ".prev-next-items .item:hover, .prev-next-items .item:active": {
         transform: "none"
       }
     }),
@@ -252,7 +300,7 @@ const styles = (theme: Theme) =>
     },
     ".compare-mode-bar": {
       position: "absolute",
-      top: "1em",
+      top: theme.spacing(SPACING.xxxl),
       left: "50%",
       transform: "translateX(-50%)",
       padding: theme.spacing(1, 2),
@@ -281,16 +329,6 @@ const styles = (theme: Theme) =>
     ".prev-next-items .item.compare-selected": {
       outline: "3px solid",
       outlineColor: theme.vars.palette.primary.main
-    },
-    ".info-panel-overlay": {
-      position: "absolute",
-      top: 0,
-      right: 0,
-      height: "calc(100% - 120px)",
-      overflowY: "auto",
-      zIndex: Z_INDEX.modal,
-      backgroundColor: theme.vars.palette.grey[900],
-      boxShadow: "-8px 0 24px rgb(0 0 0 / 0.5)"
     }
   });
 
@@ -319,9 +357,34 @@ const AssetViewer: React.FC<AssetViewerProps> = (props) => {
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
   const prevNextAmount = 5;
 
-  // Info panel (asset metadata, incl. the prompt that produced the asset)
-  const [showInfo, setShowInfo] = useState(false);
-  const toggleInfo = useCallback(() => setShowInfo((v) => !v), []);
+  // === CUSTOM FORK START: asset-viewer-lightbox ===
+  // Info panel preference persists across sessions / viewer closes.
+  const showInfo = useAssetViewerLightboxStore((state) => state.showInfo);
+  const toggleInfo = useAssetViewerLightboxStore((state) => state.toggleShowInfo);
+  const setSelectedAssetIds = useAssetGridStore((state) => state.setSelectedAssetIds);
+  const setSelectedAssets = useAssetGridStore((state) => state.setSelectedAssets);
+  const setDeleteDialogOpen = useAssetGridStore((state) => state.setDeleteDialogOpen);
+  const setOpenAsset = useAssetGridStore((state) => state.setOpenAsset);
+  const pendingDeleteIdRef = useRef<string | null>(null);
+  const pendingDeleteIndexRef = useRef<number | null>(null);
+
+  const handleDeleteCurrentAsset = useCallback(() => {
+    if (!currentAsset) {
+      return;
+    }
+    pendingDeleteIdRef.current = currentAsset.id;
+    pendingDeleteIndexRef.current = currentIndex;
+    setSelectedAssetIds([currentAsset.id]);
+    setSelectedAssets([currentAsset]);
+    setDeleteDialogOpen(true);
+  }, [
+    currentAsset,
+    currentIndex,
+    setSelectedAssetIds,
+    setSelectedAssets,
+    setDeleteDialogOpen
+  ]);
+  // === CUSTOM FORK END ===
 
   // Compare mode state
   const [compareMode, setCompareMode] = useState(false);
@@ -340,7 +403,6 @@ const AssetViewer: React.FC<AssetViewerProps> = (props) => {
       setCompareMode(false);
       setCompareAssetA(null);
       setCompareAssetB(null);
-      setShowInfo(false);
     }
   }, [open]);
 
@@ -350,6 +412,34 @@ const AssetViewer: React.FC<AssetViewerProps> = (props) => {
     () => sortedAssets || folderFiles || [],
     [sortedAssets, folderFiles]
   );
+
+  // === CUSTOM FORK START: asset-viewer-lightbox ===
+  // After delete, stay in the lightbox and show the next (or previous) asset.
+  useEffect(() => {
+    const pendingId = pendingDeleteIdRef.current;
+    if (!open || !pendingId) {
+      return;
+    }
+    if (assetsToUse.some((item) => item.id === pendingId)) {
+      return;
+    }
+
+    pendingDeleteIdRef.current = null;
+    const deleteIndex = pendingDeleteIndexRef.current ?? 0;
+    pendingDeleteIndexRef.current = null;
+
+    if (assetsToUse.length === 0) {
+      handleClose();
+      return;
+    }
+
+    const nextIndex = Math.min(deleteIndex, assetsToUse.length - 1);
+    const nextAsset = assetsToUse[nextIndex];
+    setCurrentAsset(nextAsset);
+    setCurrentIndex(nextIndex);
+    setOpenAsset(nextAsset);
+  }, [open, assetsToUse, handleClose, setOpenAsset]);
+  // === CUSTOM FORK END ===
 
   const { handleDownload } = useAssetDownload({ currentAsset, url });
 
@@ -384,20 +474,21 @@ const AssetViewer: React.FC<AssetViewerProps> = (props) => {
 
   const viewerActionButtonSx = useMemo<SxProps<Theme>>(
     () => ({
-      width: theme.spacing(4),
-      height: theme.spacing(4),
+      // === CUSTOM FORK START: asset-viewer-lightbox ===
+      // Size comes from `.actions .button` CSS (rounded square).
       backgroundColor: theme.vars.palette.background.paper,
-      color: theme.vars.palette.text.primary,
+      color: theme.vars.palette.grey[400],
       border: `1px solid ${theme.vars.palette.action.disabledBackground}`,
-      borderRadius: BORDER_RADIUS.circle,
-      padding: theme.spacing(0.5),
+      borderRadius: BORDER_RADIUS.sm,
+      padding: theme.spacing(SPACING.micro),
       "&:hover": {
         backgroundColor: theme.vars.palette.action.hover,
-        color: theme.vars.palette.primary.main
+        color: theme.vars.palette.grey[200]
       },
       "& svg": {
         fontSize: theme.fontSizeBig
       }
+      // === CUSTOM FORK END ===
     }),
     [theme]
   );
@@ -575,6 +666,53 @@ const AssetViewer: React.FC<AssetViewerProps> = (props) => {
       }
     }, [changeAsset, open])
   );
+  // === CUSTOM FORK START: asset-viewer-lightbox ===
+  useCombo(
+    [" "],
+    useCallback(() => {
+      if (!open || compareMode || compareAssetB) {
+        return;
+      }
+      const ct = currentAsset?.content_type || contentType || "";
+      if (!ct.startsWith("video/") && !ct.startsWith("audio/")) {
+        return;
+      }
+      toggleRegisteredMediaPlay();
+    }, [open, compareMode, compareAssetB, currentAsset?.content_type, contentType])
+  );
+  useCombo(
+    ["delete"],
+    useCallback(() => {
+      if (!open || compareMode || compareAssetB || !sortedAssets || !currentAsset) {
+        return;
+      }
+      handleDeleteCurrentAsset();
+    }, [
+      open,
+      compareMode,
+      compareAssetB,
+      sortedAssets,
+      currentAsset,
+      handleDeleteCurrentAsset
+    ])
+  );
+
+  const shortcutHints = useMemo(() => {
+    const hints = [
+      { keys: ["←"], label: "Prev" },
+      { keys: ["→"], label: "Next" }
+    ];
+    const ct = currentAsset?.content_type || contentType || "";
+    if (ct.startsWith("video/") || ct.startsWith("audio/")) {
+      hints.push({ keys: ["Space"], label: "Play/Pause" });
+    }
+    if (sortedAssets) {
+      hints.push({ keys: ["Del"], label: "Delete" });
+    }
+    hints.push({ keys: ["Esc"], label: "Exit" });
+    return hints;
+  }, [currentAsset?.content_type, contentType, sortedAssets]);
+  // === CUSTOM FORK END ===
 
   const { component: assetViewer } = useAssetDisplay({
     asset: currentAsset,
@@ -595,16 +733,6 @@ const AssetViewer: React.FC<AssetViewerProps> = (props) => {
     },
     [compareMode, compareAssetB, selectAssetForCompare, handleChangeAsset]
   );
-
-  const handlePrevAsset = useCallback(() => {
-    if (currentIndex === null) { return; }
-    handleChangeAsset(Math.max(0, currentIndex - 1));
-  }, [currentIndex, handleChangeAsset]);
-
-  const handleNextAsset = useCallback(() => {
-    if (currentIndex === null) { return; }
-    handleChangeAsset(Math.min(assetsToUse.length - 1, currentIndex + 1));
-  }, [currentIndex, assetsToUse.length, handleChangeAsset]);
 
   const navigation = useMemo(() => {
     if (currentIndex === null) {
@@ -633,111 +761,90 @@ const AssetViewer: React.FC<AssetViewerProps> = (props) => {
     const displayNextAssets = filterForCompare(nextAssets);
 
     return (
-      <>
-        {!compareMode && (
-          <>
-            <ToolbarIconButton
-              icon={<KeyboardArrowLeftIcon />}
-              tooltip="Previous asset"
-              onClick={handlePrevAsset}
-              disabled={prevAssets?.length === 0}
-              className="prev-next-button left"
-              nodrag={false}
-            />
-            <ToolbarIconButton
-              icon={<KeyboardArrowRightIcon />}
-              tooltip="Next asset"
-              onClick={handleNextAsset}
-              disabled={nextAssets?.length === 0}
-              className="prev-next-button right"
-              nodrag={false}
-            />
-          </>
-        )}
-        <FlexRow className="asset-navigation" align="flex-end" justify="center" gap={SPACING.xs}>
-          <FlexRow className="prev-next-items left" align="center" justify="flex-end" gap={SPACING.micro}>
-            {displayPrevAssets?.map((asset, idx) => {
-              const assetIndex = Math.max(
-                0,
-                currentIndex - prevAssets.length + idx
-              );
-              const isCompareSelected = compareAssetA?.id === asset.id;
-              return (
-                <EditorButton
-                  className={`item ${isCompareSelected ? "compare-selected" : ""
-                    }`}
-                  key={asset.id || idx}
-                  onMouseDown={() => handleThumbnailClick(asset, assetIndex)}
-                  density="compact"
-                >
-                  <AssetItem
-                    asset={asset}
-                    draggable={false}
-                    isParent={false}
-                    showDeleteButton={false}
-                    enableContextMenu={false}
-                    showName={false}
-                    showDuration={true}
-                    showFiletype={true}
-                  />
-                </EditorButton>
-              );
-            })}
-          </FlexRow>
-          <FlexRow
-            key={currentAsset?.id}
-            className={`prev-next-items current ${compareAssetA?.id === currentAsset?.id ? "compare-selected" : ""
-              }`}
-            align="center"
-            justify="center"
-          >
-            <AssetItem
-              asset={currentAsset as Asset}
-              draggable={false}
-              isParent={false}
-              showDeleteButton={false}
-              enableContextMenu={false}
-              showName={false}
-              showDuration={true}
-              showFiletype={true}
-            />
-          </FlexRow>
-          <FlexRow className="prev-next-items right" align="center" justify="flex-start" gap={SPACING.micro}>
-            {displayNextAssets?.map((asset, idx) => {
-              const assetIndex = currentIndex + 1 + idx;
-              const isCompareSelected = compareAssetA?.id === asset.id;
-              return (
-                <EditorButton
-                  className={`item ${isCompareSelected ? "compare-selected" : ""
-                    }`}
-                  key={asset.id || idx}
-                  onMouseDown={() => handleThumbnailClick(asset, assetIndex)}
-                  density="compact"
-                >
-                  <AssetItem
-                    asset={asset}
-                    draggable={false}
-                    isParent={false}
-                    showDeleteButton={false}
-                    enableContextMenu={false}
-                    showName={false}
-                    showDuration={true}
-                    showFiletype={true}
-                  />
-                </EditorButton>
-              );
-            })}
-          </FlexRow>
+      <FlexRow className="asset-navigation" align="flex-end" justify="center" gap={SPACING.xs}>
+        <FlexRow className="prev-next-items left" align="center" justify="flex-end" gap={SPACING.micro}>
+          {displayPrevAssets?.map((asset, idx) => {
+            const assetIndex = Math.max(
+              0,
+              currentIndex - prevAssets.length + idx
+            );
+            const isCompareSelected = compareAssetA?.id === asset.id;
+            return (
+              <EditorButton
+                className={`item ${isCompareSelected ? "compare-selected" : ""
+                  }`}
+                key={asset.id || idx}
+                onMouseDown={() => handleThumbnailClick(asset, assetIndex)}
+                density="compact"
+              >
+                <AssetItem
+                  asset={asset}
+                  draggable={false}
+                  isParent={false}
+                  showDeleteButton={false}
+                  showHoverActions={false}
+                  enableContextMenu={false}
+                  showName={false}
+                  showDuration={true}
+                  showFiletype={true}
+                />
+              </EditorButton>
+            );
+          })}
         </FlexRow>
-      </>
+        <FlexRow
+          key={currentAsset?.id}
+          className={`prev-next-items current ${compareAssetA?.id === currentAsset?.id ? "compare-selected" : ""
+            }`}
+          align="center"
+          justify="center"
+        >
+          <AssetItem
+            asset={currentAsset as Asset}
+            draggable={false}
+            isParent={false}
+            showDeleteButton={false}
+            showHoverActions={false}
+            enableContextMenu={false}
+            showName={false}
+            showDuration={true}
+            showFiletype={true}
+          />
+        </FlexRow>
+        <FlexRow className="prev-next-items right" align="center" justify="flex-start" gap={SPACING.micro}>
+          {displayNextAssets?.map((asset, idx) => {
+            const assetIndex = currentIndex + 1 + idx;
+            const isCompareSelected = compareAssetA?.id === asset.id;
+            return (
+              <EditorButton
+                className={`item ${isCompareSelected ? "compare-selected" : ""
+                  }`}
+                key={asset.id || idx}
+                onMouseDown={() => handleThumbnailClick(asset, assetIndex)}
+                density="compact"
+              >
+                <AssetItem
+                  asset={asset}
+                  draggable={false}
+                  isParent={false}
+                  showDeleteButton={false}
+                  showHoverActions={false}
+                  enableContextMenu={false}
+                  showName={false}
+                  showDuration={true}
+                  showFiletype={true}
+                />
+              </EditorButton>
+            );
+          })}
+        </FlexRow>
+      </FlexRow>
     );
   }, [
     currentIndex,
     assetsToUse,
     currentAsset,
     handleThumbnailClick,
-    handlePrevAsset,
-    handleNextAsset,
     compareMode,
     compareAssetA,
     compareAssetB
@@ -793,139 +900,166 @@ const AssetViewer: React.FC<AssetViewerProps> = (props) => {
           </FlexRow>
         )}
 
-        {/* Show ImageComparer when both assets selected, otherwise show normal viewer */}
-        {compareAssetA && compareAssetB ? (
-          <div style={{ width: "100%", height: "calc(100% - 120px)" }}>
-            <ImageComparer
-              imageA={compareAssetA.get_url || ""}
-              imageB={compareAssetB.get_url || ""}
-              labelA={compareAssetA.name || "A"}
-              labelB={compareAssetB.name || "B"}
-              showLabels={true}
-              showMetadata={true}
-              initialMode="horizontal"
-            />
-          </div>
-        ) : (
-          assetViewer
-        )}
+        {/* === CUSTOM FORK START: asset-viewer-lightbox === */}
+        <div className="viewer-body">
+          <FlexColumn className="preview-column" gap={SPACING.none}>
+            {/*
+              Top bar: shortcut hints on the left, actions on the right.
+              Rendered above the media so controls stay clear of the preview.
+            */}
+            <FlexRow
+              className="actions"
+              gap={SPACING.lg}
+              align="center"
+              justify="space-between"
+              sx={{ zIndex: Z_INDEX.tooltip }}
+            >
+              {!compareAssetB && (
+                <ShortcutHintsBar hints={shortcutHints} />
+              )}
+              <FlexRow
+                className="actions-buttons"
+                gap={SPACING.lg}
+                align="center"
+              >
+              <DownloadButton
+                onClick={handleDownload}
+                className="button download"
+                nodrag={false}
+                sx={viewerActionButtonSx}
+              />
+              {isImage && !compareMode && (
+                <ToolbarIconButton
+                  icon={<EditIcon />}
+                  tooltip="Edit Image"
+                  onClick={handleOpenImageEditor}
+                  className="button edit"
+                  nodrag={false}
+                  sx={viewerActionButtonSx}
+                />
+              )}
+              {isModel3D && !compareMode && (
+                <ToolbarIconButton
+                  icon={<EditIcon />}
+                  tooltip="Edit in 3D Editor"
+                  onClick={handleOpenModel3DEditor}
+                  className="button edit"
+                  nodrag={false}
+                  sx={viewerActionButtonSx}
+                />
+              )}
+              {isAudio && !compareMode && (
+                <ToolbarIconButton
+                  icon={<EditIcon />}
+                  tooltip="Edit Audio"
+                  onClick={handleOpenAudioEditor}
+                  className="button edit"
+                  nodrag={false}
+                  sx={viewerActionButtonSx}
+                />
+              )}
+              {isVideo && !compareMode && (
+                <ToolbarIconButton
+                  icon={<EditIcon />}
+                  tooltip={
+                    currentAsset?.timeline_id
+                      ? "Edit Timeline"
+                      : "Create Timeline from Video"
+                  }
+                  onClick={handleOpenVideoEditor}
+                  className="button edit"
+                  nodrag={false}
+                  sx={viewerActionButtonSx}
+                />
+              )}
+              {isElectron && currentAsset?.content_type && isClipboardSupported(currentAsset.content_type) && (
+                <ToolbarIconButton
+                  icon={copied ? <CheckIcon /> : <ContentCopyIcon />}
+                  tooltip={
+                    copied
+                      ? "Copied!"
+                      : currentAsset.content_type.startsWith("image/")
+                        ? "Copy Image"
+                        : currentAsset.content_type.startsWith("video/")
+                          ? "Copy Video Info"
+                          : currentAsset.content_type.startsWith("audio/")
+                            ? "Copy Audio Info"
+                            : "Copy Content"
+                  }
+                  onClick={handleCopyToClipboard}
+                  className="button copy"
+                  nodrag={false}
+                  sx={viewerActionButtonSx}
+                />
+              )}
+              {canCompare && !compareMode && !compareAssetB && (
+                <ToolbarIconButton
+                  icon={<CompareIcon />}
+                  tooltip="Compare with another image"
+                  onClick={startCompareMode}
+                  className="button compare"
+                  nodrag={false}
+                  sx={viewerActionButtonSx}
+                />
+              )}
+              {currentAsset && !compareMode && (
+                <ToolbarIconButton
+                  icon={<InfoOutlinedIcon />}
+                  tooltip={showInfo ? "Hide info" : "Show info"}
+                  onClick={toggleInfo}
+                  className="button info"
+                  nodrag={false}
+                  sx={viewerActionButtonSx}
+                />
+              )}
+              {/* === CUSTOM FORK START: asset-viewer-lightbox === */}
+              {currentAsset && sortedAssets && !compareMode && (
+                <DeleteButton
+                  onClick={handleDeleteCurrentAsset}
+                  tooltip="Delete"
+                  className="button delete"
+                  nodrag={false}
+                  sx={viewerActionButtonSx}
+                />
+              )}
+              {/* === CUSTOM FORK END === */}
+              <CloseButton
+                onClick={compareAssetB ? exitCompareView : handleClose}
+                tooltip="Close"
+                className="button close"
+                nodrag={false}
+                sx={viewerActionButtonSx}
+              />
+              </FlexRow>
+            </FlexRow>
+
+            <div className="preview-stage">
+              {compareAssetA && compareAssetB ? (
+                <div style={{ width: "100%", height: "100%" }}>
+                  <ImageComparer
+                    imageA={compareAssetA.get_url || ""}
+                    imageB={compareAssetB.get_url || ""}
+                    labelA={compareAssetA.name || "A"}
+                    labelB={compareAssetB.name || "B"}
+                    showLabels={true}
+                    showMetadata={true}
+                    initialMode="horizontal"
+                  />
+                </div>
+              ) : (
+                assetViewer
+              )}
+            </div>
+          </FlexColumn>
+
+          {showInfo && currentAsset && !compareMode && (
+            <div className="info-panel-sidebar">
+              <AssetInfoPanel asset={currentAsset} />
+            </div>
+          )}
+        </div>
+        {/* === CUSTOM FORK END === */}
         {navigation}
-
-        {showInfo && currentAsset && !compareMode && (
-          <div className="info-panel-overlay">
-            <AssetInfoPanel asset={currentAsset} />
-          </div>
-        )}
-
-        {/*
-          Render the toolbar after the main viewer in DOM order so it paints (and
-          receives hit targets) on top; ImageViewer is a full-area interactive layer
-          and would otherwise take precedence for equal/ambiguous stacking.
-        */}
-        <FlexRow
-          className="actions"
-          gap={SPACING.sm}
-          align="center"
-          sx={{ zIndex: Z_INDEX.tooltip }}
-        >
-          <DownloadButton
-            onClick={handleDownload}
-            className="button download"
-            nodrag={false}
-            sx={viewerActionButtonSx}
-          />
-          {isImage && !compareMode && (
-            <ToolbarIconButton
-              icon={<EditIcon />}
-              tooltip="Edit Image"
-              onClick={handleOpenImageEditor}
-              className="button edit"
-              nodrag={false}
-              sx={viewerActionButtonSx}
-            />
-          )}
-          {isModel3D && !compareMode && (
-            <ToolbarIconButton
-              icon={<EditIcon />}
-              tooltip="Edit in 3D Editor"
-              onClick={handleOpenModel3DEditor}
-              className="button edit"
-              nodrag={false}
-              sx={viewerActionButtonSx}
-            />
-          )}
-          {isAudio && !compareMode && (
-            <ToolbarIconButton
-              icon={<EditIcon />}
-              tooltip="Edit Audio"
-              onClick={handleOpenAudioEditor}
-              className="button edit"
-              nodrag={false}
-              sx={viewerActionButtonSx}
-            />
-          )}
-          {isVideo && !compareMode && (
-            <ToolbarIconButton
-              icon={<EditIcon />}
-              tooltip={
-                currentAsset?.timeline_id
-                  ? "Edit Timeline"
-                  : "Create Timeline from Video"
-              }
-              onClick={handleOpenVideoEditor}
-              className="button edit"
-              nodrag={false}
-              sx={viewerActionButtonSx}
-            />
-          )}
-          {isElectron && currentAsset?.content_type && isClipboardSupported(currentAsset.content_type) && (
-            <ToolbarIconButton
-              icon={copied ? <CheckIcon /> : <ContentCopyIcon />}
-              tooltip={
-                copied
-                  ? "Copied!"
-                  : currentAsset.content_type.startsWith("image/")
-                    ? "Copy Image"
-                    : currentAsset.content_type.startsWith("video/")
-                      ? "Copy Video Info"
-                      : currentAsset.content_type.startsWith("audio/")
-                        ? "Copy Audio Info"
-                        : "Copy Content"
-              }
-              onClick={handleCopyToClipboard}
-              className="button copy"
-              nodrag={false}
-              sx={viewerActionButtonSx}
-            />
-          )}
-          {canCompare && !compareMode && !compareAssetB && (
-            <ToolbarIconButton
-              icon={<CompareIcon />}
-              tooltip="Compare with another image"
-              onClick={startCompareMode}
-              className="button compare"
-              nodrag={false}
-              sx={viewerActionButtonSx}
-            />
-          )}
-          {currentAsset && !compareMode && (
-            <ToolbarIconButton
-              icon={<InfoOutlinedIcon />}
-              tooltip={showInfo ? "Hide info" : "Show info"}
-              onClick={toggleInfo}
-              className="button info"
-              nodrag={false}
-              sx={viewerActionButtonSx}
-            />
-          )}
-          <CloseButton
-            onClick={compareAssetB ? exitCompareView : handleClose}
-            tooltip="Close"
-            className="button close"
-            nodrag={false}
-            sx={viewerActionButtonSx}
-          />
-        </FlexRow>
       </Dialog>
     </div>
   );

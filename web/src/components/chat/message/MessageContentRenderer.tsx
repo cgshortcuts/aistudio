@@ -189,7 +189,10 @@ export const MessageContentRenderer: React.FC<MessageContentRendererProps> = Rea
 
       return (
         <div css={wrapperStyles} {...dragProps}>
-          <ImageView source={imageSource} />
+          <ImageView
+            source={imageSource}
+            assetId={content.image?.asset_id}
+          />
           {addButton}
         </div>
       );

@@ -38,6 +38,10 @@ import {
 } from "../ui_primitives";
 import { TYPE_FILTERS, TypeFilterKey } from "../../utils/formatUtils";
 import isEqual from "../../utils/isEqual";
+// === CUSTOM FORK START: asset-search-autofocus ===
+import { useAssetSearchAutofocus } from "../../custom/asset-search-autofocus/useAssetSearchAutofocus";
+import type { AssetSearchFocusSurface } from "../../custom/asset-search-autofocus/assetSearchAutofocusSurface";
+// === CUSTOM FORK END ===
 
 const styles = (theme: Theme) =>
   css({
@@ -93,13 +97,19 @@ interface AssetActionsMenuProps {
   isFullscreenAssets?: boolean;
   /** Hides folder browsing/creation controls (e.g. the workflow-output sidebar). */
   hideFolderControls?: boolean;
+  // === CUSTOM FORK START: asset-search-autofocus ===
+  autofocusSearchSurface?: AssetSearchFocusSurface;
+  // === CUSTOM FORK END ===
 }
 
 const AssetActionsMenu: React.FC<AssetActionsMenuProps> = ({
   maxItemSize,
   onUploadFiles,
   isFullscreenAssets = false,
-  hideFolderControls = false
+  hideFolderControls = false,
+  // === CUSTOM FORK START: asset-search-autofocus ===
+  autofocusSearchSurface
+  // === CUSTOM FORK END ===
 }) => {
   const setSelectedAssetIds = useAssetGridStore(
     (state) => state.setSelectedAssetIds
@@ -127,7 +137,10 @@ const AssetActionsMenu: React.FC<AssetActionsMenuProps> = ({
   const { folderFiles, folderTree } = useAssets();
   const { handleSelectAllAssets, handleDeselectAssets } =
     useAssetSelection(folderFiles);
-  const [expanded, setExpanded] = useState(false);
+  // === CUSTOM FORK START: asset-search-autofocus ===
+  const { expanded, setExpanded, focusSearchInput, focusNonce } =
+    useAssetSearchAutofocus(autofocusSearchSurface);
+  // === CUSTOM FORK END ===
 
   const hasFolders = useMemo(
     () => !!folderTree && Object.keys(folderTree).length > 0,
@@ -287,7 +300,10 @@ const AssetActionsMenu: React.FC<AssetActionsMenuProps> = ({
             <AssetSearchInput
               onLocalSearchChange={onLocalSearchChange}
               focusOnTyping={false}
-              focusSearchInput={false}
+              // === CUSTOM FORK START: asset-search-autofocus ===
+              focusSearchInput={focusSearchInput}
+              focusNonce={focusNonce}
+              // === CUSTOM FORK END ===
               width={240}
             />
           </SearchErrorBoundary>

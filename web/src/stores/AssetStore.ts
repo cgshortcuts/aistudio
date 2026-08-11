@@ -15,6 +15,9 @@ import {
   UploadSource
 } from "../utils/imageUploadValidation";
 import { normalizeAssetUrls, normalizeAssetList } from "../utils/normalizeAsset";
+// === CUSTOM FORK START: asset-stars ===
+import { forgetStarredAssets } from "../custom/asset-stars";
+// === CUSTOM FORK END ===
 
 type AssetCreatePayload = {
   workflow_id?: string;
@@ -476,6 +479,9 @@ export const useAssetStore = create<AssetStore>((set, get) => ({
     }
     // Catch-all so workflow-scoped, search, and tree views refetch.
     get().invalidateQueries(["assets"]);
+    // === CUSTOM FORK START: asset-stars ===
+    forgetStarredAssets(deleted_asset_ids);
+    // === CUSTOM FORK END ===
     return deleted_asset_ids;
   },
 

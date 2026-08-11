@@ -682,6 +682,24 @@ export const NODE_EDITOR_SHORTCUTS: Shortcut[] = [
     description: "Jump forward five assets in the asset viewer",
     registerCombo: false
   },
+  // === CUSTOM FORK START: asset-viewer-lightbox ===
+  {
+    title: "Play/Pause Media",
+    slug: "assetViewerPlayPause",
+    keyCombo: [" "],
+    category: "assets" as const,
+    description: "Play or pause the current video or audio in the asset viewer",
+    registerCombo: false
+  },
+  {
+    title: "Delete Asset",
+    slug: "assetViewerDelete",
+    keyCombo: ["Delete"],
+    category: "assets" as const,
+    description: "Delete the current asset in the asset viewer",
+    registerCombo: false
+  },
+  // === CUSTOM FORK END ===
   {
     title: "Clear Asset Search",
     slug: "clearAssetSearch",

@@ -351,6 +351,7 @@ export interface AssetCreateParamsLike {
   content: Uint8Array;
   parentId?: string | null;
   nodeId?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 /** A non-folder asset surfaced when listing a folder's contents. */
@@ -2176,6 +2177,7 @@ export class ProcessingContext {
     parentId?: string | null;
     instructions?: Uint8Array | null;
     nodeId?: string | null;
+    metadata?: Record<string, unknown> | null;
   }): Promise<unknown> {
     const fn = this.requireModelInterface("createAsset");
     const content = args.content ?? args.instructions;
@@ -2191,7 +2193,8 @@ export class ProcessingContext {
       contentType: args.contentType,
       content,
       parentId: args.parentId ?? null,
-      nodeId: args.nodeId ?? null
+      nodeId: args.nodeId ?? null,
+      metadata: args.metadata ?? null
     });
   }
 
@@ -2202,6 +2205,7 @@ export class ProcessingContext {
     parentId?: string | null;
     instructions?: Uint8Array | null;
     nodeId?: string | null;
+    metadata?: Record<string, unknown> | null;
   }): Promise<unknown> {
     return this.createAsset(args);
   }

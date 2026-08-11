@@ -127,7 +127,18 @@ export class GenerateImageTool extends Tool {
         outputFile:
           typeof params["output_file"] === "string"
             ? (params["output_file"] as string)
-            : undefined
+            : undefined,
+        metadata: {
+          prompt,
+          provider: m.provider,
+          model: m.model,
+          ...(typeof params["width"] === "number"
+            ? { width: params["width"] }
+            : {}),
+          ...(typeof params["height"] === "number"
+            ? { height: params["height"] }
+            : {})
+        }
       });
       return { type: "image", provider: m.provider, model: m.model, ...persisted };
     } catch (e) {
@@ -200,7 +211,18 @@ export class EditImageTool extends Tool {
         outputFile:
           typeof params["output_file"] === "string"
             ? (params["output_file"] as string)
-            : undefined
+            : undefined,
+        metadata: {
+          prompt,
+          provider: m.provider,
+          model: m.model,
+          ...(typeof params["target_width"] === "number"
+            ? { width: params["target_width"] }
+            : {}),
+          ...(typeof params["target_height"] === "number"
+            ? { height: params["target_height"] }
+            : {})
+        }
       });
       return { type: "image", provider: m.provider, model: m.model, ...persisted };
     } catch (e) {
@@ -264,7 +286,18 @@ export class GenerateVideoTool extends Tool {
         outputFile:
           typeof params["output_file"] === "string"
             ? (params["output_file"] as string)
-            : undefined
+            : undefined,
+        metadata: {
+          prompt,
+          provider: m.provider,
+          model: m.model,
+          ...(typeof params["aspect_ratio"] === "string"
+            ? { aspect_ratio: params["aspect_ratio"] }
+            : {}),
+          ...(typeof params["resolution"] === "string"
+            ? { resolution: params["resolution"] }
+            : {})
+        }
       });
       return { type: "video", provider: m.provider, model: m.model, ...persisted };
     } catch (e) {
@@ -326,13 +359,26 @@ export class AnimateImageTool extends Tool {
           resolution: params["resolution"]
         }
       })) as Uint8Array;
+      const prompt =
+        typeof params["prompt"] === "string" ? params["prompt"] : undefined;
       const persisted = await persistOutput(context, result, {
         namePrefix: "animated-video",
         mime: "video/mp4",
         outputFile:
           typeof params["output_file"] === "string"
             ? (params["output_file"] as string)
-            : undefined
+            : undefined,
+        metadata: {
+          ...(prompt ? { prompt } : {}),
+          provider: m.provider,
+          model: m.model,
+          ...(typeof params["aspect_ratio"] === "string"
+            ? { aspect_ratio: params["aspect_ratio"] }
+            : {}),
+          ...(typeof params["resolution"] === "string"
+            ? { resolution: params["resolution"] }
+            : {})
+        }
       });
       return { type: "video", provider: m.provider, model: m.model, ...persisted };
     } catch (e) {
@@ -545,7 +591,15 @@ export class GenerateSpeechTool extends Tool {
       const persisted = await persistOutput(context, audio, {
         namePrefix: "generated-speech",
         mime: mimeType ?? "audio/mpeg",
-        outputFile: outputFileFinal
+        outputFile: outputFileFinal,
+        metadata: {
+          prompt: text,
+          provider: m.provider,
+          model: m.model,
+          ...(typeof params["voice"] === "string"
+            ? { voice: params["voice"] }
+            : {})
+        }
       });
       return {
         type: "audio",

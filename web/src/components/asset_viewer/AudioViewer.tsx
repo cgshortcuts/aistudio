@@ -1,13 +1,16 @@
 /** @jsxImportSource @emotion/react */
 import { css } from "@emotion/react";
 
-import React, { MouseEventHandler, memo } from "react";
+import React, { MouseEventHandler, memo, useEffect, useRef } from "react";
 import { Asset } from "../../stores/ApiTypes";
 import AudioPlayer from "../audio/AudioPlayer";
 
 import { Text } from "../ui_primitives";
 import { useTheme } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
+// === CUSTOM FORK START: asset-viewer-lightbox ===
+import { registerMediaPlayToggle } from "../../custom/asset-viewer-lightbox";
+// === CUSTOM FORK END ===
 
 interface AudioViewerProps {
   asset?: Asset;
@@ -79,6 +82,17 @@ const handleRightClick: MouseEventHandler<HTMLImageElement> = (event) => {
 
 const AudioViewer: React.FC<AudioViewerProps> = memo(function AudioViewer({ asset, url }) {
   const theme = useTheme();
+  // === CUSTOM FORK START: asset-viewer-lightbox ===
+  const playPauseRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    registerMediaPlayToggle(() => {
+      playPauseRef.current?.();
+    });
+    return () => registerMediaPlayToggle(null);
+  }, []);
+  // === CUSTOM FORK END ===
+
   return (
     <div
       className="audio-viewer"
@@ -98,6 +112,9 @@ const AudioViewer: React.FC<AudioViewerProps> = memo(function AudioViewer({ asse
         waveColor="#ddd"
         progressColor="#666"
         waveformHeight={50}
+        // === CUSTOM FORK START: asset-viewer-lightbox ===
+        playPauseRef={playPauseRef}
+        // === CUSTOM FORK END ===
       />
     </div>
   );

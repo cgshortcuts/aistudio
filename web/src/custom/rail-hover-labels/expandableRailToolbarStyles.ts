@@ -160,6 +160,22 @@ export const expandableRailToolbarStyles = (theme: Theme) =>
           ...reducedMotion({ transition: MOTION.none, opacity: 0 })
         },
 
+        "& .rail-menu-item-shortcut": {
+          flexShrink: 0,
+          marginLeft: "auto",
+          marginBottom: 0,
+          paddingLeft: getSpacingPx(SPACING.xs),
+          paddingRight: getSpacingPx(SPACING.xs),
+          borderRadius: BORDER_RADIUS.xs,
+          backgroundColor: theme.vars.palette.action.hover,
+          color: theme.vars.palette.text.disabled,
+          fontFamily: theme.fontFamily2,
+          whiteSpace: "nowrap",
+          opacity: 0,
+          transition: `opacity ${RAIL_EXPAND_MOTION}`,
+          ...reducedMotion({ transition: MOTION.none, opacity: 0 })
+        },
+
         "&:hover": {
           backgroundColor: theme.vars.palette.action.hover,
           color: theme.vars.palette.text.primary
@@ -176,7 +192,7 @@ export const expandableRailToolbarStyles = (theme: Theme) =>
         }
       },
 
-      "&:hover .rail-menu-item .rail-menu-item-label, &:has(:focus-visible) .rail-menu-item .rail-menu-item-label, &.expanded .rail-menu-item .rail-menu-item-label":
+      "&:hover .rail-menu-item :is(.rail-menu-item-label, .rail-menu-item-shortcut), &:has(:focus-visible) .rail-menu-item :is(.rail-menu-item-label, .rail-menu-item-shortcut), &.expanded .rail-menu-item :is(.rail-menu-item-label, .rail-menu-item-shortcut)":
         {
           opacity: 1,
           ...reducedMotion({ opacity: 1 })

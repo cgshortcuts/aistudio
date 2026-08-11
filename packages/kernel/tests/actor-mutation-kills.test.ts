@@ -170,6 +170,33 @@ describe("generation_complete properties — scalar filter", () => {
     });
   });
 
+  it("flattens a model-slot object into model + provider scalars", async () => {
+    const node = makeNode({
+      properties: {
+        prompt: "a cat",
+        model: {
+          type: "image_model",
+          id: "fal-ai/flux/schnell",
+          name: "Flux",
+          provider: "fal_ai"
+        }
+      }
+    });
+    const { actor, messages } = createActor(node, new NodeInbox(), {
+      async process() {
+        return { image: "bytes" };
+      }
+    });
+
+    await actor.run();
+
+    expect(generationCompletes(messages)[0].properties).toEqual({
+      prompt: "a cat",
+      model: "fal-ai/flux/schnell",
+      provider: "fal_ai"
+    });
+  });
+
   it("reports null (not an empty object) when no input is scalar", async () => {
     // Arrange
     const node = makeNode({

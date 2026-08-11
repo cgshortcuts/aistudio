@@ -13,6 +13,13 @@ import { getAssetCategory } from "../components/assets/assetGridUtils";
 import { trpcClient } from "../trpc/client";
 import { normalizeAssetList } from "../utils/normalizeAsset";
 import { useNotificationStore } from "../stores/NotificationStore";
+// === CUSTOM FORK START: asset-stars ===
+import {
+  applyStarredAssetFilter,
+  useFavoriteAssetIds,
+  useStarredAssetFilter
+} from "../custom/asset-stars";
+// === CUSTOM FORK END ===
 
 type FilterOptions = {
   searchTerm: string;
@@ -64,6 +71,10 @@ export const useAssets = (_initialFolderId: string | null = null) => {
   const addNotification = useNotificationStore(
     (state) => state.addNotification
   );
+  // === CUSTOM FORK START: asset-stars ===
+  const starredFilter = useStarredAssetFilter();
+  const favoriteAssetIds = useFavoriteAssetIds();
+  // === CUSTOM FORK END ===
 
   if (currentUser === null) {
     throw new Error("User not logged");
@@ -217,13 +228,24 @@ export const useAssets = (_initialFolderId: string | null = null) => {
     []
   );
   const folderFilesFiltered = useMemo(() => {
-    return filterAssets(processedAssets, {
+    const filtered = filterAssets(processedAssets, {
       searchTerm: assetSearchTerm || "",
       contentType: null,
       sizeFilter: sizeFilter,
       typeFilter: typeFilter
     });
-  }, [filterAssets, processedAssets, assetSearchTerm, sizeFilter, typeFilter]);
+    // === CUSTOM FORK START: asset-stars ===
+    return applyStarredAssetFilter(filtered, starredFilter, favoriteAssetIds);
+    // === CUSTOM FORK END ===
+  }, [
+    filterAssets,
+    processedAssets,
+    assetSearchTerm,
+    sizeFilter,
+    typeFilter,
+    starredFilter,
+    favoriteAssetIds
+  ]);
 
   // AssetStore.{createFolder,delete,update} already invalidates the
   // ["assets", { parent_id }] queries it touches; these mutations only need

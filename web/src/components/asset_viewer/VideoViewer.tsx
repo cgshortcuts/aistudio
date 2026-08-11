@@ -1,9 +1,13 @@
 /** @jsxImportSource @emotion/react */
 import { css } from "@emotion/react";
 
-import React, { memo } from "react";
+import React, { memo, useEffect, useRef, useCallback } from "react";
 import { Asset } from "../../stores/ApiTypes";
-import { Text, Box } from "../ui_primitives";
+import { Box } from "../ui_primitives";
+// === CUSTOM FORK START: asset-viewer-lightbox ===
+import { registerMediaPlayToggle } from "../../custom/asset-viewer-lightbox";
+// === CUSTOM FORK END ===
+
 interface VideoViewerProps {
   asset?: Asset;
   url?: string;
@@ -31,14 +35,37 @@ const styles = () =>
   });
 
 const VideoViewer: React.FC<VideoViewerProps> = memo(function VideoViewer({ asset, url }) {
+  // === CUSTOM FORK START: asset-viewer-lightbox ===
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const togglePlay = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+    if (video.paused) {
+      void video.play().catch(() => {
+        // Autoplay / user-gesture restrictions — ignore.
+      });
+    } else {
+      video.pause();
+    }
+  }, []);
+
+  useEffect(() => {
+    registerMediaPlayToggle(togglePlay);
+    return () => registerMediaPlayToggle(null);
+  }, [togglePlay]);
+  // === CUSTOM FORK END ===
+
   return (
     <Box className="video-viewer" css={styles()}>
-      <video controls={true} src={asset?.get_url || url || ""}>
+      {/* === CUSTOM FORK START: asset-viewer-lightbox === */}
+      <video ref={videoRef} controls={true} src={asset?.get_url || url || ""}>
         Your browser does not support the video element.
       </video>
-      <Text size="big" color="secondary">
-        {asset?.name}
-      </Text>
+      {/* Filename under the video removed for lightbox clarity. */}
+      {/* === CUSTOM FORK END === */}
     </Box>
   );
 });

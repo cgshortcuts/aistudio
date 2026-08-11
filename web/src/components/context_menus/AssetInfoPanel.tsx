@@ -1,7 +1,7 @@
 /** @jsxImportSource @emotion/react */
 import { css } from "@emotion/react";
 import { memo, useMemo } from "react";
-import { Text, Box, BORDER_RADIUS, SPACING, getSpacingPx } from "../ui_primitives";
+import { Box, BORDER_RADIUS, SPACING, getSpacingPx } from "../ui_primitives";
 import { useTheme } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
 import type { Asset } from "../../stores/ApiTypes";
@@ -13,10 +13,18 @@ import {
 import { secondsToHMS } from "../../utils/formatDateAndTime";
 import { useAssetGridStore } from "../../stores/AssetGridStore";
 import { useWorkflowManager } from "../../contexts/WorkflowManagerContext";
+// === CUSTOM FORK START: asset-generation-info ===
+import {
+  CopyableInfoRow,
+  GenerationInfoSection
+} from "../../custom/asset-generation-info";
+// === CUSTOM FORK END ===
 
 const styles = (theme: Theme) =>
   css({
-    width: "240px",
+    width: "280px",
+    maxHeight: "70vh",
+    overflowY: "auto",
     padding: "0.75em 1em",
     borderLeft: `1px solid ${theme.vars.palette.grey[700]}`,
     "& .info-row": {
@@ -30,7 +38,7 @@ const styles = (theme: Theme) =>
       fontSize: theme.fontSizeSmaller,
       color: theme.vars.palette.grey[400],
       flexShrink: 0,
-      minWidth: "55px",
+      minWidth: "70px",
       textAlign: "right"
     },
     "& .info-value": {
@@ -82,7 +90,6 @@ const AssetInfoPanel: React.FC<AssetInfoPanelProps> = ({ asset }) => {
 
   const isImage = asset.content_type?.startsWith("image/");
   const thumbSrc = asset.thumb_url || (isImage ? asset.get_url : null);
-  const metadata = asset.metadata as Record<string, unknown> | null | undefined;
 
   return (
     <Box css={styles(theme)}>
@@ -90,61 +97,62 @@ const AssetInfoPanel: React.FC<AssetInfoPanelProps> = ({ asset }) => {
         <img className="info-thumb" src={thumbSrc} alt="" loading="eager" />
       )}
 
-      <InfoRow label="Name" value={asset.name} />
-      <InfoRow
-        label="Type"
-        value={asset.content_type ? formatContentType(asset.content_type) : null}
-      />
+      <CopyableInfoRow row={{ label: "Name", value: asset.name }} />
+      {asset.content_type && (
+        <CopyableInfoRow
+          row={{
+            label: "Type",
+            value: formatContentType(asset.content_type),
+            copyValue: asset.content_type
+          }}
+        />
+      )}
       {asset.size != null && asset.size > 0 && (
-        <InfoRow label="Size" value={formatFileSize(asset.size)} />
+        <CopyableInfoRow
+          row={{
+            label: "Size",
+            value: formatFileSize(asset.size),
+            copyValue: String(asset.size)
+          }}
+        />
       )}
       {asset.duration != null && asset.duration > 0 && (
-        <InfoRow label="Duration" value={secondsToHMS(asset.duration)} />
+        <CopyableInfoRow
+          row={{
+            label: "Duration",
+            value: secondsToHMS(asset.duration),
+            copyValue: String(asset.duration)
+          }}
+        />
       )}
-      <InfoRow label="Created" value={formatDateTime(asset.created_at)} />
+      <CopyableInfoRow
+        row={{
+          label: "Created",
+          value: formatDateTime(asset.created_at),
+          copyValue: asset.created_at
+        }}
+      />
 
       {(folderName || workflowName) && (
         <div className="info-section">
-          {folderName && <InfoRow label="Folder" value={folderName} />}
-          {workflowName && <InfoRow label="Workflow" value={workflowName} />}
+          {folderName && (
+            <CopyableInfoRow row={{ label: "Folder", value: folderName }} />
+          )}
+          {workflowName && (
+            <CopyableInfoRow row={{ label: "Workflow", value: workflowName }} />
+          )}
         </div>
       )}
+
+      {/* === CUSTOM FORK START: asset-generation-info === */}
+      <GenerationInfoSection asset={asset} />
+      {/* === CUSTOM FORK END === */}
 
       <div className="info-section">
-        <InfoRow label="ID" value={asset.id} />
+        <CopyableInfoRow row={{ label: "ID", value: asset.id }} />
       </div>
-
-      {metadata && Object.keys(metadata).length > 0 && (
-        <div className="info-section">
-          {Object.entries(metadata).map(([key, val]) => (
-            <InfoRow key={key} label={key} value={String(val)} />
-          ))}
-        </div>
-      )}
     </Box>
   );
 };
-
-const InfoRow = memo(function InfoRow({
-  label,
-  value
-}: {
-  label: string;
-  value: string | null | undefined;
-}) {
-  if (!value) {
-    return null;
-  }
-  return (
-    <div className="info-row">
-      <Text className="info-label" component="span">
-        {label}
-      </Text>
-      <Text className="info-value" component="span">
-        {value}
-      </Text>
-    </div>
-  );
-});
 
 export default memo(AssetInfoPanel);

@@ -27,7 +27,8 @@ import {
 } from "@nodetool-ai/storage";
 import {
   getAssetFileName,
-  getAssetStorageKey
+  getAssetStorageKey,
+  resolveAssetLocalPath
 } from "../../lib/asset-paths.js";
 import { getAssetAdapter } from "../../lib/storage.js";
 import {
@@ -114,7 +115,10 @@ async function toAssetResponse(asset: AssetModel): Promise<AssetResponse> {
     duration: asset.duration ?? null,
     node_id: asset.node_id ?? null,
     job_id: asset.job_id ?? null,
-    timeline_id: asset.timeline_id ?? null
+    timeline_id: asset.timeline_id ?? null,
+    local_path: isFolder
+      ? null
+      : resolveAssetLocalPath(asset.user_id, asset.id, asset.content_type)
   };
 }
 

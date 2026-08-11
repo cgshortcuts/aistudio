@@ -5,7 +5,8 @@
  * imports `@nodetool-ai/dsl` → `base-nodes` → `kie-nodes` at module load).
  */
 
-import { getDefaultAssetsPath } from "@nodetool-ai/config";
+import { getDefaultAssetsPath, loadAssetStorageConfig } from "@nodetool-ai/config";
+import { join } from "node:path";
 import {
   assetKeyCandidates,
   assetObjectKey,
@@ -121,4 +122,26 @@ export async function retrieveAssetBytes(
 
 export function getAssetStoragePath(opts?: StorageHandlerOptions): string {
   return opts?.storagePath ?? getDefaultAssetsPath();
+}
+
+/**
+ * Absolute filesystem path for an asset when storage is the local file
+ * backend. Returns null for cloud backends (S3 / Supabase) — those have no
+ * local file to reveal in Explorer.
+ */
+export function resolveAssetLocalPath(
+  userId: string,
+  assetId: string,
+  contentType: string
+): string | null {
+  try {
+    const config = loadAssetStorageConfig();
+    if (config.kind !== "file") return null;
+    const fileName = getAssetFileName(assetId, contentType);
+    // Prefer the owner-prefixed layout; Explorer still works if the file
+    // only exists under the legacy flat key — the UI opens the parent dir.
+    return join(config.rootDir, assetObjectKey(userId, fileName));
+  } catch {
+    return null;
+  }
 }

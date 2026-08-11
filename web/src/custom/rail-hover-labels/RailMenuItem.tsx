@@ -1,6 +1,6 @@
 import { memo, type ReactNode } from "react";
 
-import { Tooltip, Label } from "../../components/ui_primitives";
+import { Caption, Tooltip, Label } from "../../components/ui_primitives";
 import { TOOLTIP_ENTER_DELAY } from "../../config/constants";
 
 export interface RailMenuItemProps {
@@ -10,6 +10,7 @@ export interface RailMenuItemProps {
   expanded?: boolean;
   active?: boolean;
   secondary?: string;
+  shortcut?: string;
 }
 
 const RailMenuItem = memo(function RailMenuItem({
@@ -18,9 +19,11 @@ const RailMenuItem = memo(function RailMenuItem({
   onClick,
   expanded = false,
   active = false,
-  secondary
+  secondary,
+  shortcut
 }: RailMenuItemProps) {
-  const tooltip = secondary ? `${label} ${secondary}` : label;
+  const title = [label, secondary].filter(Boolean).join(" ");
+  const tooltip = shortcut ? `${title} ${shortcut}` : title;
 
   return (
     <Tooltip
@@ -52,8 +55,20 @@ const RailMenuItem = memo(function RailMenuItem({
             display: "block"
           }}
         >
-          {secondary ? `${label} ${secondary}` : label}
+          {title}
         </Label>
+        {shortcut ? (
+          <Caption
+            component="span"
+            size="smaller"
+            color="muted"
+            className="rail-menu-item-shortcut"
+            aria-hidden
+            sx={{ marginBottom: 0 }}
+          >
+            {shortcut}
+          </Caption>
+        ) : null}
       </button>
     </Tooltip>
   );

@@ -20,6 +20,9 @@ import { useSettingsStore } from "../../stores/SettingsStore";
 import { TOOLTIP_ENTER_DELAY } from "../../config/constants";
 import SliderBasic from "../inputs/SliderBasic";
 import { useAssetGridStore } from "../../stores/AssetGridStore";
+// === CUSTOM FORK START: asset-stars ===
+import { StarredAssetsFilterButton } from "../../custom/asset-stars";
+// === CUSTOM FORK END ===
 import { SIZE_FILTERS, SizeFilterKey } from "../../utils/formatUtils";
 import ViewListIcon from "@mui/icons-material/ViewList";
 import ViewModuleIcon from "@mui/icons-material/ViewModule";
@@ -78,6 +81,11 @@ const styles = (theme: Theme) =>
     ".asset-button-group .MuiButton-root.disabled": {
       color: theme.vars.palette.grey[400]
     },
+    // === CUSTOM FORK START: asset-stars ===
+    ".asset-button-group .starred-filter-active .MuiSvgIcon-root, .asset-button-group .starred-filter-active svg": {
+      color: theme.vars.palette.warning.main
+    },
+    // === CUSTOM FORK END ===
     // size slider
     ".asset-size-slider": {
       paddingLeft: "0.25em",
@@ -307,6 +315,9 @@ const AssetActions = ({
             {viewMode === "grid" ? <ViewListIcon /> : <ViewModuleIcon />}
           </EditorButton>
         </Tooltip>
+        {/* === CUSTOM FORK START: asset-stars === */}
+        <StarredAssetsFilterButton />
+        {/* === CUSTOM FORK END === */}
 
         {isLoading && (
           <Box

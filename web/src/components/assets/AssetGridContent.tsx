@@ -30,6 +30,13 @@ import type { Theme } from "@mui/material/styles";
 import { useAssetGridStore } from "../../stores/AssetGridStore";
 import AssetListView from "./AssetListView";
 import { EmptyState, LoadingSpinner } from "../ui_primitives";
+// === CUSTOM FORK START: asset-stars ===
+import {
+  STARRED_ASSETS_EMPTY_DESCRIPTION,
+  STARRED_ASSETS_EMPTY_TITLE,
+  useStarredAssetFilter
+} from "../../custom/asset-stars";
+// === CUSTOM FORK END ===
 
 const styles = (theme: Theme) =>
   css({
@@ -98,6 +105,9 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
     (state) => state.settings.assetItemSize
   );
   const workflowFilter = useAssetGridStore((state) => state.workflowFilter);
+  // === CUSTOM FORK START: asset-stars ===
+  const starredFilter = useStarredAssetFilter();
+  // === CUSTOM FORK END ===
 
   // Base asset list (without dividers)
   const assets = useMemo(() => {
@@ -394,14 +404,18 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
           <EmptyState
             variant="no-data"
             title={
-              workflowFilter
-                ? "No outputs from this workflow yet"
-                : "This folder is empty"
+              starredFilter
+                ? STARRED_ASSETS_EMPTY_TITLE
+                : workflowFilter
+                  ? "No outputs from this workflow yet"
+                  : "This folder is empty"
             }
             description={
-              workflowFilter
-                ? "Run the workflow to generate assets, or drop files here to add inputs."
-                : "Drop files here or use the upload button to add assets"
+              starredFilter
+                ? STARRED_ASSETS_EMPTY_DESCRIPTION
+                : workflowFilter
+                  ? "Run the workflow to generate assets, or drop files here to add inputs."
+                  : "Drop files here or use the upload button to add assets"
             }
             size="small"
           />

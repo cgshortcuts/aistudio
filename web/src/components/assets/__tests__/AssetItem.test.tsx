@@ -11,6 +11,11 @@ jest.mock("../../../stores/SettingsStore", () => ({
   useSettingsStore: jest.fn()
 }));
 
+jest.mock("../../../custom/asset-stars", () => ({
+  AssetThumbnailActions: () => null,
+  assetThumbnailActionStyles: () => ({})
+}));
+
 // Mock the asset actions hook to isolate UI behavior
 jest.mock("../useAssetActions", () => ({
   useAssetActions: () => ({

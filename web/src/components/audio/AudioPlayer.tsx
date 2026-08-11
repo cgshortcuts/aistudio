@@ -43,6 +43,10 @@ type WaveSurferProps = {
   autoplay?: boolean;
   playOnLoad?: boolean;
   mimeType?: string;
+  // === CUSTOM FORK START: asset-viewer-lightbox ===
+  /** Optional handle for external play/pause (e.g. lightbox Space). */
+  playPauseRef?: React.MutableRefObject<(() => void) | null>;
+  // === CUSTOM FORK END ===
 };
 
 const getWsprops = (theme: Theme): WaveSurferProps => ({
@@ -140,6 +144,9 @@ const AudioPlayer: React.FC<WaveSurferProps> = (incomingProps) => {
     fontSize = wsprops.fontSize,
     minPxPerSec = wsprops.minPxPerSec,
     mimeType = "audio/mp3",
+    // === CUSTOM FORK START: asset-viewer-lightbox ===
+    playPauseRef,
+    // === CUSTOM FORK END ===
     ...otherProps
   } = incomingProps;
 
@@ -170,6 +177,18 @@ const AudioPlayer: React.FC<WaveSurferProps> = (incomingProps) => {
       console.error("Audio Playback Error:", error);
     }
   }, []);
+
+  // === CUSTOM FORK START: asset-viewer-lightbox ===
+  useEffect(() => {
+    if (!playPauseRef) {
+      return;
+    }
+    playPauseRef.current = handlePlayPause;
+    return () => {
+      playPauseRef.current = null;
+    };
+  }, [playPauseRef, handlePlayPause]);
+  // === CUSTOM FORK END ===
 
   const onPlay = useCallback(() => {
     setIsPlaying(true);

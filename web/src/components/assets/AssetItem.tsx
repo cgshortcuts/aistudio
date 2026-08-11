@@ -10,7 +10,13 @@ import DataObjectIcon from "@mui/icons-material/DataObject";
 import TableChartIcon from "@mui/icons-material/TableChart";
 import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 import { Asset } from "../../stores/ApiTypes";
-import { DeleteButton, Text, MOTION, BORDER_RADIUS, FONT_WEIGHT, SPACING, getSpacingPx, Z_INDEX } from "../ui_primitives";
+import { Text, MOTION, BORDER_RADIUS, FONT_WEIGHT, SPACING, getSpacingPx, Z_INDEX } from "../ui_primitives";
+// === CUSTOM FORK START: asset-stars ===
+import {
+  AssetThumbnailActions,
+  assetThumbnailActionStyles
+} from "../../custom/asset-stars";
+// === CUSTOM FORK END ===
 import { secondsToHMS } from "../../utils/formatDateAndTime";
 import { formatFileSize } from "../../utils/formatUtils";
 import { useSettingsStore } from "../../stores/SettingsStore";
@@ -55,23 +61,9 @@ const styles = (theme: Theme) =>
       border: `2px solid ${theme.vars.palette.primary.main}`,
       boxShadow: `0 8px 18px rgb(${theme.vars.palette.primary.mainChannel} / 0.25)`
     },
-    "&.selected::before": {
-      content: '""',
-      position: "absolute",
-      top: "0.6em",
-      right: "0.6em",
-      width: "1.4em",
-      height: "1.4em",
-      borderRadius: BORDER_RADIUS.circle,
-      backgroundColor: theme.vars.palette.primary.main,
-      backgroundImage:
-        "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'><path d='M9 16.17 4.83 12l-1.41 1.41L9 19 21 7l-1.41-1.41z'/></svg>\")",
-      backgroundSize: "70% 70%",
-      backgroundPosition: "center",
-      backgroundRepeat: "no-repeat",
-      zIndex: Z_INDEX.tooltip,
-      boxShadow: `0 2px 6px ${theme.vars.palette.c_scrim}`
-    },
+    // === CUSTOM FORK START: asset-stars ===
+    // Selection checkmark moved to the hover overlay checkbox.
+    // === CUSTOM FORK END ===
     ".asset::after": {
       content: '""',
       position: "absolute",
@@ -230,15 +222,6 @@ const styles = (theme: Theme) =>
       borderRadius: "0 !important",
       backgroundColor: "transparent"
     },
-    ".asset-delete": {
-      pointerEvents: "none",
-      opacity: 0,
-      transition: MOTION.opacity
-    },
-    "&.selected:hover .asset-delete": {
-      pointerEvents: "all",
-      opacity: 1
-    },
     "&.image": {
       background: "transparent",
       backgroundRepeat: "no-repeat",
@@ -315,6 +298,7 @@ export type AssetItemProps = {
   showFiletype?: boolean;
   showDuration?: boolean;
   showFileSize?: boolean;
+  showHoverActions?: boolean;
   onSelect?: () => void;
   onClickParent?: (id: string) => void;
   onDragStart?: (assetId: string) => string[];
@@ -323,16 +307,12 @@ export type AssetItemProps = {
   onDoubleClick?: (asset: Asset) => void;
 };
 
-const deleteButtonOverlayStyle = css({
-  position: "absolute",
-  top: 4,
-  right: 4,
-  zIndex: Z_INDEX.modal
-});
-
 const AssetItem: React.FC<AssetItemProps> = (props) => {
   const theme = useTheme();
-  const assetStyles = useMemo(() => styles(theme), [theme]);
+  const assetStyles = useMemo(
+    () => [styles(theme), assetThumbnailActionStyles(theme)],
+    [theme]
+  );
   const {
     asset,
     draggable = true,
@@ -345,6 +325,7 @@ const AssetItem: React.FC<AssetItemProps> = (props) => {
     showFiletype = true,
     showDuration = true,
     showFileSize = true,
+    showHoverActions = true,
     onSelect,
     onDoubleClick,
     onClickParent,
@@ -439,15 +420,16 @@ const AssetItem: React.FC<AssetItemProps> = (props) => {
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
-      {showDeleteButton && (
-        <div css={deleteButtonOverlayStyle}>
-          <DeleteButton
-            className="asset-delete"
-            onClick={handleDelete}
-            buttonSize="small"
-          />
-        </div>
+      {/* === CUSTOM FORK START: asset-stars === */}
+      {showHoverActions && !isParent && (
+        <AssetThumbnailActions
+          assetId={asset.id}
+          isSelected={!!isSelected}
+          showDelete={showDeleteButton}
+          onDelete={handleDelete}
+        />
       )}
+      {/* === CUSTOM FORK END === */}
       <div className={`asset ${isImage ? "alpha-surface" : ""}`}>
         {!asset.get_url && <div className="asset-missing" />}
         {isImage && (
@@ -630,8 +612,12 @@ export default memo(AssetItem, (prevProps, nextProps) => {
   const functionsChanged =
     prevProps.onSelect !== nextProps.onSelect ||
     prevProps.onDoubleClick !== nextProps.onDoubleClick;
+  const hoverActionsChanged =
+    prevProps.showHoverActions !== nextProps.showHoverActions ||
+    prevProps.showDeleteButton !== nextProps.showDeleteButton;
 
-  const shouldUpdate = selectionChanged || assetChanged || functionsChanged;
+  const shouldUpdate =
+    selectionChanged || assetChanged || functionsChanged || hoverActionsChanged;
 
   return !shouldUpdate; // memo returns true to skip re-render
 });

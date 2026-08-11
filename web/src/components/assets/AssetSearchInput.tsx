@@ -147,6 +147,10 @@ const styles = (theme: Theme) =>
 interface AssetSearchInputProps {
   onLocalSearchChange: (_value: string) => void;
   focusSearchInput?: boolean;
+  // === CUSTOM FORK START: asset-search-autofocus ===
+  /** Bump to focus again while `focusSearchInput` stays true. */
+  focusNonce?: number;
+  // === CUSTOM FORK END ===
   focusOnTyping?: boolean;
   debounceTime?: number;
   // Acts as a max width. The input will always try to take 100% width of its
@@ -157,6 +161,9 @@ interface AssetSearchInputProps {
 const AssetSearchInput: React.FC<AssetSearchInputProps> = ({
   onLocalSearchChange,
   focusSearchInput = false,
+  // === CUSTOM FORK START: asset-search-autofocus ===
+  focusNonce = 0,
+  // === CUSTOM FORK END ===
   focusOnTyping = false,
   debounceTime = 500,
   width
@@ -336,7 +343,9 @@ const AssetSearchInput: React.FC<AssetSearchInputProps> = ({
     if (focusSearchInput) {
       inputRef.current?.focus();
     }
-  }, [focusSearchInput]);
+    // === CUSTOM FORK START: asset-search-autofocus ===
+  }, [focusSearchInput, focusNonce]);
+  // === CUSTOM FORK END ===
 
   // Cleanup: cancel any pending requests when component unmounts
   useEffect(() => {

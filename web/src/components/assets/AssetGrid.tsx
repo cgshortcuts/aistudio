@@ -46,6 +46,9 @@ import useContextMenuStore from "../../stores/ContextMenuStore";
 import AssetGridSplit from "./AssetGridSplit";
 import PanelErrorBoundary from "../common/PanelErrorBoundary";
 import { formatFileSize } from "../../utils/formatUtils";
+// === CUSTOM FORK START: asset-search-autofocus ===
+import { assetSearchAutofocusSurface } from "../../custom/asset-search-autofocus/assetSearchAutofocusSurface";
+// === CUSTOM FORK END ===
 
 const styles = assetGridStyles;
 const FOLDERS_PANEL_HEIGHT = 200;
@@ -298,6 +301,12 @@ const AssetGrid: React.FC<AssetGridProps> = ({
           onUploadFiles={uploadFiles}
           isFullscreenAssets={foldersDocked}
           hideFolderControls={isWorkflowOutputScope}
+          // === CUSTOM FORK START: asset-search-autofocus ===
+          autofocusSearchSurface={assetSearchAutofocusSurface({
+            forceGlobalAssets,
+            isFullscreenAssets: Boolean(isFullscreenAssets)
+          })}
+          // === CUSTOM FORK END ===
         />
       )}
       {showInlineFetchError && (

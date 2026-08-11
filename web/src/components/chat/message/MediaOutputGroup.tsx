@@ -432,7 +432,7 @@ const MediaOutputGroup: React.FC<MediaOutputGroupProps> = ({
                 draggable
                 onDragStart={(e) => handleDragStart(e, c)}
               >
-                <ImageView source={src} />
+                <ImageView source={src} assetId={c.image?.asset_id} />
                 {isCanvasAvailable && (
                   <ToolbarIconButton
                     className="add-to-canvas-button"

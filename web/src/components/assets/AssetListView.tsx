@@ -14,6 +14,13 @@ import { useTheme } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
 import { ExpandCollapseButton, EmptyState, Text, Box, MOTION, BORDER_RADIUS, Z_INDEX } from "../ui_primitives";
 import { useSettingsStore } from "../../stores/SettingsStore";
+// === CUSTOM FORK START: asset-stars ===
+import {
+  STARRED_ASSETS_EMPTY_DESCRIPTION,
+  STARRED_ASSETS_EMPTY_TITLE,
+  useStarredAssetFilter
+} from "../../custom/asset-stars";
+// === CUSTOM FORK END ===
 
 interface AssetListViewProps {
   assets: Asset[];
@@ -229,6 +236,9 @@ const AssetListView: React.FC<AssetListViewProps> = ({
 }) => {
   const theme = useTheme();
   const listStyles = useMemo(() => styles(theme), [theme]);
+  // === CUSTOM FORK START: asset-stars ===
+  const starredFilter = useStarredAssetFilter();
+  // === CUSTOM FORK END ===
   const assetsOrder = useSettingsStore((state) => state.settings.assetsOrder);
   const { selectedAssetIds, handleSelectAsset, handleDeselectAssets } =
     useAssetSelection(assets);
@@ -518,7 +528,12 @@ const AssetListView: React.FC<AssetListViewProps> = ({
       <Box css={listStyles} className="asset-list-view">
         <EmptyState
           variant="no-data"
-          title="No assets to display"
+          title={
+            starredFilter ? STARRED_ASSETS_EMPTY_TITLE : "No assets to display"
+          }
+          description={
+            starredFilter ? STARRED_ASSETS_EMPTY_DESCRIPTION : undefined
+          }
           size="small"
         />
       </Box>

@@ -573,7 +573,9 @@ const OutputRenderer: React.FC<OutputRendererProps> = ({
           } else {
             imageSource = "";
           }
-          return <ImageView source={imageSource} />;
+          const assetId =
+            typeof v.asset_id === "string" ? v.asset_id : undefined;
+          return <ImageView source={imageSource} assetId={assetId} />;
         }
       case "audio": {
         let audioSource: string | Uint8Array;

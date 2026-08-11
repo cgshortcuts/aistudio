@@ -2,7 +2,10 @@ import { memo } from "react";
 
 import { LEFT_PANEL_TOP_LEVEL } from "../../config/quickAccessCategories";
 import type { LeftPanelView } from "../../stores/PanelStore";
+import { isMac } from "../../utils/platform";
+import { formatRailShortcut } from "./railMenuShortcuts";
 import RailMenuItem from "./RailMenuItem";
+import { useRailDigitShortcuts } from "./useRailDigitShortcuts";
 
 export interface ExpandableQuickAccessSidebarProps {
   activeCategory: LeftPanelView | "";
@@ -24,26 +27,36 @@ const ExpandableQuickAccessSidebar = memo<ExpandableQuickAccessSidebarProps>(
     hiddenViews,
     labelOverrides,
     expanded = false
-  }) => (
-    <>
-      {LEFT_PANEL_TOP_LEVEL.filter(
-        (cat) => !hiddenViews?.includes(cat.id)
-      ).map((cat) => {
-        const label = labelOverrides?.[cat.id] ?? cat.label;
+  }) => {
+    const visible = LEFT_PANEL_TOP_LEVEL.filter(
+      (cat) => !hiddenViews?.includes(cat.id)
+    );
+    const mac = isMac();
+    useRailDigitShortcuts(
+      "shift",
+      visible.map((cat) => () => onCategoryClick(cat.id))
+    );
 
-        return (
-          <RailMenuItem
-            key={cat.id}
-            label={label}
-            icon={cat.icon}
-            expanded={expanded}
-            active={activeCategory === cat.id}
-            onClick={() => onCategoryClick(cat.id)}
-          />
-        );
-      })}
-    </>
-  )
+    return (
+      <>
+        {visible.map((cat, index) => {
+          const label = labelOverrides?.[cat.id] ?? cat.label;
+
+          return (
+            <RailMenuItem
+              key={cat.id}
+              label={label}
+              icon={cat.icon}
+              expanded={expanded}
+              active={activeCategory === cat.id}
+              onClick={() => onCategoryClick(cat.id)}
+              shortcut={formatRailShortcut("shift", index, mac) ?? undefined}
+            />
+          );
+        })}
+      </>
+    );
+  }
 );
 
 ExpandableQuickAccessSidebar.displayName = "ExpandableQuickAccessSidebar";

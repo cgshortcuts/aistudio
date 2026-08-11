@@ -194,12 +194,38 @@ export interface ActorResult {
 }
 
 /**
+ * Flatten a model-slot object (`{ type: "image_model", id, name, provider }`)
+ * into scalar `model` / `provider` keys so the relay can persist them into
+ * auto-saved asset metadata. Returns null when the value is not a model slot.
+ */
+function flattenModelSlot(
+  value: unknown
+): { model: string; provider?: string } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const v = value as Record<string, unknown>;
+  const id = typeof v.id === "string" && v.id.trim() ? v.id.trim() : null;
+  const name =
+    typeof v.name === "string" && v.name.trim() ? v.name.trim() : null;
+  const model = id ?? name;
+  if (!model) return null;
+  // Require a provider string so plain `{ id: "…" }` dicts (unrelated to
+  // model slots) are not mistaken for models.
+  if (typeof v.provider !== "string" || !v.provider.trim()) {
+    return null;
+  }
+  return { model, provider: v.provider.trim() };
+}
+
+/**
  * Pick the scalar input properties (string/number/boolean) from a resolved
  * input dict. Drops nested objects, arrays, and binary refs so the
  * `generation_complete` event stays small and carries only persistable
- * generation params (prompt, seed, model, …). Reserved keys (`_control_context`
- * and other `_`-prefixed internals) are stripped. Returns `null` when nothing
- * scalar remains.
+ * generation params (prompt, seed, model, …). Model-slot objects are
+ * flattened to `model` + `provider` strings. Reserved keys
+ * (`_control_context` and other `_`-prefixed internals) are stripped.
+ * Returns `null` when nothing scalar remains.
  */
 function scalarInputProperties(
   inputs: Record<string, unknown>
@@ -213,6 +239,15 @@ function scalarInputProperties(
       typeof value === "boolean"
     ) {
       out[key] = value;
+      continue;
+    }
+    const slot = flattenModelSlot(value);
+    if (!slot) continue;
+    // Prefer an explicit `model` key; other `*_model` slots fill the same
+    // slots when `model` was not already set.
+    if (key === "model" || key.endsWith("_model") || key === "image_model") {
+      if (out.model === undefined) out.model = slot.model;
+      if (out.provider === undefined) out.provider = slot.provider;
     }
   }
   return Object.keys(out).length > 0 ? out : null;

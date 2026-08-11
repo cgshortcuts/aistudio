@@ -23,6 +23,10 @@ import {
 import { createSystemStatsSampler } from "./system-stats.js";
 import { storeAssetWithThumbnail } from "./lib/thumbnail.js";
 import {
+  buildGenerationMetadata,
+  enrichMetadataFromBytes
+} from "./lib/generation-asset-metadata.js";
+import {
   resolveContentUrls,
   resolveContentForProvider
 } from "./resolve-media-urls.js";
@@ -489,30 +493,6 @@ const ASSET_MEDIA_TYPES = new Set(["image", "audio", "video"]);
 /** Byte cap for inline-preview text stored in a text generation's asset metadata. */
 const TEXT_GENERATION_PREVIEW_CAP = 200_000;
 
-/** Char cap for the prompt stored in a media asset's metadata. */
-const PROMPT_METADATA_CAP = 8_000;
-
-/**
- * Lift the prompt out of a generation's scalar input properties into asset
- * metadata. Returns `{ prompt }` when a non-empty `prompt` string is present
- * (capped), else an empty object. Other generation params are intentionally
- * left out — the prompt is the field the asset viewer surfaces.
- */
-function promptMetadata(
-  properties: Record<string, unknown> | undefined
-): Record<string, unknown> {
-  const prompt = properties?.prompt;
-  if (typeof prompt !== "string") return {};
-  const trimmed = prompt.trim();
-  if (trimmed.length === 0) return {};
-  return {
-    prompt:
-      trimmed.length > PROMPT_METADATA_CAP
-        ? trimmed.slice(0, PROMPT_METADATA_CAP)
-        : trimmed
-  };
-}
-
 /**
  * Resolve a node's primary output name when it is a text/str type, so its value
  * can be persisted as a text generation. Mirrors the frontend's
@@ -759,16 +739,26 @@ async function autoSaveAssets(
     generationIndex?: number;
     /**
      * Scalar input properties from the `generation_complete` event (the actor's
-     * resolved declared/dynamic/edge inputs, filtered to scalars). The `prompt`
-     * is persisted into each saved media asset's `metadata.prompt` so the asset
-     * viewer can show what produced the image/audio/video.
+     * resolved declared/dynamic/edge inputs, filtered to scalars + flattened
+     * model slots). Prompt, model, provider, resolution, and size are lifted
+     * into each saved media asset's metadata so the info panel can show them.
      */
     properties?: Record<string, unknown>;
+    /** Wall-clock ms for this generation, when the runner measured it. */
+    durationMs?: number;
+    /** Provider cost for this generation, when known at save time. */
+    cost?: number;
+    costCurrency?: string;
   }
 ): Promise<void> {
-  // Generation params lifted into each media asset's metadata. Just the prompt
-  // today — the field the asset viewer surfaces as "what produced this".
-  const promptMeta = promptMetadata(opts.properties);
+  // Generation params lifted into each media asset's metadata.
+  const baseMeta = buildGenerationMetadata(opts.properties, {
+    ...(typeof opts.durationMs === "number"
+      ? { duration_ms: opts.durationMs }
+      : {}),
+    ...(typeof opts.cost === "number" ? { cost: opts.cost } : {}),
+    ...(opts.costCurrency ? { cost_currency: opts.costCurrency } : {})
+  });
   const queue: Record<string, unknown>[] = [];
 
   // Collect all asset-like values from the result (may be nested)
@@ -839,12 +829,28 @@ async function autoSaveAssets(
       content_type: contentType,
       parent_id: null
     });
-    const mediaMeta: Record<string, unknown> = { ...promptMeta };
+    const mediaMeta: Record<string, unknown> = { ...baseMeta };
     if (typeof opts.generationIndex === "number") {
       mediaMeta.generation_index = opts.generationIndex;
     }
-    if (Object.keys(mediaMeta).length > 0) {
-      asset.metadata = mediaMeta;
+    // Prefer dimensions already on the in-flight ref (raw RGBA / GPU).
+    if (
+      typeof assetValue.width === "number" &&
+      Number.isFinite(assetValue.width)
+    ) {
+      mediaMeta.pixel_width = assetValue.width;
+      if (typeof mediaMeta.width !== "number") {
+        mediaMeta.width = assetValue.width;
+      }
+    }
+    if (
+      typeof assetValue.height === "number" &&
+      Number.isFinite(assetValue.height)
+    ) {
+      mediaMeta.pixel_height = assetValue.height;
+      if (typeof mediaMeta.height !== "number") {
+        mediaMeta.height = assetValue.height;
+      }
     }
 
     const fileName = getAssetFileName(asset.id, contentType);
@@ -857,6 +863,20 @@ async function autoSaveAssets(
         contentType
       );
       asset.size = bytes.length;
+      const enriched = await enrichMetadataFromBytes(
+        mediaMeta,
+        bytes,
+        contentType
+      );
+      if (Object.keys(enriched.metadata).length > 0) {
+        asset.metadata = enriched.metadata;
+      }
+      if (
+        enriched.durationSeconds != null &&
+        (contentType.startsWith("video/") || contentType.startsWith("audio/"))
+      ) {
+        asset.duration = enriched.durationSeconds;
+      }
       await asset.save();
 
       // Mutate the result value in-place. For raw assets, also drop the raw
@@ -3751,6 +3771,9 @@ export class UnifiedWebSocketRunner {
     // output, or media + text), so dedupe by the event's arrival index — NOT by
     // a total asset count, which would under-save the next event (RFC D8).
     const autosavedSlots = new Set<string>();
+    // Wall-clock start of each node's first `running` update — used to stamp
+    // `metadata.duration_ms` on auto-saved generations.
+    const nodeStartedAtMs = new Map<string, number>();
     // Cross-run replay dedupe: the `generation_index` values already persisted
     // for a node by a PRIOR run. Warmed with ONE `Asset.paginate` on a node's
     // first generation_complete, then reused for every later variant — so an
@@ -3880,6 +3903,14 @@ export class UnifiedWebSocketRunner {
 
           const meta = this.getNodeMetadata?.(nodeType);
 
+          if (
+            outbound.type === "node_update" &&
+            outbound.status === "running" &&
+            !nodeStartedAtMs.has(nodeId)
+          ) {
+            nodeStartedAtMs.set(nodeId, Date.now());
+          }
+
           // Stamp an arrival-order `index` on generation_complete, keyed per
           // (job_id, node_id) (the function is job-scoped, so node_id alone
           // suffices). job_id/workflow_id were already backfilled by the
@@ -3951,6 +3982,7 @@ export class UnifiedWebSocketRunner {
               ) {
                 autosavedSlots.add(slotKey);
                 try {
+                  const startedAt = nodeStartedAtMs.get(nodeId);
                   await autoSaveAssets(
                     outbound.outputs as Record<string, unknown>,
                     {
@@ -3964,7 +3996,11 @@ export class UnifiedWebSocketRunner {
                         (outbound.properties as Record<
                           string,
                           unknown
-                        > | null) ?? undefined
+                        > | null) ?? undefined,
+                      durationMs:
+                        typeof startedAt === "number"
+                          ? Math.max(0, Date.now() - startedAt)
+                          : undefined
                     }
                   );
                 } catch (err) {
@@ -6100,15 +6136,27 @@ export class UnifiedWebSocketRunner {
       return;
     }
     const providerCost = outbound.provider_cost as ProviderCost;
+    const nodeId = String(outbound.node_id ?? "");
     await this._persistNodeProviderCost(
       providerCost,
-      String(outbound.node_id ?? ""),
+      nodeId,
       nodeType,
       active.workflowId
     );
     const amount = (providerCost as { amount?: unknown }).amount;
     if (typeof amount === "number" && Number.isFinite(amount)) {
       active.providerCostTotal = (active.providerCostTotal ?? 0) + amount;
+      // Stamp the same cost onto auto-saved assets for this node. Generative
+      // nodes often report one cost for the whole node; each asset gets that
+      // amount so the info panel can show it without a ledger join.
+      await this._stampCostOnNodeAssets(
+        active.jobId,
+        nodeId,
+        amount,
+        providerCost.currency ?? providerCost.unit ?? "USD",
+        providerCost.provider,
+        providerCost.model
+      );
     } else {
       // A non-finite amount (NaN/Infinity from a buggy provider call) can't
       // be persisted or accumulated above, and JSON can't even represent it
@@ -6116,6 +6164,97 @@ export class UnifiedWebSocketRunner {
       // than ship a `provider_cost` the wire contract calls a real number,
       // drop it — the rest of the `node_update` still reports normally.
       delete outbound.provider_cost;
+    }
+  }
+
+  /**
+   * Merge provider cost into assets by id. Best-effort; never throws.
+   */
+  private async _stampCostOnAssetIds(
+    assetIds: string[],
+    cost: number,
+    currency: string,
+    provider?: string | null,
+    model?: string | null
+  ): Promise<void> {
+    if (assetIds.length === 0) return;
+    try {
+      const userId = this.userId ?? "1";
+      for (const id of assetIds) {
+        const asset = await Asset.find(userId, id);
+        if (!asset) continue;
+        const md = {
+          ...((asset.metadata as Record<string, unknown> | null) ?? {})
+        };
+        if (typeof md.cost === "number") continue;
+        md.cost = cost;
+        md.cost_currency = currency;
+        if (
+          typeof provider === "string" &&
+          provider &&
+          typeof md.provider !== "string"
+        ) {
+          md.provider = provider;
+        }
+        if (typeof model === "string" && model && typeof md.model !== "string") {
+          md.model = model;
+        }
+        asset.metadata = md;
+        await asset.save();
+      }
+    } catch (err) {
+      log.warn("Failed to stamp cost onto assets", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  /**
+   * Merge provider cost (and model/provider when missing) into every asset
+   * already auto-saved for `(jobId, nodeId)`. Best-effort; never throws.
+   */
+  private async _stampCostOnNodeAssets(
+    jobId: string,
+    nodeId: string,
+    cost: number,
+    currency: string,
+    provider?: string | null,
+    model?: string | null
+  ): Promise<void> {
+    if (!nodeId || !jobId) return;
+    try {
+      const userId = this.userId ?? "1";
+      const [assets] = await Asset.paginate(userId, {
+        jobId,
+        nodeId,
+        limit: 1000
+      });
+      for (const asset of assets) {
+        const md = {
+          ...((asset.metadata as Record<string, unknown> | null) ?? {})
+        };
+        if (typeof md.cost === "number") continue;
+        md.cost = cost;
+        md.cost_currency = currency;
+        if (
+          typeof provider === "string" &&
+          provider &&
+          typeof md.provider !== "string"
+        ) {
+          md.provider = provider;
+        }
+        if (typeof model === "string" && model && typeof md.model !== "string") {
+          md.model = model;
+        }
+        asset.metadata = md;
+        await asset.save();
+      }
+    } catch (err) {
+      log.warn("Failed to stamp cost onto node assets", {
+        jobId,
+        nodeId,
+        error: err instanceof Error ? err.message : String(err)
+      });
     }
   }
 
@@ -6452,6 +6591,17 @@ export class UnifiedWebSocketRunner {
     // Store generated media as a proper Asset record and return the
     // asset ID.  The DB message stores only `asset_id` — URLs are
     // resolved at serve time by resolveContentUrls / sendMessage.
+    // Generation params (prompt, model, cost, …) ride in asset.metadata
+    // so the library info panel can show them after the chat turn ends.
+    const genStartedAt = Date.now();
+    let stampedCost: number | undefined;
+    let stampedCurrency = "USD";
+    const rememberCost = (cost: number | null | undefined, currency?: string) => {
+      if (typeof cost === "number" && Number.isFinite(cost) && cost > 0) {
+        stampedCost = cost;
+        if (currency) stampedCurrency = currency;
+      }
+    };
     const storeMediaAsset = async (
       bytes: Uint8Array,
       contentType: string,
@@ -6473,6 +6623,33 @@ export class UnifiedWebSocketRunner {
         contentType
       );
       asset.size = bytes.length;
+      const meta = buildGenerationMetadata(
+        {
+          prompt,
+          provider: providerId,
+          model: modelId,
+          width: mediaGeneration.width,
+          height: mediaGeneration.height,
+          resolution: mediaGeneration.resolution,
+          aspect_ratio: mediaGeneration.aspect_ratio
+        },
+        {
+          duration_ms: Math.max(0, Date.now() - genStartedAt),
+          ...(stampedCost !== undefined
+            ? { cost: stampedCost, cost_currency: stampedCurrency }
+            : {})
+        }
+      );
+      const enriched = await enrichMetadataFromBytes(meta, bytes, contentType);
+      if (Object.keys(enriched.metadata).length > 0) {
+        asset.metadata = enriched.metadata;
+      }
+      if (
+        enriched.durationSeconds != null &&
+        (contentType.startsWith("video/") || contentType.startsWith("audio/"))
+      ) {
+        asset.duration = enriched.durationSeconds;
+      }
       await asset.save();
       return asset.id;
     };
@@ -6517,13 +6694,15 @@ export class UnifiedWebSocketRunner {
         if (requestSeq !== undefined && requestSeq !== this.chatRequestSeq)
           return;
         const imageBytesList = await provider.textToImages(params, variations);
-        await persistAtlasCloudMediaCost({
+        const atlasCost = await persistAtlasCloudMediaCost({
           userId,
           providerId,
           modelId,
           workflowId,
           args: { variations }
         });
+        rememberCost(atlasCost?.cost, atlasCost?.currency);
+        rememberCost(provider.getTotalCost());
         if (cancelled()) return;
         const imageContents: Array<Record<string, unknown>> = [];
         for (const bytes of imageBytesList) {
@@ -6620,13 +6799,15 @@ export class UnifiedWebSocketRunner {
           };
           bytes = await provider.textToVideo(params);
         }
-        await persistAtlasCloudMediaCost({
+        const atlasCost = await persistAtlasCloudMediaCost({
           userId,
           providerId,
           modelId,
           workflowId,
           args: { duration: duration ?? undefined }
         });
+        rememberCost(atlasCost?.cost, atlasCost?.currency);
+        rememberCost(provider.getTotalCost());
         if (cancelled()) return;
         const assetId = await storeMediaAsset(bytes, "video/mp4", "mp4");
 
@@ -7083,13 +7264,15 @@ export class UnifiedWebSocketRunner {
             params,
             variations
           );
-          await persistAtlasCloudMediaCost({
+          const atlasCost = await persistAtlasCloudMediaCost({
             userId,
             providerId,
             modelId,
             workflowId,
             args: { variations }
           });
+          rememberCost(atlasCost?.cost, atlasCost?.currency);
+          rememberCost(provider.getTotalCost());
           if (cancelled()) return;
           const imageContents: Array<Record<string, unknown>> = [];
           for (const bytes of imageBytesList) {
@@ -7160,13 +7343,15 @@ export class UnifiedWebSocketRunner {
           signal
         };
         const bytes = await provider.imageToVideo([sourceBytes], params);
-        await persistAtlasCloudMediaCost({
+        const atlasCost = await persistAtlasCloudMediaCost({
           userId,
           providerId,
           modelId,
           workflowId,
           args: { duration: duration ?? undefined }
         });
+        rememberCost(atlasCost?.cost, atlasCost?.currency);
+        rememberCost(provider.getTotalCost());
         if (cancelled()) return;
         const assetId = await storeMediaAsset(bytes, "video/mp4", "mp4");
         await this.sendMessage({
@@ -7921,13 +8106,26 @@ export class UnifiedWebSocketRunner {
       // BYOK: the user's own keys, never metered against the credit balance.
       // AtlasCloud still records a GenSpend estimate on the Costs ledger.
       const result = await this.runDirectMediaGenerationInner(req, provider);
-      await persistAtlasCloudMediaCost({
+      const atlasCost = await persistAtlasCloudMediaCost({
         userId,
         providerId: req.provider,
         modelId: req.model,
         workflowId: null,
         args: { variations: req.variations }
       });
+      const tracked = provider.getTotalCost();
+      const cost =
+        atlasCost?.cost ??
+        (typeof tracked === "number" && tracked > 0 ? tracked : undefined);
+      if (cost !== undefined) {
+        await this._stampCostOnAssetIds(
+          result.asset_ids,
+          cost,
+          atlasCost?.currency ?? "USD",
+          req.provider,
+          req.model
+        );
+      }
       return result;
     }
 
@@ -7967,6 +8165,13 @@ export class UnifiedWebSocketRunner {
         } catch (err) {
           this.logError("direct media cost persistence failed", err);
         }
+        await this._stampCostOnAssetIds(
+          result.asset_ids,
+          cost,
+          "USD",
+          "nodetool",
+          req.model
+        );
       }
       return result;
     } finally {
@@ -7980,6 +8185,7 @@ export class UnifiedWebSocketRunner {
   ): Promise<{ asset_ids: string[] }> {
     const userId = this.userId ?? "1";
     const variations = Math.max(1, Math.min(Number(req.variations ?? 1), 8));
+    const directStartedAt = Date.now();
 
     const storeAsset = async (
       bytes: Uint8Array,
@@ -8002,6 +8208,30 @@ export class UnifiedWebSocketRunner {
         contentType
       );
       asset.size = bytes.length;
+      const meta = buildGenerationMetadata(
+        {
+          prompt: req.prompt,
+          provider: req.provider,
+          model: req.model,
+          width: req.width,
+          height: req.height,
+          resolution: req.resolution,
+          aspect_ratio: req.aspectRatio
+        },
+        {
+          duration_ms: Math.max(0, Date.now() - directStartedAt)
+        }
+      );
+      const enriched = await enrichMetadataFromBytes(meta, bytes, contentType);
+      if (Object.keys(enriched.metadata).length > 0) {
+        asset.metadata = enriched.metadata;
+      }
+      if (
+        enriched.durationSeconds != null &&
+        (contentType.startsWith("video/") || contentType.startsWith("audio/"))
+      ) {
+        asset.duration = enriched.durationSeconds;
+      }
       await asset.save();
       return asset.id;
     };

@@ -17,3 +17,6 @@ export * from "./templates-label";
 export * from "./example-thumbnails";
 export * from "./instant-update";
 export * from "./delete-workflow";
+export * from "./asset-stars";
+export * from "./asset-search-autofocus";
+export * from "./asset-generation-info";

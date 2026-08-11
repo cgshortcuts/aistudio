@@ -108,4 +108,32 @@ describe("AssetSearchInput - Basic Functionality", () => {
       fireEvent.click(toggleButton);
     }).not.toThrow();
   });
+
+  it("refocuses when focusNonce changes", () => {
+    const { rerender } = renderWithTheme(
+      <AssetSearchInput
+        onLocalSearchChange={mockOnLocalSearchChange}
+        focusSearchInput
+        focusNonce={1}
+      />
+    );
+
+    const searchInput = screen.getByTestId("asset-search-input-field");
+    expect(searchInput).toHaveFocus();
+
+    searchInput.blur();
+    expect(searchInput).not.toHaveFocus();
+
+    rerender(
+      <ThemeProvider theme={mockTheme}>
+        <AssetSearchInput
+          onLocalSearchChange={mockOnLocalSearchChange}
+          focusSearchInput
+          focusNonce={2}
+        />
+      </ThemeProvider>
+    );
+
+    expect(searchInput).toHaveFocus();
+  });
 });

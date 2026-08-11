@@ -387,6 +387,8 @@ export interface Asset {
   /** URL for thumbnail image (computed by API) */
   thumb_url: string | null;
   etag?: string | null;
+  /** Absolute filesystem path when storage is local; null for cloud backends. */
+  local_path?: string | null;
 }
 
 export interface AssetList {

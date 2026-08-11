@@ -33,7 +33,7 @@ describe("persistAtlasCloudMediaCost", () => {
       currency: "USD"
     });
 
-    await persistAtlasCloudMediaCost({
+    const result = await persistAtlasCloudMediaCost({
       userId: "u1",
       providerId: "atlascloud",
       modelId: "bytedance/seedance-2.0/text-to-video",
@@ -41,6 +41,7 @@ describe("persistAtlasCloudMediaCost", () => {
       args: { duration: 5 }
     });
 
+    expect(result).toEqual({ cost: 0.45, currency: "USD" });
     expect(estimate).toHaveBeenCalledWith(
       "bytedance/seedance-2.0/text-to-video",
       { duration: 5 }
@@ -62,12 +63,13 @@ describe("persistAtlasCloudMediaCost", () => {
   });
 
   it("skips other providers", async () => {
-    await persistAtlasCloudMediaCost({
+    const result = await persistAtlasCloudMediaCost({
       userId: "u1",
       providerId: "fal_ai",
       modelId: "fal-ai/flux/schnell",
       workflowId: null
     });
+    expect(result).toBeNull();
     expect(estimate).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
   });

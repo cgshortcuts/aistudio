@@ -25,6 +25,7 @@ import {
   type PageTabKey
 } from "../../components/workspace/pageTabs";
 import { isChatAndAgentsHidden } from "../product-profile";
+import { notifyAssetsPageSearch } from "../asset-search-autofocus/notifyAssetSearchFocus";
 import {
   RAIL_APP_MENU_LABELS,
   RAIL_APP_PAGE_IDS,
@@ -105,6 +106,9 @@ export function useRailAppMenu({ onAction }: UseRailAppMenuOptions = {}): {
         title: PAGE_TAB_TITLES[key]
       });
       navigate("/workspace");
+      if (key === "assets") {
+        notifyAssetsPageSearch();
+      }
       finish();
     },
     [openTab, navigate, finish]

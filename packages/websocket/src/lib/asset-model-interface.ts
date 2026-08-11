@@ -7,6 +7,7 @@
  */
 import { Asset } from "@nodetool-ai/models";
 import { storeAssetWithThumbnail } from "./thumbnail.js";
+import { enrichMetadataFromBytes } from "./generation-asset-metadata.js";
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/png": "png",
@@ -51,9 +52,10 @@ export async function createAssetModelInterface(
     // folder-scoped listing while global search still found them.
     parent_id: args.parentId ?? args.userId
   });
-  if (args.metadata && Object.keys(args.metadata).length > 0) {
-    asset.metadata = args.metadata;
-  }
+  const baseMeta =
+    args.metadata && Object.keys(args.metadata).length > 0
+      ? { ...args.metadata }
+      : {};
   if (args.content) {
     const ext = MIME_TO_EXT[args.contentType] ?? "bin";
     const key = `${asset.id}.${ext}`;
@@ -65,6 +67,23 @@ export async function createAssetModelInterface(
       args.contentType
     );
     asset.size = args.content.length;
+    const enriched = await enrichMetadataFromBytes(
+      baseMeta,
+      args.content,
+      args.contentType
+    );
+    if (Object.keys(enriched.metadata).length > 0) {
+      asset.metadata = enriched.metadata;
+    }
+    if (
+      enriched.durationSeconds != null &&
+      (args.contentType.startsWith("video/") ||
+        args.contentType.startsWith("audio/"))
+    ) {
+      asset.duration = enriched.durationSeconds;
+    }
+  } else if (Object.keys(baseMeta).length > 0) {
+    asset.metadata = baseMeta;
   }
   await asset.save();
   return asset;

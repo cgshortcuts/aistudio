@@ -20,7 +20,9 @@ export const assetResponse = z.object({
   duration: z.number().nullable(),
   node_id: z.string().nullable(),
   job_id: z.string().nullable(),
-  timeline_id: z.string().nullable().optional()
+  timeline_id: z.string().nullable().optional(),
+  /** Absolute filesystem path when storage is local; null for cloud backends. */
+  local_path: z.string().nullable().optional()
 });
 export type AssetResponse = z.infer<typeof assetResponse>;
 

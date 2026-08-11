@@ -132,6 +132,7 @@ const log = createLogger("nodetool.websocket.http");
 import {
   getAssetFileName,
   getAssetStoragePath,
+  resolveAssetLocalPath,
   retrieveAssetBytes
 } from "./lib/asset-paths.js";
 import { assetObjectKey } from "@nodetool-ai/storage";
@@ -2320,7 +2321,10 @@ export async function toAssetResponse(asset: Asset): Promise<JsonObject> {
     duration: asset.duration ?? null,
     node_id: asset.node_id ?? null,
     job_id: asset.job_id ?? null,
-    timeline_id: asset.timeline_id ?? null
+    timeline_id: asset.timeline_id ?? null,
+    local_path: isFolder
+      ? null
+      : resolveAssetLocalPath(asset.user_id, asset.id, asset.content_type)
   };
 }
 

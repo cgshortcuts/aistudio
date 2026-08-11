@@ -46,6 +46,12 @@ import { ExpandableRailToolbar } from "../../custom/rail-hover-labels";
 // === CUSTOM FORK START: Left Panel Clickaway ===
 import { useCloseLeftPanelOnClickAway } from "../../custom/left-panel-clickaway";
 // === CUSTOM FORK END ===
+// === CUSTOM FORK START: asset-search-autofocus ===
+import {
+  notifyAssetsPageSearch,
+  notifyLibrarySearchIfOpening
+} from "../../custom/asset-search-autofocus/notifyAssetSearchFocus";
+// === CUSTOM FORK END ===
 // === CUSTOM FORK START: Product Profile ===
 import {
   CUSTOMER_HIDDEN_LEFT_PANEL_VIEWS,
@@ -265,6 +271,9 @@ const PanelContent = memo(function PanelContent({
     });
     navigate("/workspace");
     handlePanelToggle("assets");
+    // === CUSTOM FORK START: asset-search-autofocus ===
+    notifyAssetsPageSearch();
+    // === CUSTOM FORK END ===
   }, [openTab, navigate, handlePanelToggle]);
 
   if (activeView === "nodes") {
@@ -813,6 +822,9 @@ const PanelLeft: React.FC = () => {
       if (isWorkflowEditOnlyView(view) && !isWorkflowEditActive) {
         return;
       }
+      // === CUSTOM FORK START: asset-search-autofocus ===
+      notifyLibrarySearchIfOpening(usePanelStore.getState().panel, view);
+      // === CUSTOM FORK END ===
       handlePanelToggle(view);
     },
     [handlePanelToggle, isWorkflowEditActive]

@@ -2,6 +2,7 @@
 import { css } from "@emotion/react";
 
 import React, { useMemo, useRef, useCallback, useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Text, ToolbarIconButton, MOTION, BORDER_RADIUS, SPACING, getSpacingPx, Z_INDEX } from "../ui_primitives";
 import DownloadIcon from "@mui/icons-material/Download";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
@@ -13,6 +14,7 @@ import ImageDimensions from "./ImageDimensions";
 import { CopyAssetButton } from "../common/CopyAssetButton";
 import { alphaSurfaceBg } from "../../styles/AlphaSurface";
 import { useMediaOverlay } from "./MediaOverlayContext";
+import { useAssetStore } from "../../stores/AssetStore";
 
 const hoverStyles = css({
   ".image-dimensions": {
@@ -44,14 +46,25 @@ interface ImageViewProps {
    * viewer) is derived lazily off the display path.
    */
   bitmap?: ImageBitmap;
+  /**
+   * When the image is a persisted asset, pass its id so the fullscreen viewer
+   * can show generation metadata (prompt, model, cost, file location).
+   */
+  assetId?: string | null;
 }
 
-const ImageView: React.FC<ImageViewProps> = ({ source, bitmap }) => {
+const ImageView: React.FC<ImageViewProps> = ({ source, bitmap, assetId }) => {
   const [openViewer, setOpenViewer] = React.useState(false);
   const imageRef = useRef<HTMLImageElement>(null);
   const [imgNaturalDimensions, setImgNaturalDimensions] = useState<{ width: number; height: number } | null>(null);
   const { suppressed: overlaySuppressed, onRequestOpenViewer } =
     useMediaOverlay();
+  const getAsset = useAssetStore((state) => state.get);
+  const { data: viewerAsset } = useQuery({
+    queryKey: ["asset", assetId],
+    queryFn: () => getAsset(assetId!),
+    enabled: Boolean(assetId) && openViewer
+  });
 
   // Double-buffer the displayed image so an output update replaces the old one
   // smoothly: the visible <img> keeps the current (already-decoded) URL until
@@ -336,8 +349,9 @@ const ImageView: React.FC<ImageViewProps> = ({ source, bitmap }) => {
     >
       {!onRequestOpenViewer && imageUrl && (
         <AssetViewer
-          contentType="image/*"
-          url={imageUrl}
+          asset={viewerAsset}
+          contentType={viewerAsset?.content_type ?? "image/*"}
+          url={viewerAsset?.get_url || imageUrl}
           open={openViewer}
           onClose={handleCloseViewer}
         />

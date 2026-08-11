@@ -16,14 +16,14 @@ export async function persistAtlasCloudMediaCost(input: {
   modelId: string;
   workflowId: string | null;
   args?: Record<string, unknown>;
-}): Promise<void> {
+}): Promise<{ cost: number; currency: string } | null> {
   if (input.providerId !== "atlascloud" || !input.modelId) {
-    return;
+    return null;
   }
   try {
     const estimate = estimateAtlasCloudCost(input.modelId, input.args ?? {});
     if (!estimate || estimate.cost <= 0) {
-      return;
+      return null;
     }
     await Prediction.create<Prediction>({
       user_id: input.userId,
@@ -39,9 +39,11 @@ export async function persistAtlasCloudMediaCost(input: {
       node_id: "",
       status: "completed"
     });
+    return { cost: estimate.cost, currency: estimate.currency };
   } catch (err) {
     log.warn("Failed to persist AtlasCloud media cost", {
       error: err instanceof Error ? err.message : String(err)
     });
+    return null;
   }
 }
