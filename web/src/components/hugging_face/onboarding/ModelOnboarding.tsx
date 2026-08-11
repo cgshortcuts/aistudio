@@ -34,6 +34,9 @@ import {
   type OnboardingCapability,
   type OnboardingModel
 } from "./onboardingCatalog";
+// === CUSTOM FORK START: Product Profile ===
+import { visibleOnboardingModels } from "../../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 interface ModelOnboardingProps {
   /** Kicks off a real download through the shared download store. */
@@ -65,19 +68,32 @@ const ModelOnboarding: React.FC<ModelOnboardingProps> = ({ onDownload }) => {
     }))
   );
 
+  // === CUSTOM FORK START: Product Profile ===
+  const catalogModels = useMemo(
+    () => visibleOnboardingModels(ONBOARDING_MODELS),
+    []
+  );
+  // === CUSTOM FORK END ===
+
   useEffect(() => {
-    const requests = ONBOARDING_MODELS.map((entry) =>
-      buildHfCacheRequest(entry.model)
-    ).filter((request): request is NonNullable<typeof request> => request !== null);
+    const requests = catalogModels
+      .map((entry) => buildHfCacheRequest(entry.model))
+      .filter((request): request is NonNullable<typeof request> => request !== null);
     if (requests.length > 0) {
       void ensureStatuses(requests);
     }
-  }, [ensureStatuses, cacheVersion]);
+  }, [catalogModels, ensureStatuses, cacheVersion]);
 
   const availableCapabilities = useMemo(() => {
-    const present = new Set(ONBOARDING_MODELS.map((m) => m.capability));
+    const present = new Set(catalogModels.map((m) => m.capability));
     return CAPABILITY_ORDER.filter((c) => present.has(c));
-  }, []);
+  }, [catalogModels]);
+
+  useEffect(() => {
+    if (filter !== "all" && !availableCapabilities.includes(filter)) {
+      setFilter("all");
+    }
+  }, [filter, availableCapabilities]);
 
   const groups = useMemo(() => {
     const caps =
@@ -85,13 +101,13 @@ const ModelOnboarding: React.FC<ModelOnboardingProps> = ({ onDownload }) => {
     return caps
       .map((capability) => {
         const entries = sortModelsByFit(
-          ONBOARDING_MODELS.filter((m) => m.capability === capability),
+          catalogModels.filter((m) => m.capability === capability),
           profile.budgetGb
         );
         return { capability, entries };
       })
       .filter((g) => g.entries.length > 0);
-  }, [filter, availableCapabilities, profile.budgetGb]);
+  }, [filter, availableCapabilities, catalogModels, profile.budgetGb]);
 
   const isDownloaded = (model: UnifiedModel): boolean =>
     canCheckHfCache(model) ? !!cacheStatuses[getHfCacheKey(model)] : false;

@@ -242,9 +242,9 @@ export const useModels = (scope: ModelScope = "local"): UseModelsResult => {
       const typeMatches =
         selectedModelType === "All" ||
         // === CUSTOM FORK START: Product Profile ===
-        isHiddenHubModelType(selectedModelType) ||
+        (!isHiddenHubModelType(selectedModelType) &&
+          model.type === selectedModelType);
         // === CUSTOM FORK END ===
-        model.type === selectedModelType;
 
       if (!matchesText) {return false;}
       if (!typeMatches) {return false;}

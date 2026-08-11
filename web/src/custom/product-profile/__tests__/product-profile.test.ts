@@ -13,6 +13,10 @@ import {
   isHiddenDefaultModelType,
   isHiddenExampleWorkflow,
   isHiddenHubModelType,
+  isHiddenOnboardingCapability,
+  visibleOnboardingEngines,
+  visibleOnboardingModels,
+  visibleOnboardingNodePacks,
   isHiddenIntegrationSection,
   isHiddenBottomPanelView,
   isHiddenCustomerNodeType,
@@ -319,6 +323,74 @@ describe("customer provider and settings filters", () => {
     expect(
       isHiddenLocalModel({ type: "hf.text_to_image", provider: "huggingface" }, true)
     ).toBe(false);
+  });
+
+  it("hides Hub CV and chat categories, keeps image, video, and speech", () => {
+    expect(isHiddenHubModelType("hf.image_classification", true)).toBe(true);
+    expect(isHiddenHubModelType("hf.object_detection", true)).toBe(true);
+    expect(isHiddenHubModelType("hf.image_to_text", true)).toBe(true);
+    expect(isHiddenHubModelType("hf.audio_classification", true)).toBe(true);
+    expect(isHiddenHubModelType("hf.flux", true)).toBe(false);
+    expect(isHiddenHubModelType("hf.automatic_speech_recognition", true)).toBe(
+      false
+    );
+    expect(isHiddenHubModelType("hf.text_to_speech", true)).toBe(false);
+    expect(isHiddenHubModelType("hf.text_to_audio", true)).toBe(false);
+    expect(
+      isHiddenLocalModel(
+        { type: "hf.automatic_speech_recognition", provider: "huggingface" },
+        true
+      )
+    ).toBe(false);
+    expect(
+      isHiddenLocalModel({ type: "llama_model", provider: "llama_cpp" }, true)
+    ).toBe(true);
+  });
+
+  it("slims Get Started to image and speech, not chat engines", () => {
+    expect(isHiddenOnboardingCapability("chat", true)).toBe(true);
+    expect(isHiddenOnboardingCapability("vision", true)).toBe(true);
+    expect(isHiddenOnboardingCapability("embedding", true)).toBe(true);
+    expect(isHiddenOnboardingCapability("image", true)).toBe(false);
+    expect(isHiddenOnboardingCapability("speech-to-text", true)).toBe(false);
+    expect(isHiddenOnboardingCapability("text-to-speech", true)).toBe(false);
+    expect(
+      visibleOnboardingModels(
+        [
+          { capability: "chat" },
+          { capability: "image" },
+          { capability: "speech-to-text" },
+          { capability: "embedding" }
+        ],
+        true
+      ).map((model) => model.capability)
+    ).toEqual(["image", "speech-to-text"]);
+    expect(
+      visibleOnboardingEngines(
+        [
+          { id: "ollama" },
+          { id: "huggingface" },
+          { id: "node-llama-cpp" },
+          { id: "mlx" }
+        ],
+        true
+      ).map((engine) => engine.id)
+    ).toEqual(["huggingface"]);
+    expect(
+      visibleOnboardingNodePacks(
+        [
+          {
+            repoId: "nodetool-ai/nodetool-huggingface",
+            capabilities: ["image", "speech-to-text"]
+          },
+          {
+            repoId: "nodetool-ai/nodetool-ollama",
+            capabilities: ["chat", "embedding"]
+          }
+        ],
+        true
+      ).map((pack) => pack.repoId)
+    ).toEqual(["nodetool-ai/nodetool-huggingface"]);
   });
 });
 

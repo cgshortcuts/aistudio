@@ -79,7 +79,10 @@ export const CUSTOMER_HIDDEN_INTEGRATION_SECTION_KEYS = [
   "local-model-servers"
 ] as const;
 
-/** HuggingFace Hub pipeline tags that are chat / LLM, not image or video. */
+/**
+ * HuggingFace Hub pipeline tags dropped in customer mode: chat / LLM and
+ * computer-vision tasks that are not image, video, or speech generation.
+ */
 export const CUSTOMER_HIDDEN_HUB_PIPELINE_TAGS = [
   "text-generation",
   "text-classification",
@@ -93,11 +96,40 @@ export const CUSTOMER_HIDDEN_HUB_PIPELINE_TAGS = [
   "feature-extraction",
   "sentence-similarity",
   "image-text-to-text",
+  "image-to-text",
   "visual-question-answering",
   "document-question-answering",
   "audio-text-to-text",
   "video-text-to-text",
-  "any-to-any"
+  "any-to-any",
+  "image-classification",
+  "object-detection",
+  "image-segmentation",
+  "depth-estimation",
+  "mask-generation",
+  "zero-shot-image-classification",
+  "audio-classification"
+] as const;
+
+export const CUSTOMER_HIDDEN_LOCAL_MODEL_PROVIDERS = [
+  "ollama",
+  "lmstudio",
+  "llama_cpp",
+  "node_llama_cpp",
+  "vllm"
+] as const;
+
+export const CUSTOMER_HIDDEN_ONBOARDING_CAPABILITIES = [
+  "chat",
+  "vision",
+  "embedding"
+] as const;
+
+export const CUSTOMER_HIDDEN_ONBOARDING_ENGINE_IDS = [
+  "ollama",
+  "node-llama-cpp",
+  "transformers-js",
+  "mlx"
 ] as const;
 
 export const CUSTOMER_HIDDEN_TAB_TYPES = [
@@ -359,11 +391,73 @@ export function isHiddenLocalModel(
   if (!hidden) {
     return false;
   }
-  const provider = model.provider ?? "";
-  if (provider === "ollama") {
+  const provider = (model.provider ?? "").toLowerCase();
+  if (
+    (CUSTOMER_HIDDEN_LOCAL_MODEL_PROVIDERS as readonly string[]).includes(
+      provider
+    )
+  ) {
     return true;
   }
   return isHiddenHubModelType(model.type ?? "", hidden);
+}
+
+export function isHiddenOnboardingCapability(
+  capability: string,
+  hidden = isChatAndAgentsHidden()
+): boolean {
+  return (
+    hidden &&
+    (CUSTOMER_HIDDEN_ONBOARDING_CAPABILITIES as readonly string[]).includes(
+      capability
+    )
+  );
+}
+
+export function visibleOnboardingModels<T extends { capability: string }>(
+  models: readonly T[],
+  hidden = isChatAndAgentsHidden()
+): T[] {
+  if (!hidden) {
+    return [...models];
+  }
+  return models.filter(
+    (model) => !isHiddenOnboardingCapability(model.capability, hidden)
+  );
+}
+
+export function visibleOnboardingEngines<T extends { id: string }>(
+  engines: readonly T[],
+  hidden = isChatAndAgentsHidden()
+): T[] {
+  if (!hidden) {
+    return [...engines];
+  }
+  return engines.filter(
+    (engine) =>
+      !(CUSTOMER_HIDDEN_ONBOARDING_ENGINE_IDS as readonly string[]).includes(
+        engine.id
+      )
+  );
+}
+
+export function visibleOnboardingNodePacks<
+  T extends { repoId: string; capabilities: readonly string[] }
+>(
+  packs: readonly T[],
+  hidden = isChatAndAgentsHidden()
+): T[] {
+  if (!hidden) {
+    return [...packs];
+  }
+  return packs.filter((pack) => {
+    if (pack.repoId.toLowerCase().includes("ollama")) {
+      return false;
+    }
+    return pack.capabilities.some(
+      (capability) => !isHiddenOnboardingCapability(capability, hidden)
+    );
+  });
 }
 
 /** Drop Assistant / Agent tabs when the customer product is on. */

@@ -30,6 +30,14 @@ import {
   type OnboardingEngine,
   type OnboardingNodePack
 } from "./onboardingCatalog";
+// === CUSTOM FORK START: Product Profile ===
+import {
+  isChatAndAgentsHidden,
+  showOptionalNodePacks,
+  visibleOnboardingEngines,
+  visibleOnboardingNodePacks
+} from "../../../custom/product-profile";
+// === CUSTOM FORK END ===
 
 const EngineCard: React.FC<{ engine: OnboardingEngine }> = ({ engine }) => {
   const theme = useTheme();
@@ -98,13 +106,17 @@ const NodePackRow: React.FC<{ pack: OnboardingNodePack }> = ({ pack }) => {
   const isBusy = useNodePacksStore((state) => state.busyIds.includes(pack.repoId));
   const openPackageManager = useOpenPackageManagerInNewTab();
 
+  // === CUSTOM FORK START: Product Profile ===
+  const showPackageManager = showOptionalNodePacks();
+  // === CUSTOM FORK END ===
+
   const handleInstall = useCallback(() => {
     if (available) {
       void install(pack.repoId);
-    } else {
+    } else if (showPackageManager) {
       openPackageManager();
     }
-  }, [available, install, openPackageManager, pack.repoId]);
+  }, [available, install, openPackageManager, pack.repoId, showPackageManager]);
 
   return (
     <FlexRow
@@ -133,7 +145,7 @@ const NodePackRow: React.FC<{ pack: OnboardingNodePack }> = ({ pack }) => {
           />
           <Caption color="secondary">Installed</Caption>
         </FlexRow>
-      ) : (
+      ) : available || showPackageManager ? (
         <EditorButton
           variant="outlined"
           density="compact"
@@ -151,7 +163,7 @@ const NodePackRow: React.FC<{ pack: OnboardingNodePack }> = ({ pack }) => {
         >
           {available ? "Install" : "Open Manager"}
         </EditorButton>
-      )}
+      ) : null}
     </FlexRow>
   );
 };
@@ -172,7 +184,18 @@ const EngineGuide: React.FC = () => {
     }
   }, [available, refresh]);
 
-  const engines = useMemo(() => ONBOARDING_ENGINES, []);
+  // === CUSTOM FORK START: Product Profile ===
+  const engines = useMemo(
+    () => visibleOnboardingEngines(ONBOARDING_ENGINES),
+    []
+  );
+  const nodePacks = useMemo(
+    () => visibleOnboardingNodePacks(ONBOARDING_NODE_PACKS),
+    []
+  );
+  const hideCustomerSurfaces = isChatAndAgentsHidden();
+  const showPackageManager = showOptionalNodePacks();
+  // === CUSTOM FORK END ===
 
   return (
     <FlexColumn gap={SPACING.lg}>
@@ -182,8 +205,11 @@ const EngineGuide: React.FC = () => {
             Local engines
           </Text>
           <Caption sx={{ opacity: 0.7 }}>
-            {APP_DISPLAY_NAME} runs models through these engines. Ollama is the easiest
-            start; the others unlock more model types.
+            {/* === CUSTOM FORK START: Product Profile === */}
+            {hideCustomerSurfaces
+              ? `${APP_DISPLAY_NAME} runs local image, video, and speech models through Hugging Face / Diffusers.`
+              : `${APP_DISPLAY_NAME} runs models through these engines. Ollama is the easiest start; the others unlock more model types.`}
+            {/* === CUSTOM FORK END === */}
           </Caption>
         </FlexColumn>
         <div
@@ -199,6 +225,7 @@ const EngineGuide: React.FC = () => {
         </div>
       </FlexColumn>
 
+      {nodePacks.length > 0 && (
       <FlexColumn gap={SPACING.sm}>
         <FlexRow gap={SPACING.xs} align="center" justify="space-between">
           <FlexColumn gap={SPACING.micro}>
@@ -208,31 +235,38 @@ const EngineGuide: React.FC = () => {
             <Caption sx={{ opacity: 0.7 }}>
               {available
                 ? "Install the packs that add the nodes you want to use."
-                : "Node packs install from the desktop app's Package Manager."}
+                : showPackageManager
+                  ? "Node packs install from the desktop app's Package Manager."
+                  : "Install the Hugging Face pack to run local image and speech models."}
             </Caption>
           </FlexColumn>
-          <EditorButton
-            variant="text"
-            density="compact"
-            size="small"
-            endIcon={<OpenInNewIcon sx={{ fontSize: 13 }} />}
-            onClick={openPackageManager}
-          >
-            Package Manager
-          </EditorButton>
+          {/* === CUSTOM FORK START: Product Profile === */}
+          {showPackageManager && (
+            <EditorButton
+              variant="text"
+              density="compact"
+              size="small"
+              endIcon={<OpenInNewIcon sx={{ fontSize: 13 }} />}
+              onClick={openPackageManager}
+            >
+              Package Manager
+            </EditorButton>
+          )}
+          {/* === CUSTOM FORK END === */}
         </FlexRow>
         <FlexColumn gap={SPACING.xs}>
-          {ONBOARDING_NODE_PACKS.map((pack) => (
+          {nodePacks.map((pack) => (
             <NodePackRow key={pack.repoId} pack={pack} />
           ))}
         </FlexColumn>
-        {!available && (
+        {!available && showPackageManager && (
           <Caption sx={{ opacity: 0.55, color: theme.vars.palette.text.secondary }}>
             Running in the browser? Model downloads still work here — node packs
             and runtimes are managed in the desktop app.
           </Caption>
         )}
       </FlexColumn>
+      )}
     </FlexColumn>
   );
 };
