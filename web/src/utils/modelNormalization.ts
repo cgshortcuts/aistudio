@@ -4,7 +4,9 @@ import type {
   ASRModel,
   TTSModel,
   VideoModel,
-  EmbeddingModel
+  EmbeddingModel,
+  MusicModel,
+  Model3DModel
 } from "../stores/ApiTypes";
 import type { TypeTag, SizeBucket } from "../stores/ModelFiltersStore";
 
@@ -14,7 +16,9 @@ export type ModelSelectorModel =
   | ImageModel
   | ASRModel
   | TTSModel
-  | VideoModel;
+  | VideoModel
+  | MusicModel
+  | Model3DModel;
 
 type NormalizedModelMeta = {
   sizeB?: number; // billions of params

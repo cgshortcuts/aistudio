@@ -210,7 +210,7 @@ describe("customer hidden surfaces", () => {
 });
 
 describe("customer provider and settings filters", () => {
-  it("keeps OpenAI, Gemini, HuggingFace, and every media provider", () => {
+  it("keeps OpenAI, Gemini, HuggingFace, AtlasCloud, and every media provider", () => {
     expect(
       isCustomerVisibleProvider({ key: "OPENAI_API_KEY", section: "popular" }, true)
     ).toBe(true);
@@ -226,6 +226,12 @@ describe("customer provider and settings filters", () => {
     expect(
       isCustomerVisibleProvider(
         { key: "BYTEPLUS_API_KEY", section: "media" },
+        true
+      )
+    ).toBe(true);
+    expect(
+      isCustomerVisibleProvider(
+        { key: "ATLASCLOUD_API_KEY", section: "gateways" },
         true
       )
     ).toBe(true);
@@ -266,6 +272,7 @@ describe("customer provider and settings filters", () => {
     expect(isCustomerVisibleModelProvider("huggingface", true)).toBe(true);
     expect(isCustomerVisibleModelProvider("hf_hub", true)).toBe(true);
     expect(isCustomerVisibleModelProvider("kie", true)).toBe(true);
+    expect(isCustomerVisibleModelProvider("atlascloud", true)).toBe(true);
     expect(isCustomerVisibleModelProvider("byteplus", true)).toBe(true);
     expect(isCustomerVisibleModelProvider("replicate", true)).toBe(true);
     expect(isCustomerVisibleModelProvider("elevenlabs", true)).toBe(true);

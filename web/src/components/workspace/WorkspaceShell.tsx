@@ -19,6 +19,9 @@ import WorkspaceTabBar from "./WorkspaceTabBar";
 import TabContent from "./TabContent";
 import WorkspaceEmptyView from "./WorkspaceEmptyView";
 import { Z_INDEX } from "../ui_primitives";
+// === CUSTOM FORK START: delete-workflow ===
+import { DeleteWorkflowHost } from "../../custom/delete-workflow";
+// === CUSTOM FORK END ===
 
 const ACTIVE_TAB_STYLE: React.CSSProperties = {
   opacity: 1,
@@ -169,6 +172,9 @@ const WorkspaceShell = () => {
   return (
     <div css={shellStyles} className="workspace-shell">
       <WorkspaceTabBar />
+      {/* === CUSTOM FORK START: delete-workflow === */}
+      <DeleteWorkflowHost />
+      {/* === CUSTOM FORK END === */}
       <div className="workspace-main">
         <Suspense fallback={null}>
           <PanelLeft />

@@ -15,7 +15,11 @@ jest.mock("../../../stores/SettingsStore", () => ({
   useSettingsStore: (selector: (s: unknown) => unknown) =>
     selector({ settings: { instantUpdate: false } })
 }));
+jest.mock("../../../custom/delete-workflow", () => ({
+  requestDeleteWorkflow: jest.fn()
+}));
 
+import { requestDeleteWorkflow } from "../../../custom/delete-workflow";
 import WorkspaceTabItem from "../WorkspaceTabItem";
 
 const TAB: WorkspaceTab = {
@@ -59,6 +63,10 @@ const renderTab = (
 };
 
 describe("WorkspaceTabItem", () => {
+  beforeEach(() => {
+    jest.mocked(requestDeleteWorkflow).mockClear();
+  });
+
   it("closes the tab on middle click", () => {
     const props = renderTab();
     const tab = screen.getByRole("tab", { name: /Alpha/ });
@@ -126,6 +134,39 @@ describe("WorkspaceTabItem", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(props.onCommitRename).toHaveBeenCalledWith(TAB, "Beta");
+  });
+
+  it("offers Delete Workflow on a workflow tab", () => {
+    const props = renderTab();
+    const tab = screen.getByRole("tab", { name: /Alpha/ });
+
+    fireEvent.contextMenu(tab);
+
+    fireEvent.click(screen.getByText("Delete Workflow"));
+
+    expect(requestDeleteWorkflow).toHaveBeenCalledWith({
+      id: "a",
+      name: "Alpha"
+    });
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not offer Delete Workflow on a non-workflow tab", () => {
+    renderTab({
+      tab: {
+        id: "chat:t1",
+        type: "chat",
+        ref: "t1",
+        mode: "view",
+        title: "Chat"
+      }
+    });
+    const tab = screen.getByRole("tab", { name: /Chat/ });
+
+    fireEvent.contextMenu(tab);
+
+    expect(screen.getByText("Close Tab")).toBeInTheDocument();
+    expect(screen.queryByText("Delete Workflow")).not.toBeInTheDocument();
   });
 
   it("does not cancel Space in the rename field", () => {

@@ -195,7 +195,7 @@ export interface ColumnDef {
 
 export interface Model3DRef {
   type: "model_3d";
-  uri: string;
+  uri?: string;
   asset_id?: string | null;
   temp_id?: string | null;
 }
@@ -533,6 +533,11 @@ export interface MessageAudioContent {
   audio: AudioRef;
 }
 
+export interface MessageModel3DContent {
+  type: "model_3d";
+  model_3d: Model3DRef;
+}
+
 export interface MessageDocumentContent {
   type: "document";
   document: DocumentRef;
@@ -550,6 +555,7 @@ export type MessageContent =
   | MessageImageUrlContent
   | MessageVideoContent
   | MessageAudioContent
+  | MessageModel3DContent
   | MessageDocumentContent
   | MessageThoughtContent;
 
@@ -564,11 +570,10 @@ export interface ToolCall {
 
 /**
  * Media-generation request metadata attached to chat messages.
- * When `mode` is "image" or "video", the server interprets the message as a
- * text-to-image / text-to-video request and invokes the provider's media
- * generation API rather than a regular LLM round. The resulting assets are
- * returned as MessageImageContent / MessageVideoContent in the assistant
- * message and stored via the asset service.
+ * When `mode` is a media mode, the server interprets the message as a
+ * provider media request (image, video, speech, music, sound, 3D) rather
+ * than a regular LLM round. The resulting assets are returned as typed
+ * content blocks in the assistant message and stored via the asset service.
  */
 export type MediaGenerationMode =
   | "chat"
@@ -577,6 +582,9 @@ export type MediaGenerationMode =
   | "video"
   | "image_to_video"
   | "audio"
+  | "music"
+  | "sound"
+  | "model3d"
   | "audio_to_video"
   | "retake"
   | "extend"
@@ -612,6 +620,10 @@ export interface MediaGenerationRequest {
   num_inference_steps?: number | null;
   /** Source image asset id (image_edit / image_to_video). */
   source_asset_id?: string | null;
+  /** Mesh container for 3D generation (glb, obj, fbx). */
+  output_format?: string | null;
+  /** Run a texture/refine pass after 3D shape generation when the model supports it. */
+  enable_textures?: boolean | null;
   /** Extra provider-specific params. */
   extras?: Record<string, unknown> | null;
 }
@@ -1262,6 +1274,16 @@ export interface MusicModel {
   provider: Provider;
   path?: string | null;
   supported_tasks?: string[];
+}
+
+export interface Model3DModel {
+  type: string;
+  id: string;
+  name: string;
+  provider: Provider;
+  path?: string | null;
+  supported_tasks?: string[];
+  output_formats?: string[];
 }
 
 export interface VideoModel {

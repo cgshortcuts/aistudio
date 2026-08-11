@@ -64,6 +64,8 @@ export default {
       "<rootDir>/../packages/kie-nodes/src/generated/kie-node-type-pricing.json",
     "^@nodetool/kie-unit-pricing-catalog$":
       "<rootDir>/../packages/kie-nodes/src/generated/kie-unit-pricing.json",
+    "^@nodetool/atlascloud-manifest$":
+      "<rootDir>/../packages/atlascloud-nodes/src/atlascloud-manifest.json",
     // Strip .js extensions from TypeScript ESM imports (packages use .js in source imports per ESM convention)
     "^(\\.{1,2}/.+)\\.js$": "$1",
     "^canvas$": "<rootDir>/src/__mocks__/canvas.ts",

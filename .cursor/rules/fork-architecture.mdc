@@ -18,10 +18,10 @@ This workspace always publishes to **one** fork remote. Do not push elsewhere.
 
 Rules for agents and humans:
 
-- Before any `git push`, ensure the active GitHub CLI account is **`cgshortcuts`** (`gh auth switch --user cgshortcuts`). Other accounts on this machine (`dave-cgshortcuts`, etc.) must not be used for this repo.
+- This repo always authenticates as **`cgshortcuts`**, even when another GitHub CLI account is active (`maverickmongoose`, `dave-cgshortcuts`, etc.). Do **not** run `gh auth switch` for this workspace — that changes the machine-wide account and breaks other repos.
 - Never change `origin` to another user/org unless the user explicitly asks.
 - Sync from upstream with `npm run sync:upstream` (fetch) or `npm run sync:upstream -- --merge` (merge). Do not force-push to `upstream`.
-- Re-pin remotes anytime with `npm run git:ensure-remotes`.
+- Re-pin remotes and the local credential helper anytime with `npm run git:ensure-remotes`.
 
 ## Where custom code lives
 

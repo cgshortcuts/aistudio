@@ -5,6 +5,9 @@ import { WorkflowAttributes } from "../../stores/ApiTypes";
 import { useQueryClient } from "@tanstack/react-query";
 import { useWorkflowManager } from "../../contexts/WorkflowManagerContext";
 import { useNavigate } from "react-router-dom";
+// === CUSTOM FORK START: delete-workflow ===
+import { closeWorkflowTabs } from "../../custom/delete-workflow";
+// === CUSTOM FORK END ===
 
 interface WorkflowDeleteDialogProps {
   open: boolean;
@@ -39,6 +42,9 @@ const WorkflowDeleteDialog: FC<WorkflowDeleteDialogProps> = ({
         onClose();
         queryClient.invalidateQueries({ queryKey: ["workflows"] });
         Promise.all(workflowsToDelete.map((w) => removeWorkflow(w.id)));
+        // === CUSTOM FORK START: delete-workflow ===
+        closeWorkflowTabs(workflowsToDelete.map((w) => w.id));
+        // === CUSTOM FORK END ===
         // If we delete the current workflow, we need to navigate to the next available workflow
         if (
           currentWorkflowId &&

@@ -7,6 +7,7 @@ import { generateSnippetMetadata } from "../config/snippetMetadata";
 import { generateCodeGenPaletteMetadata } from "../config/codeGenPaletteMetadata";
 import { attachBundleFalUnitPricing } from "../utils/attachBundleFalUnitPricing";
 import { attachBundleKieUnitPricing } from "../utils/attachBundleKieUnitPricing";
+import { attachAtlasCloudUnitPricing } from "../utils/attachAtlasCloudUnitPricing";
 import { WORKFLOW_NODE_TYPE, PREVIEW_NODE_TYPE } from "../constants/nodeTypes";
 
 export { WORKFLOW_NODE_TYPE };
@@ -150,6 +151,7 @@ export const loadMetadata = async (): Promise<"success" | "error"> => {
   // so we attach it client-side from the codegen JSON bundle.
   attachBundleFalUnitPricing(metadataByType);
   attachBundleKieUnitPricing(metadataByType);
+  attachAtlasCloudUnitPricing(metadataByType);
 
   useMetadataStore.getState().setMetadata(metadataByType);
   useMetadataStore.getState().setRecommendedModels(uniqueRecommendedModels);

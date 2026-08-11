@@ -22,6 +22,7 @@ export * from "./correlation-validation.js";
 export * from "./nodes/test-nodes.js";
 export * from "./package-registry-client.js";
 export * from "./pack-loader.js";
+export * from "./lazy-node-list.js";
 export * from "./docs/index.js";
 export * from "./python-package-scan.js";
 export type {

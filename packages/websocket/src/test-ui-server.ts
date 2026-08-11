@@ -11,7 +11,7 @@ import {
 } from "@nodetool-ai/config";
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
+import { detectPipMetadataRoots } from "./lib/pip-metadata-roots.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
@@ -982,83 +982,6 @@ export interface TestUiServerOptions extends HttpApiOptions {
   onRunnerCreated?: (runner: UnifiedWebSocketRunner) => void;
 }
 
-function detectMetadataRootsFromPip(): string[] {
-  const script = `
-import json
-import pathlib
-import subprocess
-import sys
-
-packages = ["nodetool-core", "nodetool-base"]
-roots = set()
-
-try:
-    proc = subprocess.run(
-        [sys.executable, "-m", "pip", "show", "-f", *packages],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    output = proc.stdout or ""
-except Exception:
-    output = ""
-
-location = None
-in_files = False
-for raw in output.splitlines():
-    line = raw.rstrip("\\n")
-    if line.startswith("Name: "):
-        location = None
-        in_files = False
-        continue
-    if line.startswith("Location: "):
-        location = line.split(":", 1)[1].strip()
-        continue
-    if line.startswith("Editable project location: "):
-        editable = line.split(":", 1)[1].strip()
-        if editable:
-            roots.add(editable)
-        continue
-    if line.startswith("Files:"):
-        in_files = True
-        continue
-    if line.startswith("---"):
-        location = None
-        in_files = False
-        continue
-
-    if not in_files or not location or not line.startswith("  "):
-        continue
-
-    rel = line.strip().replace("\\\\", "/")
-    if "package_metadata" not in rel:
-        continue
-    abs_path = (pathlib.Path(location) / rel).resolve()
-    metadata_dir = abs_path if abs_path.is_dir() else abs_path.parent
-    roots.add(str(metadata_dir))
-
-print(json.dumps(sorted(roots)))
-`;
-
-  for (const python of ["python3", "python"]) {
-    const proc = spawnSync(python, ["-c", script], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    });
-    if (proc.status !== 0 || !proc.stdout) continue;
-    try {
-      const roots = JSON.parse(proc.stdout.trim()) as string[];
-      if (!Array.isArray(roots)) continue;
-      return roots.filter(
-        (p) => typeof p === "string" && p.length > 0 && existsSync(p)
-      );
-    } catch {
-      // try next python executable
-    }
-  }
-  return [];
-}
-
 function resolveMetadataRoots(options: TestUiServerOptions): string[] {
   if (options.metadataRoots && options.metadataRoots.length > 0) {
     return options.metadataRoots;
@@ -1066,7 +989,7 @@ function resolveMetadataRoots(options: TestUiServerOptions): string[] {
   if (process.env.METADATA_ROOTS) {
     return process.env.METADATA_ROOTS.split(":").filter(Boolean);
   }
-  const detected = detectMetadataRootsFromPip();
+  const detected = detectPipMetadataRoots();
   if (detected.length > 0) return detected;
   const nearby = detectNearbyMetadataRoots(process.cwd());
   if (nearby.length > 0) return nearby;

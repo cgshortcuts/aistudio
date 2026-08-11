@@ -38,6 +38,9 @@ describe("capabilityForMode", () => {
     expect(capabilityForMode("video")).toBe("text_to_video");
     expect(capabilityForMode("image_to_video")).toBe("text_to_video");
     expect(capabilityForMode("audio")).toBe("text_to_speech");
+    expect(capabilityForMode("music")).toBe("text_to_music");
+    expect(capabilityForMode("sound")).toBe("text_to_music");
+    expect(capabilityForMode("model3d")).toBe("text_to_3d");
   });
 
   it("maps not-yet-selectable modes to null", () => {
@@ -54,7 +57,10 @@ describe("capabilityForMode", () => {
       "image_edit",
       "video",
       "image_to_video",
-      "audio"
+      "audio",
+      "music",
+      "sound",
+      "model3d"
     ] as const) {
       expect(setupReasonForMode(mode)).toEqual(expect.any(String));
     }

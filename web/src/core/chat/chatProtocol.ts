@@ -1365,9 +1365,9 @@ export async function handleChatWebSocketMessage(
       clearSendTimeout();
     }
     // Surface a progress message for media generation chunks so the UI shows
-    // "Conjuring image…" / "Conjuring video…" instead of "Thinking…". The
-    // "Conjuring" verb doubles as the signal ChatThreadView keys off of to
-    // swap in the spellcasting indicator — keep them in sync.
+    // "Conjuring image…" / "Conjuring video…" / "Conjuring music…" instead of
+    // "Thinking…". The "Conjuring" verb doubles as the signal ChatThreadView
+    // keys off of to swap in the spellcasting indicator — keep them in sync.
     const mediaMeta = data.content_metadata?.media_generation as
       | Record<string, unknown>
       | undefined;
@@ -1380,8 +1380,14 @@ export async function handleChatWebSocketMessage(
           : mode === "video" || mode === "image_to_video"
             ? "Conjuring video"
             : mode === "audio"
-              ? "Conjuring sound"
-              : "Conjuring";
+              ? "Conjuring speech"
+              : mode === "music"
+                ? "Conjuring music"
+                : mode === "sound"
+                  ? "Conjuring sound"
+                  : mode === "model3d"
+                    ? "Conjuring 3D model"
+                    : "Conjuring";
       set((state) =>
         threadRuntimeUpdate(state, tid, {
           statusMessage: model ? `${label} with ${model}…` : `${label}…`

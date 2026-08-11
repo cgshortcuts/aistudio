@@ -7,6 +7,16 @@ import {
   resolveAssetForAtlas,
   type AtlasManifestEntry
 } from "../src/atlascloud-factory.js";
+import { reportAtlasCloudCost } from "../src/atlascloud-cost.js";
+
+vi.mock("../src/atlascloud-cost.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../src/atlascloud-cost.js")>();
+  return {
+    ...actual,
+    reportAtlasCloudCost: vi.fn()
+  };
+});
 
 // ---------------------------------------------------------------------------
 // resolveAssetForAtlas
@@ -323,6 +333,7 @@ describe("createAtlasNodeClass.process", () => {
 
   afterEach(() => {
     global.fetch = originalFetch;
+    vi.mocked(reportAtlasCloudCost).mockClear();
     vi.restoreAllMocks();
   });
 
@@ -437,6 +448,16 @@ describe("createAtlasNodeClass.process", () => {
       steps: 30
     });
     expect(storage.store).toHaveBeenCalledTimes(1);
+    expect(reportAtlasCloudCost).toHaveBeenCalledWith(
+      expect.objectContaining({ storage }),
+      "test/model/t2i",
+      expect.objectContaining({
+        prompt: "a cat",
+        size: "1024x1024",
+        steps: 30
+      }),
+      "pid-1"
+    );
     expect(out).toEqual({
       output: { type: "image", uri: "memory://atlascloud-image-x.png" }
     });
@@ -832,6 +853,7 @@ describe("createAtlasNodeClass.process", () => {
     await expect(node.process({ storage: null })).rejects.toThrow(
       "AtlasCloud job failed: moderation flagged"
     );
+    expect(reportAtlasCloudCost).not.toHaveBeenCalled();
   });
 
   it("retries a transient 5xx on the (already-billed) output download", async () => {

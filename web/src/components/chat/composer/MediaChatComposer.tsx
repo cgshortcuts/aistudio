@@ -25,6 +25,9 @@ import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOver";
 import GraphicEqIcon from "@mui/icons-material/GraphicEq";
 import SpeedIcon from "@mui/icons-material/Speed";
 import AudiotrackIcon from "@mui/icons-material/Audiotrack";
+import MusicNoteIcon from "@mui/icons-material/MusicNote";
+import SurroundSoundIcon from "@mui/icons-material/SurroundSound";
+import ViewInArIcon from "@mui/icons-material/ViewInAr";
 import TuneIcon from "@mui/icons-material/Tune";
 import LayersIcon from "@mui/icons-material/Layers";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
@@ -36,11 +39,15 @@ import useMediaGenerationStore, {
   AUDIO_FORMATS,
   AUDIO_SPEEDS,
   DEFAULT_TTS_VOICES,
+  MUSIC_DURATIONS,
+  SOUND_DURATIONS,
+  MODEL3D_OUTPUT_FORMATS,
   resolveImageSize
 } from "../../../stores/MediaGenerationStore";
 import type {
   MediaMode,
-  AudioFormat
+  AudioFormat,
+  Model3DOutputFormat
 } from "../../../stores/MediaGenerationStore";
 import MediaControlChip from "./MediaControlChip";
 import MediaModeMenu from "./MediaModeMenu";
@@ -65,11 +72,15 @@ import ImageModelMenuDialog from "../../model_menu/ImageModelMenuDialog";
 import VideoModelMenuDialog from "../../model_menu/VideoModelMenuDialog";
 import LanguageModelMenuDialog from "../../model_menu/LanguageModelMenuDialog";
 import TTSModelMenuDialog from "../../model_menu/TTSModelMenuDialog";
+import MusicModelMenuDialog from "../../model_menu/MusicModelMenuDialog";
+import Model3DModelMenuDialog from "../../model_menu/Model3DModelMenuDialog";
 import type {
   Asset,
   ImageModel,
   LanguageModel,
   MessageContent,
+  Model3DModel,
+  MusicModel,
   TTSModel,
   VideoModel
 } from "../../../stores/ApiTypes";
@@ -204,6 +215,12 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
   );
   const audioParams = useMediaGenerationStore((s) => s.audio);
   const setAudioParams = useMediaGenerationStore((s) => s.setAudioParams);
+  const musicParams = useMediaGenerationStore((s) => s.music);
+  const setMusicParams = useMediaGenerationStore((s) => s.setMusicParams);
+  const soundParams = useMediaGenerationStore((s) => s.sound);
+  const setSoundParams = useMediaGenerationStore((s) => s.setSoundParams);
+  const model3dParams = useMediaGenerationStore((s) => s.model3d);
+  const setModel3DParams = useMediaGenerationStore((s) => s.setModel3DParams);
 
   // Language-model selection from chat store (used in chat mode & forwarded
   // as provider/model for media calls when a media model is not picked).
@@ -273,10 +290,14 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
   const [videoModelOpen, setVideoModelOpen] = useState(false);
   const [languageModelOpen, setLanguageModelOpen] = useState(false);
   const [ttsModelOpen, setTtsModelOpen] = useState(false);
+  const [musicModelOpen, setMusicModelOpen] = useState(false);
+  const [model3dModelOpen, setModel3dModelOpen] = useState(false);
   const imageModelAnchorRef = useRef<HTMLButtonElement | null>(null);
   const languageModelAnchorRef = useRef<HTMLButtonElement | null>(null);
   const videoModelAnchorRef = useRef<HTMLButtonElement | null>(null);
   const ttsModelAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const musicModelAnchorRef = useRef<HTMLButtonElement | null>(null);
+  const model3dModelAnchorRef = useRef<HTMLButtonElement | null>(null);
 
   // File handling (input images for image-to-image / motion-control later)
   const { droppedFiles, addFiles, removeFile, clearFiles, getFileContents, addDroppedFiles } =
@@ -404,6 +425,8 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
     setVideoModelOpen(false);
     setLanguageModelOpen(false);
     setTtsModelOpen(false);
+    setMusicModelOpen(false);
+    setModel3dModelOpen(false);
   }, [mode]);
 
   // Build media_generation payload from current state
@@ -476,6 +499,33 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
         audio_format: audioParams.format
       };
     }
+    if (mode === "music") {
+      return {
+        mode: "music",
+        provider: musicParams.model?.provider ?? null,
+        model: musicParams.model?.id ?? null,
+        duration: musicParams.duration,
+        audio_format: musicParams.format
+      };
+    }
+    if (mode === "sound") {
+      return {
+        mode: "sound",
+        provider: soundParams.model?.provider ?? null,
+        model: soundParams.model?.id ?? null,
+        duration: soundParams.duration,
+        audio_format: soundParams.format
+      };
+    }
+    if (mode === "model3d") {
+      return {
+        mode: "model3d",
+        provider: model3dParams.model?.provider ?? null,
+        model: model3dParams.model?.id ?? null,
+        output_format: model3dParams.outputFormat,
+        enable_textures: model3dParams.enableTextures
+      };
+    }
     return { mode };
   }, [
     mode,
@@ -501,7 +551,16 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
     audioParams.model,
     audioParams.voice,
     audioParams.speed,
-    audioParams.format
+    audioParams.format,
+    musicParams.model,
+    musicParams.duration,
+    musicParams.format,
+    soundParams.model,
+    soundParams.duration,
+    soundParams.format,
+    model3dParams.model,
+    model3dParams.outputFormat,
+    model3dParams.enableTextures
   ]);
 
   const { queuedMessage, sendMessage, cancelQueued, sendQueuedNow } =
@@ -537,6 +596,15 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
     if (mode === "audio") {
       return "Type the text you want spoken…";
     }
+    if (mode === "music") {
+      return "Describe the music you want — style, mood, instruments…";
+    }
+    if (mode === "sound") {
+      return "Describe the sound — rain on a window, footsteps, a door slam…";
+    }
+    if (mode === "model3d") {
+      return "Describe the 3D object you want to generate…";
+    }
     if (mode === "audio_to_video") {
       return "Describe a scene synced to audio…";
     }
@@ -557,7 +625,10 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
     mode === "image_edit" ||
     mode === "video" ||
     mode === "image_to_video" ||
-    mode === "audio";
+    mode === "audio" ||
+    mode === "music" ||
+    mode === "sound" ||
+    mode === "model3d";
 
   const chatModel = selectedModel ?? languageModel;
 
@@ -603,6 +674,24 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
         label: "speech",
         open: () => setTtsModelOpen(true)
       };
+    if (mode === "music")
+      return {
+        model: musicParams.model,
+        label: "music",
+        open: () => setMusicModelOpen(true)
+      };
+    if (mode === "sound")
+      return {
+        model: soundParams.model,
+        label: "sound",
+        open: () => setMusicModelOpen(true)
+      };
+    if (mode === "model3d")
+      return {
+        model: model3dParams.model,
+        label: "3D",
+        open: () => setModel3dModelOpen(true)
+      };
     return null;
   }, [
     isPi,
@@ -612,7 +701,10 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
     imageEditParams.model,
     videoParams.model,
     imageToVideoParams.model,
-    audioParams.model
+    audioParams.model,
+    musicParams.model,
+    soundParams.model,
+    model3dParams.model
   ]);
 
   // A send with no model picked can only fail on the server, so the composer
@@ -723,6 +815,9 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
     if (mode === "video") return <VideocamIcon fontSize="small" />;
     if (mode === "image_to_video") return <MovieFilterIcon fontSize="small" />;
     if (mode === "audio") return <RecordVoiceOverIcon fontSize="small" />;
+    if (mode === "music") return <MusicNoteIcon fontSize="small" />;
+    if (mode === "sound") return <SurroundSoundIcon fontSize="small" />;
+    if (mode === "model3d") return <ViewInArIcon fontSize="small" />;
     if (mode === "chat") return <ChatBubbleOutlineIcon fontSize="small" />;
     return <AutoAwesomeIcon fontSize="small" />;
   }, [mode, isPi]);
@@ -734,6 +829,9 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
     if (mode === "video") return "Video";
     if (mode === "image_to_video") return "Image→Video";
     if (mode === "audio") return "Speech";
+    if (mode === "music") return "Music";
+    if (mode === "sound") return "Sounds";
+    if (mode === "model3d") return "3D";
     if (mode === "chat") return "Chat";
     if (mode === "audio_to_video") return "Audio→Video";
     if (mode === "retake") return "Retake";
@@ -892,6 +990,49 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
     [setAudioParams, addRecentModel, audioParams.voice]
   );
 
+  const handlePickMusicModel = useCallback(
+    (model: MusicModel) => {
+      const picked = {
+        type: "music_model" as const,
+        id: model.id,
+        provider: model.provider,
+        name: model.name || ""
+      };
+      if (mode === "sound") {
+        setSoundParams({ model: picked });
+      } else {
+        setMusicParams({ model: picked });
+      }
+      addRecentModel({
+        provider: model.provider || "",
+        id: model.id || "",
+        name: model.name || ""
+      });
+      setMusicModelOpen(false);
+    },
+    [addRecentModel, mode, setMusicParams, setSoundParams]
+  );
+
+  const handlePickModel3D = useCallback(
+    (model: Model3DModel) => {
+      setModel3DParams({
+        model: {
+          type: "model_3d_model",
+          id: model.id,
+          provider: model.provider,
+          name: model.name || ""
+        }
+      });
+      addRecentModel({
+        provider: model.provider || "",
+        id: model.id || "",
+        name: model.name || ""
+      });
+      setModel3dModelOpen(false);
+    },
+    [addRecentModel, setModel3DParams]
+  );
+
   // The active video model for the current mode drives which duration /
   // resolution / aspect options are offered (falling back to the full set when
   // the model declares no constraints).
@@ -969,6 +1110,36 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
         id: f,
         label: f.toUpperCase(),
         icon: <AudiotrackIcon fontSize="small" />
+      })),
+    []
+  );
+
+  const musicDurationOptions = useMemo<MediaOption<number>[]>(
+    () =>
+      MUSIC_DURATIONS.map((d) => ({
+        id: d,
+        label: `${d}s`,
+        icon: <AccessTimeIcon fontSize="small" />
+      })),
+    []
+  );
+
+  const soundDurationOptions = useMemo<MediaOption<number>[]>(
+    () =>
+      SOUND_DURATIONS.map((d) => ({
+        id: d,
+        label: `${d}s`,
+        icon: <AccessTimeIcon fontSize="small" />
+      })),
+    []
+  );
+
+  const model3dFormatOptions = useMemo<MediaOption<Model3DOutputFormat>[]>(
+    () =>
+      MODEL3D_OUTPUT_FORMATS.map((f) => ({
+        id: f,
+        label: f.toUpperCase(),
+        icon: <ViewInArIcon fontSize="small" />
       })),
     []
   );
@@ -1579,6 +1750,165 @@ const MediaChatComposer: React.FC<MediaChatComposerProps> = ({
                 value={audioParams.format}
                 options={audioFormatOptions}
                 onChange={(f) => setAudioParams({ format: f })}
+              />
+            </>
+          )}
+
+          {mode === "music" && (
+            <>
+              <MediaControlChip
+                ref={musicModelAnchorRef}
+                icon={<MusicNoteIcon fontSize="small" />}
+                label={musicParams.model?.name || "Select Music Model"}
+                active={musicModelOpen}
+                onClick={() => setMusicModelOpen(true)}
+                showChevron={false}
+                truncate
+              />
+              <MusicModelMenuDialog
+                open={musicModelOpen}
+                anchorEl={musicModelAnchorRef.current}
+                onClose={() => setMusicModelOpen(false)}
+                onModelChange={handlePickMusicModel}
+                kind="music"
+              />
+
+              <MediaControlChip
+                icon={<AccessTimeIcon fontSize="small" />}
+                label={`${musicParams.duration}s`}
+                active={!!durationAnchor}
+                onClick={(e) => setDurationAnchor(e.currentTarget)}
+                showChevron={false}
+              />
+              <MediaOptionMenu
+                anchorEl={durationAnchor}
+                open={!!durationAnchor}
+                onClose={() => setDurationAnchor(null)}
+                header="Duration"
+                value={musicParams.duration}
+                options={musicDurationOptions}
+                onChange={(d) => setMusicParams({ duration: d })}
+              />
+
+              <MediaControlChip
+                icon={<AudiotrackIcon fontSize="small" />}
+                label={musicParams.format.toUpperCase()}
+                active={!!audioFormatAnchor}
+                onClick={(e) => setAudioFormatAnchor(e.currentTarget)}
+                showChevron={false}
+              />
+              <MediaOptionMenu
+                anchorEl={audioFormatAnchor}
+                open={!!audioFormatAnchor}
+                onClose={() => setAudioFormatAnchor(null)}
+                header="Audio Format"
+                value={musicParams.format}
+                options={audioFormatOptions}
+                onChange={(f) => setMusicParams({ format: f })}
+              />
+            </>
+          )}
+
+          {mode === "sound" && (
+            <>
+              <MediaControlChip
+                ref={musicModelAnchorRef}
+                icon={<SurroundSoundIcon fontSize="small" />}
+                label={soundParams.model?.name || "Select Sound Model"}
+                active={musicModelOpen}
+                onClick={() => setMusicModelOpen(true)}
+                showChevron={false}
+                truncate
+              />
+              <MusicModelMenuDialog
+                open={musicModelOpen}
+                anchorEl={musicModelAnchorRef.current}
+                onClose={() => setMusicModelOpen(false)}
+                onModelChange={handlePickMusicModel}
+                kind="sound"
+              />
+
+              <MediaControlChip
+                icon={<AccessTimeIcon fontSize="small" />}
+                label={`${soundParams.duration}s`}
+                active={!!durationAnchor}
+                onClick={(e) => setDurationAnchor(e.currentTarget)}
+                showChevron={false}
+              />
+              <MediaOptionMenu
+                anchorEl={durationAnchor}
+                open={!!durationAnchor}
+                onClose={() => setDurationAnchor(null)}
+                header="Duration"
+                value={soundParams.duration}
+                options={soundDurationOptions}
+                onChange={(d) => setSoundParams({ duration: d })}
+              />
+
+              <MediaControlChip
+                icon={<AudiotrackIcon fontSize="small" />}
+                label={soundParams.format.toUpperCase()}
+                active={!!audioFormatAnchor}
+                onClick={(e) => setAudioFormatAnchor(e.currentTarget)}
+                showChevron={false}
+              />
+              <MediaOptionMenu
+                anchorEl={audioFormatAnchor}
+                open={!!audioFormatAnchor}
+                onClose={() => setAudioFormatAnchor(null)}
+                header="Audio Format"
+                value={soundParams.format}
+                options={audioFormatOptions}
+                onChange={(f) => setSoundParams({ format: f })}
+              />
+            </>
+          )}
+
+          {mode === "model3d" && (
+            <>
+              <MediaControlChip
+                ref={model3dModelAnchorRef}
+                icon={<ViewInArIcon fontSize="small" />}
+                label={model3dParams.model?.name || "Select 3D Model"}
+                active={model3dModelOpen}
+                onClick={() => setModel3dModelOpen(true)}
+                showChevron={false}
+                truncate
+              />
+              <Model3DModelMenuDialog
+                open={model3dModelOpen}
+                anchorEl={model3dModelAnchorRef.current}
+                onClose={() => setModel3dModelOpen(false)}
+                onModelChange={handlePickModel3D}
+              />
+
+              <MediaControlChip
+                icon={<ViewInArIcon fontSize="small" />}
+                label={model3dParams.outputFormat.toUpperCase()}
+                active={!!audioFormatAnchor}
+                onClick={(e) => setAudioFormatAnchor(e.currentTarget)}
+                showChevron={false}
+              />
+              <MediaOptionMenu
+                anchorEl={audioFormatAnchor}
+                open={!!audioFormatAnchor}
+                onClose={() => setAudioFormatAnchor(null)}
+                header="Output Format"
+                value={model3dParams.outputFormat}
+                options={model3dFormatOptions}
+                onChange={(f) => setModel3DParams({ outputFormat: f })}
+              />
+
+              <MediaControlChip
+                icon={<TuneIcon fontSize="small" />}
+                label={model3dParams.enableTextures ? "Textures" : "Shape"}
+                active={model3dParams.enableTextures}
+                onClick={() =>
+                  setModel3DParams({
+                    enableTextures: !model3dParams.enableTextures
+                  })
+                }
+                showChevron={false}
               />
             </>
           )}

@@ -84,6 +84,12 @@ describe("resolveContentUrls", () => {
     expect(out[0].audio.uri).toBe("https://assets.test/a1.wav");
   });
 
+  it("resolves model_3d with glb fallback", () => {
+    const content = [{ type: "model_3d", model_3d: { asset_id: "m1" } }];
+    const out = resolveContentUrls(content) as any[];
+    expect(out[0].model_3d.uri).toBe("https://assets.test/m1.glb");
+  });
+
   it("leaves a ref without asset_id untouched (no uri added)", () => {
     const content = [{ type: "image", image: { uri: "existing://x" } }];
     const out = resolveContentUrls(content) as any[];
@@ -146,6 +152,12 @@ describe("resolveContentForProvider", () => {
     const content = [{ type: "audio", audio: { asset_id: "a" } }];
     const out = resolveContentForProvider(content) as any[];
     expect(out[0].audio.uri).toBe(fileUri("a.wav"));
+  });
+
+  it("resolves model_3d to file:// URI with glb fallback", () => {
+    const content = [{ type: "model_3d", model_3d: { asset_id: "m" } }];
+    const out = resolveContentForProvider(content) as any[];
+    expect(out[0].model_3d.uri).toBe(fileUri("m.glb"));
   });
 
   it("passes through primitives and unknown blocks", () => {

@@ -1006,7 +1006,8 @@ export async function collectProviderCatalogModels(
             collect(() => instance.getAvailableTTSModels(), "tts_model"),
             collect(() => instance.getAvailableMusicModels(), "music_model"),
             collect(() => instance.getAvailableASRModels(), "asr_model"),
-            collect(() => instance.getAvailableVideoModels(), "video_model")
+            collect(() => instance.getAvailableVideoModels(), "video_model"),
+            collect(() => instance.getAvailable3DModels(), "model_3d_model")
           ]);
           return lists.flat();
         },
@@ -1497,6 +1498,50 @@ export const modelsRouter = router({
           if (!instance) return [];
           const models = await instance.getAvailableMusicModels();
           return Promise.all(models.map((m) => toUnifiedModel(m, "music_model")));
+        },
+        []
+      )
+    ),
+
+  model3d: protectedProcedure.query(async ({ ctx }) => {
+    const availableIds = await getAvailableProviderIds(ctx.userId);
+    const results = await Promise.all(
+      availableIds.map((providerId) =>
+        safeProviderCall(
+          "model3d (aggregate)",
+          { provider: providerId, userId: ctx.userId },
+          async () => {
+            const instance = await instantiateProvider(providerId, ctx.userId);
+            if (!instance) return [] as UnifiedModel[];
+            const models = await instance.getAvailable3DModels();
+            return Promise.all(
+              models.map((m) => toUnifiedModel(m, "model_3d_model"))
+            );
+          },
+          [] as UnifiedModel[]
+        )
+      )
+    );
+    return results.flat();
+  }),
+
+  model3dByProvider: protectedProcedure
+    .input(providerInput)
+    .output(modelsListOutput)
+    .query(async ({ ctx, input }) =>
+      safeProviderCall(
+        "model3dByProvider",
+        { provider: input.provider, userId: ctx.userId },
+        async () => {
+          const instance = await instantiateProvider(
+            input.provider as ProviderId,
+            ctx.userId
+          );
+          if (!instance) return [];
+          const models = await instance.getAvailable3DModels();
+          return Promise.all(
+            models.map((m) => toUnifiedModel(m, "model_3d_model"))
+          );
         },
         []
       )

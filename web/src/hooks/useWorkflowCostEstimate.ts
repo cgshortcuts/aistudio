@@ -2,7 +2,8 @@
  * useWorkflowCostEstimate — reactive pre-run cost estimate for a workflow.
  *
  * Reads the open workflow's nodes (from its NodeStore) and the node-type
- * metadata (which carries `fal_unit_pricing` / `kie_unit_pricing`), keeps only
+ * metadata (which carries `fal_unit_pricing` / `kie_unit_pricing` /
+ * `atlascloud_unit_pricing`), keeps only
  * the nodes that use an AI model, then runs the pure {@link estimateWorkflowCost}
  * estimator. Generic nodes (e.g. TextToImage) are priced from their selected
  * `model` field via the FAL/kie pricing catalogs. Re-computes when the graph or
@@ -53,10 +54,20 @@ export function useWorkflowCostEstimate(
     // Each node contributes its configured fan-out (e.g. num_images) so the
     // estimate reflects a real run.
     const quantities: Record<string, number> = Object.fromEntries(
-      aiNodes.map((node) => [
-        node.id,
-        nodeExpectedQuantity(node.data as Record<string, unknown> | undefined)
-      ])
+      aiNodes.map((node) => {
+        const metadata = node.type ? getMetadata(node.type) : undefined;
+        const billingUnit =
+          metadata?.atlascloud_unit_pricing?.billing_unit ??
+          metadata?.fal_unit_pricing?.billing_unit ??
+          metadata?.kie_unit_pricing?.billing_unit;
+        return [
+          node.id,
+          nodeExpectedQuantity(
+            node.data as Record<string, unknown> | undefined,
+            billingUnit
+          )
+        ];
+      })
     );
     return estimateWorkflowCost({
       nodes: aiNodes.map((node) => ({

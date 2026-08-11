@@ -15,6 +15,9 @@ import {
   AUDIO_FORMATS,
   IMAGE_EDIT_STRENGTHS,
   INFERENCE_STEPS,
+  MUSIC_DURATIONS,
+  SOUND_DURATIONS,
+  MODEL3D_OUTPUT_FORMATS,
 } from "../MediaGenerationStore";
 
 describe("resolveImageSize", () => {
@@ -150,6 +153,18 @@ describe("MediaGenerationStore constants", () => {
       expect(Number.isInteger(s)).toBe(true);
     });
   });
+
+  it("MUSIC_DURATIONS are positive", () => {
+    MUSIC_DURATIONS.forEach((d) => expect(d).toBeGreaterThan(0));
+  });
+
+  it("SOUND_DURATIONS are positive", () => {
+    SOUND_DURATIONS.forEach((d) => expect(d).toBeGreaterThan(0));
+  });
+
+  it("MODEL3D_OUTPUT_FORMATS has entries", () => {
+    expect(MODEL3D_OUTPUT_FORMATS).toEqual(["glb", "obj", "fbx"]);
+  });
 });
 
 describe("MediaGenerationStore Zustand store", () => {
@@ -163,6 +178,9 @@ describe("MediaGenerationStore Zustand store", () => {
     expect(state.audio).toBeDefined();
     expect(state.imageEdit).toBeDefined();
     expect(state.imageToVideo).toBeDefined();
+    expect(state.music).toBeDefined();
+    expect(state.sound).toBeDefined();
+    expect(state.model3d).toBeDefined();
   });
 
   it("setMode changes the mode", async () => {
@@ -213,5 +231,30 @@ describe("MediaGenerationStore Zustand store", () => {
     store.getState().setImageToVideoParams({ duration: 6 });
     expect(store.getState().imageToVideo.duration).toBe(6);
     store.getState().setImageToVideoParams({ duration: 4 });
+  });
+
+  it("setMusicParams merges partial params", async () => {
+    const mod = await import("../MediaGenerationStore");
+    const store = mod.default;
+    store.getState().setMusicParams({ duration: 60 });
+    expect(store.getState().music.duration).toBe(60);
+    store.getState().setMusicParams({ duration: 30 });
+  });
+
+  it("setSoundParams merges partial params", async () => {
+    const mod = await import("../MediaGenerationStore");
+    const store = mod.default;
+    store.getState().setSoundParams({ duration: 8 });
+    expect(store.getState().sound.duration).toBe(8);
+    store.getState().setSoundParams({ duration: 4 });
+  });
+
+  it("setModel3DParams merges partial params", async () => {
+    const mod = await import("../MediaGenerationStore");
+    const store = mod.default;
+    store.getState().setModel3DParams({ outputFormat: "obj", enableTextures: true });
+    expect(store.getState().model3d.outputFormat).toBe("obj");
+    expect(store.getState().model3d.enableTextures).toBe(true);
+    store.getState().setModel3DParams({ outputFormat: "glb", enableTextures: false });
   });
 });

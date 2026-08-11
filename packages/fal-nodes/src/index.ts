@@ -1,4 +1,4 @@
-import type { NodeClass } from "@nodetool-ai/node-sdk";
+import { lazyReadonlyArray, type NodeClass } from "@nodetool-ai/node-sdk";
 import { loadPackageAssetJson } from "@nodetool-ai/config";
 import { loadFalNodesFromManifest } from "./fal-factory.js";
 import type { FalManifestEntry } from "./fal-factory.js";
@@ -22,14 +22,17 @@ function loadManifest(): FalManifestEntry[] {
   );
 }
 
-export const FAL_NODES: readonly NodeClass[] = loadFalNodesFromManifest(
-  loadManifest()
-);
+let falNodeClasses: readonly NodeClass[] | undefined;
+function loadFalNodeClasses(): readonly NodeClass[] {
+  return (falNodeClasses ??= loadFalNodesFromManifest(loadManifest()));
+}
+
+export const FAL_NODES: readonly NodeClass[] = lazyReadonlyArray(loadFalNodeClasses);
 
 export function registerFalNodes(registry: {
   register: (nodeClass: NodeClass) => void;
 }): void {
-  for (const nodeClass of FAL_NODES) {
+  for (const nodeClass of loadFalNodeClasses()) {
     registry.register(nodeClass);
   }
 }

@@ -80,7 +80,7 @@ const activeUser = run(["config", "--get", "credential.username"]);
 const configuredUser = (activeUser.stdout || "").trim();
 if (configuredUser && configuredUser !== ORIGIN_ACCOUNT) {
   console.warn(
-    `warning: credential.username is "${configuredUser}", expected "${ORIGIN_ACCOUNT}". Fix with:\n  git config --local credential.username ${ORIGIN_ACCOUNT}\n  gh auth switch --user ${ORIGIN_ACCOUNT}`
+    `warning: credential.username is "${configuredUser}", expected "${ORIGIN_ACCOUNT}". Fix with:\n  npm run git:ensure-remotes`
   );
 }
 

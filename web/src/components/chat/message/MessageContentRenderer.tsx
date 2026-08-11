@@ -5,6 +5,7 @@ import AddToCanvasIcon from "@mui/icons-material/AddPhotoAlternate";
 import { MessageContent } from "../../../stores/ApiTypes";
 import ImageView from "../../node/ImageView";
 import AudioPlayer from "../../audio/AudioPlayer";
+import OpenModel3DButton from "./OpenModel3DButton";
 import {
   BORDER_RADIUS,
   MOTION,
@@ -222,6 +223,10 @@ export const MessageContentRenderer: React.FC<MessageContentRendererProps> = Rea
     }
     case "document":
       return <div>Document</div>;
+    case "model_3d": {
+      const assetId = content.model_3d?.asset_id || "";
+      return assetId ? <OpenModel3DButton assetId={assetId} /> : <div>3D model</div>;
+    }
     default:
       return null;
   }

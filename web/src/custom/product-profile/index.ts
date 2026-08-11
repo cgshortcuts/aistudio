@@ -6,7 +6,7 @@
  * agents, dashboard, tutorials, collections, workspaces, storyboards,
  * scripts, chat-adjacent settings, and agent/data-web example templates.
  * Image/video generation
- * stays (FAL, OpenAI/Gemini image, local image/video models). Local
+ * stays (FAL, AtlasCloud, OpenAI/Gemini image, local image/video models). Local
  * `npm run dev` stays full unless the env is set.
  */
 import { getRuntimeConfig } from "../../lib/runtimeConfig";
@@ -43,7 +43,8 @@ export const CUSTOMER_HIDDEN_PAGE_KEYS = [
 export const CUSTOMER_VISIBLE_PROVIDER_KEYS = [
   "OPENAI_API_KEY",
   "GEMINI_API_KEY",
-  "HF_TOKEN"
+  "HF_TOKEN",
+  "ATLASCLOUD_API_KEY"
 ] as const;
 
 /**
@@ -59,6 +60,7 @@ export const CUSTOMER_VISIBLE_MODEL_PROVIDERS = [
   "fal",
   "fal_ai",
   "kie",
+  "atlascloud",
   "byteplus",
   "replicate",
   "elevenlabs",

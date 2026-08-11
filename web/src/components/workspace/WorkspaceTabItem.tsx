@@ -18,6 +18,9 @@ import {
   LoadingSpinner,
   MenuItemPrimitive
 } from "../ui_primitives";
+// === CUSTOM FORK START: delete-workflow ===
+import { requestDeleteWorkflow } from "../../custom/delete-workflow";
+// === CUSTOM FORK END ===
 
 export interface WorkspaceTabItemProps {
   tab: WorkspaceTab;
@@ -253,6 +256,20 @@ const WorkspaceTabItem = ({
             onCloseAll();
           }}
         />
+        {/* === CUSTOM FORK START: delete-workflow === */}
+        {tab.type === "workflow" && (
+          <MenuItemPrimitive
+            label="Delete Workflow"
+            compact
+            color="error"
+            dividerBefore
+            onClick={() => {
+              closeContextMenu();
+              requestDeleteWorkflow({ id: tab.ref, name: tab.title });
+            }}
+          />
+        )}
+        {/* === CUSTOM FORK END === */}
       </ContextMenu>
     </>
   );

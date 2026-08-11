@@ -2,21 +2,26 @@
  * MediaGenerationStore
  *
  * Holds the "media-generation mode" selection and per-mode parameters used by
- * the chat composer to author text-to-image and text-to-video requests. The
- * values here are piped through GlobalChatStore.sendMessage as extra metadata
- * on the chat_message payload so the server can route the prompt to
- * provider.textToImage / provider.textToVideo instead of a plain LLM round.
+ * the chat composer to author image, video, speech, music, sound, and 3D
+ * requests. The values here are piped through GlobalChatStore.sendMessage as
+ * extra metadata on the chat_message payload so the server can route the
+ * prompt to the matching provider media API instead of a plain LLM round.
  */
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { ImageModelValue, Message, TTSModelValue } from "./ApiTypes";
+import type {
+  ImageModelValue,
+  Message,
+  Model3DModelValue,
+  MusicModelValue,
+  TTSModelValue
+} from "./ApiTypes";
 
 /**
  * Media-generation request metadata that can be attached to outgoing chat
  * messages. The backend looks for this field on `chat_message` payloads and
- * routes the message to provider.textToImage / provider.textToVideo /
- * provider.imageToImage / provider.imageToVideo / provider.textToSpeech when
- * `mode` is a media mode. Mirrors the Python-side `MediaGenerationRequest`.
+ * routes the message to the matching provider media API when `mode` is a
+ * media mode. Mirrors the protocol `MediaGenerationRequest`.
  */
 export interface MediaGenerationRequest {
   mode: MediaMode;
@@ -34,6 +39,8 @@ export interface MediaGenerationRequest {
   strength?: number | null;
   num_inference_steps?: number | null;
   source_asset_id?: string | null;
+  output_format?: string | null;
+  enable_textures?: boolean | null;
   extras?: Record<string, unknown> | null;
 }
 
@@ -54,6 +61,9 @@ export type MediaMode =
   | "video"
   | "image_to_video"
   | "audio"
+  | "music"
+  | "sound"
+  | "model3d"
   | "audio_to_video"
   | "retake"
   | "extend"
@@ -62,6 +72,7 @@ export type MediaMode =
 export type ImageResolution = "1K" | "2K" | "4K";
 export type VideoResolution = "720p" | "1080p" | "1440p" | "4K";
 export type AudioFormat = "mp3" | "wav" | "pcm" | "opus";
+export type Model3DOutputFormat = "glb" | "obj" | "fbx";
 
 export interface AspectRatioOption {
   id: string;
@@ -123,6 +134,15 @@ export const AUDIO_SPEEDS: number[] = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
 
 /** Output container formats supported by the backend audio path. */
 export const AUDIO_FORMATS: AudioFormat[] = ["mp3", "wav", "opus", "pcm"];
+
+/** Clip lengths offered for text-to-music (seconds). */
+export const MUSIC_DURATIONS: number[] = [15, 30, 60, 120];
+
+/** Clip lengths offered for text-to-sound (seconds). */
+export const SOUND_DURATIONS: number[] = [1, 2, 4, 6, 8, 10];
+
+/** Mesh containers offered for text-to-3D. */
+export const MODEL3D_OUTPUT_FORMATS: Model3DOutputFormat[] = ["glb", "obj", "fbx"];
 
 /** Strength controls how much an image-to-image edit deviates from the source. */
 export const IMAGE_EDIT_STRENGTHS: number[] = [0.25, 0.5, 0.65, 0.75, 0.85, 1.0];
@@ -189,6 +209,24 @@ interface ImageToVideoGenerationParams {
   numInferenceSteps: number;
 }
 
+interface MusicGenerationParams {
+  model: MusicModelValue | null;
+  duration: number;
+  format: AudioFormat;
+}
+
+interface SoundGenerationParams {
+  model: MusicModelValue | null;
+  duration: number;
+  format: AudioFormat;
+}
+
+interface Model3DGenerationParams {
+  model: Model3DModelValue | null;
+  outputFormat: Model3DOutputFormat;
+  enableTextures: boolean;
+}
+
 interface MediaGenerationState {
   mode: MediaMode;
   image: ImageGenerationParams;
@@ -196,12 +234,18 @@ interface MediaGenerationState {
   video: VideoGenerationParams;
   imageToVideo: ImageToVideoGenerationParams;
   audio: AudioGenerationParams;
+  music: MusicGenerationParams;
+  sound: SoundGenerationParams;
+  model3d: Model3DGenerationParams;
   setMode: (mode: MediaMode) => void;
   setImageParams: (params: Partial<ImageGenerationParams>) => void;
   setImageEditParams: (params: Partial<ImageEditParams>) => void;
   setVideoParams: (params: Partial<VideoGenerationParams>) => void;
   setImageToVideoParams: (params: Partial<ImageToVideoGenerationParams>) => void;
   setAudioParams: (params: Partial<AudioGenerationParams>) => void;
+  setMusicParams: (params: Partial<MusicGenerationParams>) => void;
+  setSoundParams: (params: Partial<SoundGenerationParams>) => void;
+  setModel3DParams: (params: Partial<Model3DGenerationParams>) => void;
 }
 
 const DEFAULT_IMAGE_PARAMS: ImageGenerationParams = {
@@ -242,6 +286,24 @@ const DEFAULT_IMAGE_TO_VIDEO_PARAMS: ImageToVideoGenerationParams = {
   numInferenceSteps: 30
 };
 
+const DEFAULT_MUSIC_PARAMS: MusicGenerationParams = {
+  model: null,
+  duration: 30,
+  format: "mp3"
+};
+
+const DEFAULT_SOUND_PARAMS: SoundGenerationParams = {
+  model: null,
+  duration: 4,
+  format: "mp3"
+};
+
+const DEFAULT_MODEL3D_PARAMS: Model3DGenerationParams = {
+  model: null,
+  outputFormat: "glb",
+  enableTextures: false
+};
+
 const useMediaGenerationStore = create<MediaGenerationState>()(
   persist(
     (set) => ({
@@ -251,6 +313,9 @@ const useMediaGenerationStore = create<MediaGenerationState>()(
       video: DEFAULT_VIDEO_PARAMS,
       imageToVideo: DEFAULT_IMAGE_TO_VIDEO_PARAMS,
       audio: DEFAULT_AUDIO_PARAMS,
+      music: DEFAULT_MUSIC_PARAMS,
+      sound: DEFAULT_SOUND_PARAMS,
+      model3d: DEFAULT_MODEL3D_PARAMS,
       setMode: (mode) => set({ mode }),
       setImageParams: (params) =>
         set((state) => ({ image: { ...state.image, ...params } })),
@@ -263,16 +328,23 @@ const useMediaGenerationStore = create<MediaGenerationState>()(
           imageToVideo: { ...state.imageToVideo, ...params }
         })),
       setAudioParams: (params) =>
-        set((state) => ({ audio: { ...state.audio, ...params } }))
+        set((state) => ({ audio: { ...state.audio, ...params } })),
+      setMusicParams: (params) =>
+        set((state) => ({ music: { ...state.music, ...params } })),
+      setSoundParams: (params) =>
+        set((state) => ({ sound: { ...state.sound, ...params } })),
+      setModel3DParams: (params) =>
+        set((state) => ({ model3d: { ...state.model3d, ...params } }))
     }),
     {
       name: "nodetool-media-generation",
-      version: 2,
+      version: 3,
       migrate: (persistedState, version) => {
         const state = (persistedState ?? {}) as Partial<MediaGenerationState>;
+        let next = { ...state };
         if (version < 2) {
-          return {
-            ...state,
+          next = {
+            ...next,
             audio: { ...DEFAULT_AUDIO_PARAMS, ...(state.audio ?? {}) },
             imageEdit: {
               ...DEFAULT_IMAGE_EDIT_PARAMS,
@@ -282,9 +354,17 @@ const useMediaGenerationStore = create<MediaGenerationState>()(
               ...DEFAULT_IMAGE_TO_VIDEO_PARAMS,
               ...(state.imageToVideo ?? {})
             }
-          } as MediaGenerationState;
+          };
         }
-        return state as MediaGenerationState;
+        if (version < 3) {
+          next = {
+            ...next,
+            music: { ...DEFAULT_MUSIC_PARAMS, ...(state.music ?? {}) },
+            sound: { ...DEFAULT_SOUND_PARAMS, ...(state.sound ?? {}) },
+            model3d: { ...DEFAULT_MODEL3D_PARAMS, ...(state.model3d ?? {}) }
+          };
+        }
+        return next as MediaGenerationState;
       }
     }
   )

@@ -2,7 +2,8 @@
  * Pure pre-run cost estimation for a workflow graph.
  *
  * Walks the nodes, resolves per-node unit pricing attached to node metadata
- * (`fal_unit_pricing` first, then `kie_unit_pricing`), multiplies by an expected
+ * (`fal_unit_pricing` first, then `kie_unit_pricing`, then
+ * `atlascloud_unit_pricing`), multiplies by an expected
  * run count, and returns a {@link WorkflowCostEstimate}. Nodes without a known
  * price are still reported (cost 0, confidence "unknown") and counted, never
  * hidden — the plan-before-spend view must surface uncertainty.
@@ -38,6 +39,12 @@ export interface KieUnitPricingLike extends UnitPricing {
   source?: "live" | "bundle";
 }
 
+/** AtlasCloud list price as attached to `NodeMetadata.atlascloud_unit_pricing`. */
+export interface AtlasCloudUnitPricingLike extends UnitPricing {
+  model_id?: string;
+  source?: "live" | "bundle";
+}
+
 /** A single node property as exposed by `NodeMetadata` — only the shape read here. */
 export interface NodePropertyLike {
   name?: string;
@@ -48,6 +55,7 @@ export interface NodePropertyLike {
 export interface NodeMetadataLike {
   fal_unit_pricing?: FalUnitPricingLike | null;
   kie_unit_pricing?: KieUnitPricingLike | null;
+  atlascloud_unit_pricing?: AtlasCloudUnitPricingLike | null;
   /** Properties, used to find a provider-model selection on generic nodes. */
   properties?: Array<NodePropertyLike | null> | null;
 }
@@ -80,7 +88,7 @@ const PROVIDER_MODEL_TYPES = new Set([
 
 export interface CostEstimateInput {
   nodes: Array<{ id: string; type: string; data?: Record<string, unknown> }>;
-  /** Look up metadata (which may carry fal_unit_pricing / kie_unit_pricing) for a node type. */
+  /** Look up metadata (which may carry fal / kie / atlascloud unit pricing) for a node type. */
   getMetadata: (nodeType: string) => NodeMetadataLike | undefined;
   /**
    * Optional lookup of unit pricing for a model selected on a generic node's
@@ -165,9 +173,9 @@ function selectedModel(
 }
 
 /**
- * Resolve a node's unit price. Node-type metadata pricing wins (FAL, then kie);
- * for generic nodes that carry none, fall back to the model chosen on a
- * provider-model property, priced through `getModelPrice`.
+ * Resolve a node's unit price. Node-type metadata pricing wins (FAL, then kie,
+ * then AtlasCloud); for generic nodes that carry none, fall back to the model
+ * chosen on a provider-model property, priced through `getModelPrice`.
  */
 function resolvePrice(
   metadata: NodeMetadataLike | undefined,
@@ -203,6 +211,20 @@ function resolvePrice(
         confidence: confidenceFromSource(kie.source)
       };
     }
+  }
+
+  const atlas = metadata?.atlascloud_unit_pricing;
+  if (atlas && Number.isFinite(atlas.unit_price)) {
+    if (isVagueBillingUnit(atlas.billing_unit)) {
+      return null;
+    }
+    return {
+      provider: "atlascloud",
+      model: atlas.model_id ?? null,
+      unitPrice: atlas.unit_price,
+      billingUnit: atlas.billing_unit,
+      confidence: confidenceFromSource(atlas.source)
+    };
   }
 
   if (getModelPrice) {

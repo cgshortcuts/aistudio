@@ -18,14 +18,21 @@ export const PROVIDER_MODEL_TYPES = new Set([
 
 /**
  * True when a node type uses an AI model — either it carries provider unit
- * pricing (fal / kie) or it exposes a provider-backed model property. This is
- * what the cost estimate panel lists; plain data/utility nodes are left out.
+ * pricing (fal / kie / AtlasCloud) or it exposes a provider-backed model
+ * property. This is what the cost estimate panel lists; plain data/utility
+ * nodes are left out.
  */
 export function nodeMetadataUsesAiModel(
   metadata: NodeMetadata | undefined
 ): boolean {
   if (!metadata) return false;
-  if (metadata.fal_unit_pricing || metadata.kie_unit_pricing) return true;
+  if (
+    metadata.fal_unit_pricing ||
+    metadata.kie_unit_pricing ||
+    metadata.atlascloud_unit_pricing
+  ) {
+    return true;
+  }
   return (metadata.properties ?? []).some((prop) =>
     prop.type?.type ? PROVIDER_MODEL_TYPES.has(prop.type.type) : false
   );
@@ -53,9 +60,18 @@ export const FAN_OUT_PROPERTY_NAMES = [
  * count falls back to a single output so the estimate never over-counts.
  */
 export function nodeExpectedQuantity(
-  data: Record<string, unknown> | undefined
+  data: Record<string, unknown> | undefined,
+  billingUnit?: string
 ): number {
   if (!data) return 1;
+  const unit = billingUnit?.trim().toLowerCase() ?? "";
+  if (unit.includes("second") && !unit.includes("compute")) {
+    const secs = data.duration;
+    if (typeof secs === "number" && Number.isFinite(secs) && secs > 0) {
+      return Math.floor(secs);
+    }
+    return 1;
+  }
   for (const name of FAN_OUT_PROPERTY_NAMES) {
     const value = data[name];
     if (typeof value === "number" && Number.isFinite(value) && value > 0) {

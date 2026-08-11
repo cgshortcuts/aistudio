@@ -55,6 +55,7 @@ const PROVIDER_PRESET: Record<string, { label: string; color: string }> = {
   anthropic: { label: "Anthropic", color: "#F2A65A" },
   replicate: { label: "Replicate", color: "#E85FB0" },
   fal: { label: "fal.ai", color: "#85A9F4" },
+  atlascloud: { label: "AtlasCloud", color: "#6C8CFF" },
   huggingface: { label: "Hugging Face", color: "#B79CF5" },
   hugging_face: { label: "Hugging Face", color: "#B79CF5" },
   local: { label: "Local", color: "#34D9C4" },

@@ -45,6 +45,9 @@
       "path": "../fal-nodes"
     },
     {
+      "path": "../atlascloud-nodes"
+    },
+    {
       "path": "../together-nodes"
     },
     {

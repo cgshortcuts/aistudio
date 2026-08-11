@@ -81,6 +81,10 @@ export const useMusicProviders = (): UseProvidersResult => {
   return useProvidersByCapability("text_to_music");
 };
 
+export const use3DProviders = (): UseProvidersResult => {
+  return useProvidersByCapability("text_to_3d");
+};
+
 export const useVideoProviders = (): UseProvidersResult => {
   return useProvidersByCapability("text_to_video");
 };

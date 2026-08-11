@@ -5,13 +5,15 @@ import {
   isImageContent,
   isVideoContent,
   isAudioContent,
+  isModel3DContent,
   isMediaOnlyContent
 } from "../MediaOutputGroup.helpers";
 import type {
   MessageContent,
   MessageImageContent,
   MessageVideoContent,
-  MessageAudioContent
+  MessageAudioContent,
+  MessageModel3DContent
 } from "../../../../stores/ApiTypes";
 
 const img: MessageImageContent = {
@@ -27,6 +29,11 @@ const vid: MessageVideoContent = {
 const aud: MessageAudioContent = {
   type: "audio",
   audio: { type: "audio", uri: "x" }
+};
+
+const model3d: MessageModel3DContent = {
+  type: "model_3d",
+  model_3d: { type: "model_3d", asset_id: "m3d" }
 };
 
 describe("isImageContent", () => {
@@ -60,9 +67,19 @@ describe("isAudioContent", () => {
   });
 });
 
+describe("isModel3DContent", () => {
+  it("returns true for model_3d type", () => {
+    expect(isModel3DContent(model3d)).toBe(true);
+  });
+
+  it("returns false for other types", () => {
+    expect(isModel3DContent(aud as unknown as MessageContent)).toBe(false);
+  });
+});
+
 describe("isMediaOnlyContent", () => {
   it("returns true for array of only media items", () => {
-    expect(isMediaOnlyContent([img, vid, aud])).toBe(true);
+    expect(isMediaOnlyContent([img, vid, aud, model3d])).toBe(true);
   });
 
   it("returns false for empty array", () => {
@@ -90,5 +107,6 @@ describe("isMediaOnlyContent", () => {
 
   it("returns true for single media item", () => {
     expect(isMediaOnlyContent([aud])).toBe(true);
+    expect(isMediaOnlyContent([model3d])).toBe(true);
   });
 });

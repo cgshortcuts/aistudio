@@ -10,6 +10,7 @@ import mistralColorIcon from "../../icons/providers/mistral-color.svg";
 import falColorIcon from "../../icons/providers/fal-color.svg";
 import replicateIcon from "../../icons/providers/replicate.svg";
 import elevenlabsIcon from "../../icons/providers/elevenlabs.svg";
+import meshyColorIcon from "../../icons/providers/meshy-color.svg";
 
 export interface OnboardingProvider {
   id: string;
@@ -176,7 +177,7 @@ export const ONBOARDING_PROVIDERS: OnboardingProvider[] = [
     secretKey: "FAL_API_KEY",
     icon: falColorIcon,
     tagline: "Fast image and video generation (FLUX and more).",
-    capabilities: ["text_to_image", "text_to_video"],
+    capabilities: ["text_to_image", "text_to_video", "text_to_music"],
     keyUrl: "https://fal.ai/dashboard/keys",
     pricingUrl: "https://fal.ai/pricing",
     costHint: "Pay per generation, priced per image or per second of video."
@@ -210,6 +211,17 @@ export const ONBOARDING_PROVIDERS: OnboardingProvider[] = [
     pricingUrl: "https://elevenlabs.io/pricing",
     costHint: "Pay per character of speech generated.",
     freeTier: "Free tier available"
+  },
+  {
+    id: "meshy",
+    name: "Meshy",
+    secretKey: "MESHY_API_KEY",
+    icon: meshyColorIcon,
+    tagline: "Text-to-3D meshes for games and product viz.",
+    capabilities: ["text_to_3d"],
+    keyUrl: "https://docs.meshy.ai/",
+    pricingUrl: "https://www.meshy.ai/pricing",
+    costHint: "Pay per generation, priced per 3D asset."
   }
 ];
 
@@ -221,6 +233,7 @@ export const CAPABILITY_LABELS: Record<OnboardingCapability, string> = {
   automatic_speech_recognition: "speech-to-text",
   text_to_music: "music generation",
   text_to_video: "video generation",
+  text_to_3d: "3D model generation",
   generate_embedding: "embeddings"
 };
 

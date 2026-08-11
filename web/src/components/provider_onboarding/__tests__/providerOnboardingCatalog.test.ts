@@ -28,6 +28,13 @@ describe("providerOnboardingCatalog", () => {
     }
   });
 
+  it("lists Meshy for text-to-3D and FAL for music", () => {
+    const threeD = providersForCapability("text_to_3d");
+    expect(threeD.some((p) => p.id === "meshy")).toBe(true);
+    const music = providersForCapability("text_to_music");
+    expect(music.some((p) => p.id === "fal")).toBe(true);
+  });
+
   it("filters providers to a requested capability", () => {
     const tts = providersForCapability("text_to_speech");
     expect(tts.length).toBeGreaterThan(0);

@@ -13,6 +13,7 @@ export type OnboardingCapability =
   | "automatic_speech_recognition"
   | "text_to_music"
   | "text_to_video"
+  | "text_to_3d"
   | "generate_embedding";
 
 interface OpenOptions {

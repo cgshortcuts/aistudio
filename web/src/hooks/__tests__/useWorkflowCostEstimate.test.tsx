@@ -59,6 +59,15 @@ const mockMetadata: Record<string, unknown> = {
   },
   "nodetool.text.Concat": {
     properties: [{ name: "a", type: { type: "str" } }]
+  },
+  "atlascloud.video.Seedance2TextToVideo": {
+    atlascloud_unit_pricing: {
+      model_id: "bytedance/seedance-2.0/text-to-video",
+      unit_price: 0.09,
+      billing_unit: "seconds",
+      currency: "USD",
+      source: "bundle"
+    }
   }
 };
 
@@ -147,5 +156,23 @@ describe("useWorkflowCostEstimate", () => {
     expect(item?.quantity).toBe(3);
     expect(item?.estimated_cost).toBeCloseTo(0.15, 5);
     expect(result.current!.total).toBeCloseTo(0.15, 5);
+  });
+
+  it("multiplies an AtlasCloud video node's cost by duration seconds", () => {
+    mockNodes = [
+      {
+        id: "a1",
+        type: "atlascloud.video.Seedance2TextToVideo",
+        data: { duration: 5 }
+      }
+    ];
+
+    const { result } = renderHook(() => useWorkflowCostEstimate("wf1"));
+
+    const item = result.current!.items.find((i) => i.node_id === "a1");
+    expect(item?.provider).toBe("atlascloud");
+    expect(item?.quantity).toBe(5);
+    expect(item?.estimated_cost).toBeCloseTo(0.45, 5);
+    expect(result.current!.total).toBeCloseTo(0.45, 5);
   });
 });

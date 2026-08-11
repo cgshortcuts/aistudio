@@ -34,6 +34,9 @@ import {
   SUBGRAPH_NODE_TYPE
 } from "../../constants/nodeTypes";
 import { shallow } from "zustand/shallow";
+// === CUSTOM FORK START: delete-workflow ===
+import { PaneDeleteWorkflowItem } from "../../custom/delete-workflow";
+// === CUSTOM FORK END ===
 
 const PaneContextMenu: React.FC = () => {
   const { handlePaste } = useCopyPaste();
@@ -415,6 +418,9 @@ const PaneContextMenu: React.FC = () => {
           label="Add Subgraph"
           tooltip={"Add an inline subgraph node"}
         />
+        {/* === CUSTOM FORK START: delete-workflow === */}
+        <PaneDeleteWorkflowItem onClose={closeAllMenus} />
+        {/* === CUSTOM FORK END === */}
       </ContextMenu>
       <ContextMenu
         className="context-menu pane-submenu"

@@ -74,6 +74,7 @@ import { requestRemoteJobCancel } from "./job-control.js";
 import { estimateWorkflowCost } from "@nodetool-ai/node-sdk/cost-estimate";
 import { WORKFLOW_DOCUMENT_TOOL_NAMES } from "@nodetool-ai/node-sdk";
 import { getModelUnitPrice } from "@nodetool-ai/model-pricing";
+import { persistAtlasCloudMediaCost } from "./atlascloud-media-cost.js";
 import type {
   ProviderTool,
   Message as ProviderMessage,
@@ -84,11 +85,15 @@ import type {
   ToolCall as ProviderToolCall,
   ImageModel as ProviderImageModel,
   VideoModel as ProviderVideoModel,
+  MusicModel as ProviderMusicModel,
+  Model3D as ProviderModel3D,
   TextToImageParams,
   TextToVideoParams,
   ImageToImageParams,
   InpaintingParams,
-  ImageToVideoParams
+  ImageToVideoParams,
+  TextToMusicParams,
+  TextTo3DParams
 } from "@nodetool-ai/runtime";
 import {
   ProcessingContext as RuntimeProcessingContext,
@@ -6512,6 +6517,13 @@ export class UnifiedWebSocketRunner {
         if (requestSeq !== undefined && requestSeq !== this.chatRequestSeq)
           return;
         const imageBytesList = await provider.textToImages(params, variations);
+        await persistAtlasCloudMediaCost({
+          userId,
+          providerId,
+          modelId,
+          workflowId,
+          args: { variations }
+        });
         if (cancelled()) return;
         const imageContents: Array<Record<string, unknown>> = [];
         for (const bytes of imageBytesList) {
@@ -6608,6 +6620,13 @@ export class UnifiedWebSocketRunner {
           };
           bytes = await provider.textToVideo(params);
         }
+        await persistAtlasCloudMediaCost({
+          userId,
+          providerId,
+          modelId,
+          workflowId,
+          args: { duration: duration ?? undefined }
+        });
         if (cancelled()) return;
         const assetId = await storeMediaAsset(bytes, "video/mp4", "mp4");
 
@@ -6837,6 +6856,158 @@ export class UnifiedWebSocketRunner {
         return;
       }
 
+      if (mode === "music" || mode === "sound") {
+        const duration =
+          typeof mediaGeneration.duration === "number"
+            ? (mediaGeneration.duration as number)
+            : null;
+        const requestedFormatRaw =
+          typeof mediaGeneration.audio_format === "string"
+            ? (mediaGeneration.audio_format as string).toLowerCase()
+            : null;
+        const musicModel: ProviderMusicModel = {
+          id: modelId,
+          name: modelId,
+          provider: providerId
+        };
+        const params: TextToMusicParams = {
+          prompt,
+          model: musicModel,
+          durationSeconds: duration,
+          audioFormat: requestedFormatRaw
+        };
+
+        await this.sendMessage({
+          type: "chunk",
+          thread_id: threadId,
+          content: "",
+          content_type: "text",
+          content_metadata: { media_generation: mediaGeneration },
+          done: false
+        });
+
+        const encoded = await provider.textToMusic(params);
+        if (cancelled()) return;
+        const mimeToExt: Record<string, string> = {
+          "audio/mpeg": "mp3",
+          "audio/wav": "wav",
+          "audio/ogg": "ogg",
+          "audio/flac": "flac",
+          "audio/aac": "aac"
+        };
+        const ext = mimeToExt[encoded.mimeType] ?? "mp3";
+        const assetId = await storeMediaAsset(
+          encoded.data,
+          encoded.mimeType,
+          ext
+        );
+
+        await this.sendMessage({
+          type: "chunk",
+          thread_id: threadId,
+          content: "",
+          done: true
+        });
+
+        const assistantMsgData: Record<string, unknown> = {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "audio",
+              audio: {
+                type: "audio",
+                asset_id: assetId,
+                mimeType: encoded.mimeType
+              }
+            }
+          ],
+          thread_id: threadId,
+          workflow_id: workflowId,
+          provider: providerId,
+          model: modelId,
+          media_generation: mediaGeneration
+        };
+        if (cancelled()) return;
+        await this.saveMessageToDb(assistantMsgData);
+        await this.sendMessage(assistantMsgData);
+        return;
+      }
+
+      if (mode === "model3d") {
+        const outputFormat =
+          typeof mediaGeneration.output_format === "string"
+            ? (mediaGeneration.output_format as string).toLowerCase()
+            : "glb";
+        const enableTextures = mediaGeneration.enable_textures === true;
+        const model3d: ProviderModel3D = {
+          id: modelId,
+          name: modelId,
+          provider: providerId
+        };
+        const params: TextTo3DParams = {
+          model: model3d,
+          prompt,
+          outputFormat,
+          enableTextures
+        };
+
+        await this.sendMessage({
+          type: "chunk",
+          thread_id: threadId,
+          content: "",
+          content_type: "text",
+          content_metadata: { media_generation: mediaGeneration },
+          done: false
+        });
+
+        const bytes = await provider.textTo3D(params);
+        if (cancelled()) return;
+        const contentType =
+          outputFormat === "obj"
+            ? "model/obj"
+            : outputFormat === "fbx"
+              ? "application/octet-stream"
+              : "model/gltf-binary";
+        const ext =
+          outputFormat === "obj"
+            ? "obj"
+            : outputFormat === "fbx"
+              ? "fbx"
+              : "glb";
+        const assetId = await storeMediaAsset(bytes, contentType, ext);
+
+        await this.sendMessage({
+          type: "chunk",
+          thread_id: threadId,
+          content: "",
+          done: true
+        });
+
+        const assistantMsgData: Record<string, unknown> = {
+          type: "message",
+          role: "assistant",
+          content: [
+            {
+              type: "model_3d",
+              model_3d: {
+                type: "model_3d",
+                asset_id: assetId
+              }
+            }
+          ],
+          thread_id: threadId,
+          workflow_id: workflowId,
+          provider: providerId,
+          model: modelId,
+          media_generation: mediaGeneration
+        };
+        if (cancelled()) return;
+        await this.saveMessageToDb(assistantMsgData);
+        await this.sendMessage(assistantMsgData);
+        return;
+      }
+
       if (mode === "image_edit" || mode === "image_to_video") {
         // Resolve the source image from either the message content (most
         // common path: user dropped an image into the composer) or from the
@@ -6912,6 +7083,13 @@ export class UnifiedWebSocketRunner {
             params,
             variations
           );
+          await persistAtlasCloudMediaCost({
+            userId,
+            providerId,
+            modelId,
+            workflowId,
+            args: { variations }
+          });
           if (cancelled()) return;
           const imageContents: Array<Record<string, unknown>> = [];
           for (const bytes of imageBytesList) {
@@ -6982,6 +7160,13 @@ export class UnifiedWebSocketRunner {
           signal
         };
         const bytes = await provider.imageToVideo([sourceBytes], params);
+        await persistAtlasCloudMediaCost({
+          userId,
+          providerId,
+          modelId,
+          workflowId,
+          args: { duration: duration ?? undefined }
+        });
         if (cancelled()) return;
         const assetId = await storeMediaAsset(bytes, "video/mp4", "mp4");
         await this.sendMessage({
@@ -7733,8 +7918,17 @@ export class UnifiedWebSocketRunner {
     const userId = this.userId ?? "1";
     const provider = await this.resolveProvider(req.provider, userId);
     if (req.provider !== "nodetool") {
-      // BYOK: the user's own keys, never metered.
-      return this.runDirectMediaGenerationInner(req, provider);
+      // BYOK: the user's own keys, never metered against the credit balance.
+      // AtlasCloud still records a GenSpend estimate on the Costs ledger.
+      const result = await this.runDirectMediaGenerationInner(req, provider);
+      await persistAtlasCloudMediaCost({
+        userId,
+        providerId: req.provider,
+        modelId: req.model,
+        workflowId: null,
+        args: { variations: req.variations }
+      });
+      return result;
     }
 
     // NodeTool's managed provider: admit against the balance (including

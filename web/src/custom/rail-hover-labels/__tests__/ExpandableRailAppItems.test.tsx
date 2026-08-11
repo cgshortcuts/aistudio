@@ -54,6 +54,9 @@ it("renders logo-menu destinations as rail buttons, not a popover", () => {
     screen.queryByRole("button", { name: /open app menu/i })
   ).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Dashboard" })).toBeInTheDocument();
+  expect(
+    screen.getByRole("button", { name: RAIL_APP_MENU_LABELS.examples })
+  ).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
   expect(
     screen.getByRole("button", { name: RAIL_APP_MENU_LABELS.models })

@@ -8,6 +8,7 @@ import type {
   TTSModel,
   ASRModel,
   MusicModel,
+  Model3DModel,
   VideoModel,
   ProviderInfo,
   UnifiedModel
@@ -18,6 +19,7 @@ import {
   useTTSProviders,
   useASRProviders,
   useMusicProviders,
+  use3DProviders,
   useVideoProviders
 } from "./useProviders";
 import { useWorkers } from "./useWorkers";
@@ -31,6 +33,8 @@ import { useWorkers } from "./useWorkers";
  * - trpc.models.ttsByProvider({ provider })     → TTSModel[]
  * - trpc.models.asrByProvider({ provider })     → ASRModel[]
  * - trpc.models.videoByProvider({ provider })   → VideoModel[]
+ * - trpc.models.musicByProvider({ provider })   → MusicModel[]
+ * - trpc.models.model3dByProvider({ provider }) → Model3DModel[]
  * - trpc.models.huggingfaceByType({ model_type }) → UnifiedModel[] filtered by hf.* type
  *
  * Providers are enumerated via use*Providers hooks and fanned out into parallel
@@ -432,6 +436,54 @@ export const useMusicModelsByProvider = (): ModelsByProviderResult<MusicModel> =
 
   return {
     models: aggregated.models,
+    providers: providerNames,
+    isLoading: providersLoading || aggregated.isLoading,
+    isFetching: aggregated.isFetching,
+    error: aggregated.error,
+    refetch: aggregated.refetch
+  };
+};
+
+/**
+ * Hook to fetch 3D generation models from providers that expose text_to_3d.
+ */
+export const use3DModelsByProvider = (opts?: {
+  task?: "text_to_3d" | "image_to_3d";
+}): ModelsByProviderResult<Model3DModel> => {
+  const { providers, isLoading: providersLoading } = use3DProviders();
+
+  const fetchModels = useCallback(
+    async (provider: string) =>
+      ((await trpc.models.model3dByProvider.query({ provider })) ||
+        []) as Model3DModel[],
+    []
+  );
+
+  const aggregated = useAggregatedProviderModels(
+    providers,
+    providersLoading,
+    "3d-models",
+    fetchModels
+  );
+
+  const task = opts?.task;
+  const allModels = useMemo(
+    () =>
+      task
+        ? aggregated.models.filter((m) =>
+            modelMatchesTask(m.supported_tasks, task)
+          )
+        : aggregated.models,
+    [aggregated.models, task]
+  );
+
+  const providerNames = useMemo(
+    () => providers.map((p) => p.provider),
+    [providers]
+  );
+
+  return {
+    models: allModels,
     providers: providerNames,
     isLoading: providersLoading || aggregated.isLoading,
     isFetching: aggregated.isFetching,

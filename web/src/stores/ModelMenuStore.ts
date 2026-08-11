@@ -7,6 +7,7 @@ import type {
   TTSModel,
   ASRModel,
   MusicModel,
+  Model3DModel,
   VideoModel
 } from "./ApiTypes";
 import useModelPreferencesStore from "./ModelPreferencesStore";
@@ -275,6 +276,7 @@ export const useImageModelMenuStore = createModelMenuStore<ImageModel>();
 export const useTTSModelMenuStore = createModelMenuStore<TTSModel>();
 export const useASRModelMenuStore = createModelMenuStore<ASRModel>();
 export const useMusicModelMenuStore = createModelMenuStore<MusicModel>();
+export const useModel3DModelMenuStore = createModelMenuStore<Model3DModel>();
 export const useVideoModelMenuStore = createModelMenuStore<VideoModel>();
 export const useHuggingFaceImageModelMenuStore = createModelMenuStore<ImageModel>();
 export const useTransformersJsModelMenuStore = createModelMenuStore<ImageModel>();

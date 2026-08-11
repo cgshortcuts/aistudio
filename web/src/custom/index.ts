@@ -13,5 +13,7 @@ export * from "./workspace-tabs";
 export * from "./canvas-pan-select";
 export * from "./product-profile";
 export * from "./recommended-examples";
+export * from "./templates-label";
 export * from "./example-thumbnails";
 export * from "./instant-update";
+export * from "./delete-workflow";

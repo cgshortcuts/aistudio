@@ -10,7 +10,6 @@
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import crypto from "node:crypto";
 import {
@@ -30,6 +29,9 @@ import {
 } from "./node-registry-setup.js";
 import { corsOriginDelegate } from "./cors.js";
 import { zipExtensionDist } from "./lib/extension-dist.js";
+// === CUSTOM FORK START: Desktop Startup ===
+import { detectPipMetadataRoots } from "./lib/pip-metadata-roots.js";
+// === CUSTOM FORK END ===
 import {
   isPublicAuthExemptRoute
 } from "./lib/public-routes.js";
@@ -305,71 +307,9 @@ try {
 // Python pip metadata root detection
 // ---------------------------------------------------------------------------
 
-function detectPipMetadataRoots(): string[] {
-  const script = `
-import json, pathlib, subprocess, sys
-roots = set()
-try:
-    # Discover all nodetool-* packages
-    list_proc = subprocess.run(
-        [sys.executable, "-m", "pip", "list", "--format=json"],
-        capture_output=True, text=True, check=False,
-    )
-    pkg_names = [
-        p["name"] for p in json.loads(list_proc.stdout or "[]")
-        if p["name"].startswith("nodetool-")
-    ] or ["nodetool-core", "nodetool-base"]
-    proc = subprocess.run(
-        [sys.executable, "-m", "pip", "show", "-f"] + pkg_names,
-        capture_output=True, text=True, check=False,
-    )
-    output = proc.stdout or ""
-except Exception:
-    output = ""
-location = None
-in_files = False
-for raw in output.splitlines():
-    line = raw.rstrip("\\n")
-    if line.startswith("Name: "):
-        location = None; in_files = False; continue
-    if line.startswith("Location: "):
-        location = line.split(":", 1)[1].strip(); continue
-    if line.startswith("Editable project location: "):
-        editable = line.split(":", 1)[1].strip()
-        if editable: roots.add(editable)
-        continue
-    if line.startswith("Files:"): in_files = True; continue
-    if line.startswith("---"):
-        location = None; in_files = False; continue
-    if not in_files or not location or not line.startswith("  "): continue
-    rel = line.strip().replace("\\\\", "/")
-    if "package_metadata" not in rel: continue
-    abs_path = (pathlib.Path(location) / rel).resolve()
-    metadata_dir = abs_path if abs_path.is_dir() else abs_path.parent
-    roots.add(str(metadata_dir))
-print(json.dumps(sorted(roots)))
-`;
-  for (const python of ["python3", "python"]) {
-    const proc = spawnSync(python, ["-c", script], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"]
-    });
-    if (proc.status !== 0 || !proc.stdout) continue;
-    try {
-      const roots = JSON.parse(proc.stdout.trim()) as string[];
-      if (Array.isArray(roots)) {
-        return roots.filter(
-          (p) => typeof p === "string" && p.length > 0 && existsSync(p)
-        );
-      }
-    } catch {
-      // try next python executable
-    }
-  }
-  return [];
-}
-
+// === CUSTOM FORK START: Desktop Startup ===
 const metadataRoots = detectPipMetadataRoots();
+// === CUSTOM FORK END ===
 
 // Also scan local TS node packages that have nodetool/package_metadata
 const localPackagesDir = resolve(

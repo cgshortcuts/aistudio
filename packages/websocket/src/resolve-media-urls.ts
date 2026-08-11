@@ -34,7 +34,10 @@ const MIME_TO_EXT: Record<string, string> = {
   "audio/ogg": "ogg",
   "video/mp4": "mp4",
   "video/webm": "webm",
-  "application/pdf": "pdf"
+  "application/pdf": "pdf",
+  "model/gltf-binary": "glb",
+  "model/gltf+json": "gltf",
+  "model/obj": "obj"
 };
 
 function extFromMime(mime: string | undefined | null): string {
@@ -163,6 +166,17 @@ export function resolveContentForProvider(
       return { ...b, audio: resolveRefForProvider(b.audio as Record<string, unknown>, "audio/wav", userId) };
     }
 
+    if (b.type === "model_3d" && b.model_3d && typeof b.model_3d === "object") {
+      return {
+        ...b,
+        model_3d: resolveRefForProvider(
+          b.model_3d as Record<string, unknown>,
+          "model/gltf-binary",
+          userId
+        )
+      };
+    }
+
     return block;
   });
 }
@@ -194,6 +208,17 @@ export function resolveContentUrls(
 
     if (b.type === "audio" && b.audio && typeof b.audio === "object") {
       return { ...b, audio: resolveRef(b.audio as Record<string, unknown>, "audio/wav", userId) };
+    }
+
+    if (b.type === "model_3d" && b.model_3d && typeof b.model_3d === "object") {
+      return {
+        ...b,
+        model_3d: resolveRef(
+          b.model_3d as Record<string, unknown>,
+          "model/gltf-binary",
+          userId
+        )
+      };
     }
 
     return block;

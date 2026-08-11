@@ -9,6 +9,9 @@ import MovieIcon from "@mui/icons-material/Movie";
 import MovieFilterIcon from "@mui/icons-material/MovieFilter";
 import GraphicEqIcon from "@mui/icons-material/GraphicEq";
 import RecordVoiceOverIcon from "@mui/icons-material/RecordVoiceOver";
+import MusicNoteIcon from "@mui/icons-material/MusicNote";
+import SurroundSoundIcon from "@mui/icons-material/SurroundSound";
+import ViewInArIcon from "@mui/icons-material/ViewInAr";
 import ReplayIcon from "@mui/icons-material/Replay";
 import TimelineIcon from "@mui/icons-material/Timeline";
 import TuneIcon from "@mui/icons-material/Tune";
@@ -90,6 +93,24 @@ const MODES: ModeItem[] = [
     id: "audio",
     label: "Generate Speech",
     icon: <RecordVoiceOverIcon fontSize="small" />,
+    enabled: true
+  },
+  {
+    id: "music",
+    label: "Generate Music",
+    icon: <MusicNoteIcon fontSize="small" />,
+    enabled: true
+  },
+  {
+    id: "sound",
+    label: "Generate Sounds",
+    icon: <SurroundSoundIcon fontSize="small" />,
+    enabled: true
+  },
+  {
+    id: "model3d",
+    label: "Generate 3D Models",
+    icon: <ViewInArIcon fontSize="small" />,
     enabled: true
   },
   {

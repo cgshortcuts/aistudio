@@ -7,6 +7,7 @@ import {
   NodeRegistry,
   register,
   loadPythonPackageMetadata,
+  lazyReadonlyArray,
   Passthrough,
   Add,
   Multiply,
@@ -35,6 +36,11 @@ describe("@nodetool-ai/node-sdk barrel exports", () => {
   it("exports loadPythonPackageMetadata", () => {
     expect(loadPythonPackageMetadata).toBeDefined();
     expect(typeof loadPythonPackageMetadata).toBe("function");
+  });
+
+  it("exports lazyReadonlyArray", () => {
+    expect(typeof lazyReadonlyArray).toBe("function");
+    expect(lazyReadonlyArray(() => [1]).length).toBe(1);
   });
 
   it("exports all test node classes", () => {

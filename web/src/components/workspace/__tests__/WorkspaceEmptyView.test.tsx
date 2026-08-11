@@ -4,6 +4,7 @@ import { ThemeProvider } from "@mui/material/styles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import WorkspaceEmptyView from "../WorkspaceEmptyView";
+import { PAGE_TAB_TITLES } from "../pageTabs";
 import mockTheme from "../../../__mocks__/themeMock";
 import useOnboardingStore from "../../../stores/OnboardingStore";
 import type { MessageContent } from "../../../stores/ApiTypes";
@@ -185,7 +186,7 @@ describe("WorkspaceEmptyView", () => {
       type: "page",
       ref: "examples",
       mode: "view",
-      title: "Examples"
+      title: PAGE_TAB_TITLES.examples
     });
   });
 

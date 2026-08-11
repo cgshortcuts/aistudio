@@ -2,6 +2,8 @@
  * App-page destinations that used to live only in the logo popover.
  * Desktop renders them as rail rows; mobile still uses the popover.
  */
+import { TEMPLATES_PAGE_TITLE } from "../templates-label";
+
 export const RAIL_APP_MENU_ORDER = [
   "dashboard",
   "tutorials",
@@ -36,7 +38,7 @@ export const RAIL_APP_PAGE_IDS = [
 export const RAIL_APP_MENU_LABELS: Record<RailAppMenuId, string> = {
   dashboard: "Dashboard",
   tutorials: "Tutorials",
-  examples: "Examples",
+  examples: TEMPLATES_PAGE_TITLE,
   costs: "Costs",
   models: "Model Manager",
   packages: "Package Manager",

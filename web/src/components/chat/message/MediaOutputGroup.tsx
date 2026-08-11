@@ -13,6 +13,7 @@ import SpeedIcon from "@mui/icons-material/Speed";
 import TuneIcon from "@mui/icons-material/Tune";
 import LayersIcon from "@mui/icons-material/Layers";
 import AddToCanvasIcon from "@mui/icons-material/AddPhotoAlternate";
+import ViewInArIcon from "@mui/icons-material/ViewInAr";
 import {
   BORDER_RADIUS,
   FlexColumn,
@@ -35,8 +36,10 @@ import type { MediaGenerationRequest } from "../../../stores/MediaGenerationStor
 import {
   isAudioContent,
   isImageContent,
+  isModel3DContent,
   isVideoContent
 } from "./MediaOutputGroup.helpers";
+import OpenModel3DButton from "./OpenModel3DButton";
 import {
   useAddMediaToCanvas,
   type MediaContentBlock
@@ -76,11 +79,11 @@ function cssAspectRatio(aspectRatio: string | null | undefined): string | undefi
 
 /** How many shimmering placeholder tiles to show, and their shape, for a
  * pending `media_generation` request — mirrors what the finished grid will
- * actually contain (one tile per variation for images, one for video/audio). */
+ * actually contain (one tile per variation for images, one for video/audio/3D). */
 function pendingTiles(gen: MediaGenerationRequest | null): {
   count: number;
   aspectRatio: string | undefined;
-  kind: "image" | "video" | "audio";
+  kind: "image" | "video" | "audio" | "model3d";
 } {
   if (gen?.mode === "image" || gen?.mode === "image_edit") {
     return {
@@ -91,6 +94,9 @@ function pendingTiles(gen: MediaGenerationRequest | null): {
   }
   if (gen?.mode === "video" || gen?.mode === "image_to_video") {
     return { count: 1, aspectRatio: cssAspectRatio(gen.aspect_ratio), kind: "video" };
+  }
+  if (gen?.mode === "model3d") {
+    return { count: 1, aspectRatio: undefined, kind: "model3d" };
   }
   return { count: 1, aspectRatio: undefined, kind: "audio" };
 }
@@ -162,6 +168,13 @@ const styles = (theme: Theme) =>
       gridColumn: "1 / -1",
       width: "100%",
       height: "auto"
+    },
+
+    ".media-grid > .model3d-tile": {
+      gridColumn: "1 / -1",
+      width: "100%",
+      height: "auto",
+      cursor: "default"
     },
 
     ".media-grid img, .media-grid video": {
@@ -237,7 +250,7 @@ function titleFromPrompt(prompt: string | null | undefined): string {
 /**
  * Renders the grouped output of a media-generation turn: a header with model
  * name, variation count, and resolution/aspect metadata plus a responsive
- * grid of the generated image / video blocks.
+ * grid of the generated image / video / audio / 3D blocks.
  */
 const MediaOutputGroup: React.FC<MediaOutputGroupProps> = ({
   message,
@@ -360,6 +373,19 @@ const MediaOutputGroup: React.FC<MediaOutputGroupProps> = ({
               {gen.speed}x
             </span>
           )}
+          {(gen?.mode === "music" || gen?.mode === "sound") &&
+            typeof gen.duration === "number" && (
+              <span className="media-meta-chip">
+                <AccessTimeIcon fontSize="small" />
+                {gen.duration}s
+              </span>
+            )}
+          {gen?.mode === "model3d" && gen.output_format && (
+            <span className="media-meta-chip">
+              <ViewInArIcon fontSize="small" />
+              {gen.output_format.toUpperCase()}
+            </span>
+          )}
           {!isPending && isCanvasAvailable && mediaContents.length > 1 && (
             <ToolbarIconButton
               className="add-all-button"
@@ -379,10 +405,14 @@ const MediaOutputGroup: React.FC<MediaOutputGroupProps> = ({
               <div
                 key={`pending-${i}`}
                 className={`media-tile-shimmer${
-                  pending.kind === "audio" ? " audio-shimmer audio-tile" : ""
+                  pending.kind === "audio" || pending.kind === "model3d"
+                    ? " audio-shimmer audio-tile"
+                    : ""
                 }`}
                 style={
-                  pending.kind !== "audio" && pending.aspectRatio
+                  pending.kind !== "audio" &&
+                  pending.kind !== "model3d" &&
+                  pending.aspectRatio
                     ? { aspectRatio: pending.aspectRatio }
                     : undefined
                 }
@@ -442,6 +472,21 @@ const MediaOutputGroup: React.FC<MediaOutputGroupProps> = ({
                   >
                     <AddToCanvasIcon />
                   </ToolbarIconButton>
+                )}
+              </div>
+            );
+          }
+          if (isModel3DContent(c)) {
+            const assetId = c.model_3d?.asset_id || "";
+            const key = assetId || c.model_3d?.uri || `media-${i}`;
+            return (
+              <div key={key} className="model3d-tile">
+                {assetId ? (
+                  <OpenModel3DButton assetId={assetId} />
+                ) : (
+                  <Text size="small" sx={{ p: getSpacingPx(SPACING.lg) }}>
+                    3D model
+                  </Text>
                 )}
               </div>
             );

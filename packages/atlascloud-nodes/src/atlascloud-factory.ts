@@ -33,6 +33,7 @@ import {
   pickOutputUrl,
   type AtlasModality
 } from "./atlascloud-base.js";
+import { reportAtlasCloudCost } from "./atlascloud-cost.js";
 
 export type AtlasFieldType =
   | "str"
@@ -636,6 +637,7 @@ export function createAtlasNodeClass(spec: AtlasManifestEntry): NodeClass {
         maxAttempts: specRef.maxAttempts ?? 600
       });
       const url = pickOutputUrl(result);
+      reportAtlasCloudCost(context, specRef.modelId, input, predictionId);
 
       // Retries 429/5xx — the job is already generated and billed by now, so a
       // transient CDN blip must not throw the paid-for result away.

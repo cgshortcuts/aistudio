@@ -29,6 +29,9 @@ import {
   visibleTemplateCategories
 } from "../../custom/product-profile";
 // === CUSTOM FORK END ===
+// === CUSTOM FORK START: templates-label ===
+import { templatesCountLabel } from "../../custom/templates-label";
+// === CUSTOM FORK END ===
 import {
   EmptyState,
   LoadingSpinner,
@@ -211,7 +214,7 @@ const DashboardTemplates: React.FC<DashboardTemplatesProps> = ({
 
   const visible = fullPage ? filtered : filtered.slice(0, MAX_VISIBLE);
   const countLabel = fullPage
-    ? `${filtered.length} example${filtered.length === 1 ? "" : "s"}`
+    ? templatesCountLabel(filtered.length)
     : query.trim() || category !== "all"
       ? `${filtered.length} match${filtered.length === 1 ? "" : "es"}`
       : `hand-picked · ${Math.min(filtered.length, MAX_VISIBLE)}`;

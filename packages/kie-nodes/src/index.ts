@@ -1,4 +1,4 @@
-import type { NodeClass } from "@nodetool-ai/node-sdk";
+import { lazyReadonlyArray, type NodeClass } from "@nodetool-ai/node-sdk";
 import { loadPackageAssetJson } from "@nodetool-ai/config";
 import { loadKieNodesFromManifest } from "./kie-factory.js";
 import type { KieManifestEntry } from "./kie-factory.js";
@@ -34,14 +34,17 @@ function loadManifest(): KieManifestEntry[] {
   );
 }
 
-export const KIE_NODES: readonly NodeClass[] = loadKieNodesFromManifest(
-  loadManifest()
-);
+let kieNodeClasses: readonly NodeClass[] | undefined;
+function loadKieNodeClasses(): readonly NodeClass[] {
+  return (kieNodeClasses ??= loadKieNodesFromManifest(loadManifest()));
+}
+
+export const KIE_NODES: readonly NodeClass[] = lazyReadonlyArray(loadKieNodeClasses);
 
 export function registerKieNodes(registry: {
   register: (nodeClass: NodeClass) => void;
 }): void {
-  for (const nodeClass of KIE_NODES) {
+  for (const nodeClass of loadKieNodeClasses()) {
     registry.register(nodeClass);
   }
 }

@@ -21,6 +21,9 @@ import { TUTORIALS, getTutorial } from "./tutorialsData";
 // === CUSTOM FORK START: AiStudio Branding ===
 import { APP_DISPLAY_NAME } from "../../custom/branding";
 // === CUSTOM FORK END ===
+// === CUSTOM FORK START: templates-label ===
+import { BROWSE_TEMPLATES_LABEL } from "../../custom/templates-label";
+// === CUSTOM FORK END ===
 // === CUSTOM FORK START: Product Profile ===
 import { visibleTutorials } from "../../custom/product-profile";
 // === CUSTOM FORK END ===
@@ -316,7 +319,9 @@ const TutorialsPage: React.FC = () => {
                 Start building
               </EditorButton>
               <EditorButton variant="outlined" onClick={() => navigate("/examples")}>
-                Browse examples
+                {/* === CUSTOM FORK START: templates-label === */}
+                {BROWSE_TEMPLATES_LABEL}
+                {/* === CUSTOM FORK END === */}
               </EditorButton>
             </div>
           </div>

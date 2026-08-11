@@ -8,6 +8,7 @@ import {
 const FAL_TYPE = "fal.image.FluxSchnell";
 const FAL_VAGUE_TYPE = "fal.text_to_image.GptImage2";
 const KIE_TYPE = "kie.video.Veo";
+const ATLAS_TYPE = "atlascloud.video.Seedance2TextToVideo";
 const LLM_TYPE = "nodetool.agents.Agent";
 const GENERIC_TYPE = "nodetool.image.TextToImage";
 
@@ -38,6 +39,15 @@ const metadataByType: Record<string, NodeMetadataLike> = {
       currency: "credits",
       usd_price: 2.5,
       source: "live"
+    }
+  },
+  [ATLAS_TYPE]: {
+    atlascloud_unit_pricing: {
+      model_id: "bytedance/seedance-2.0/text-to-video",
+      unit_price: 0.09,
+      billing_unit: "seconds",
+      currency: "USD",
+      source: "bundle"
     }
   },
   // A generic node has no fixed node-type price — it exposes a provider-model
@@ -84,6 +94,23 @@ describe("estimateWorkflowCost", () => {
     expect(estimate.total).toBeCloseTo(0.06, 10);
   });
 
+  it("prices an AtlasCloud node from GenSpend unit pricing", () => {
+    const estimate = estimateWorkflowCost({
+      nodes: [{ id: "a1", type: ATLAS_TYPE }],
+      getMetadata
+    });
+
+    const item = estimate.items[0];
+    expect(item.provider).toBe("atlascloud");
+    expect(item.model).toBe("bytedance/seedance-2.0/text-to-video");
+    expect(item.unit_price).toBe(0.09);
+    expect(item.quantity).toBe(1);
+    expect(item.confidence).toBe("estimate");
+    expect(item.estimated_cost).toBeCloseTo(0.09, 10);
+    expect(estimate.total).toBeCloseTo(0.09, 10);
+    expect(estimate.unknown_count).toBe(0);
+  });
+
   it("prices a kie node from usd_price and marks live prices exact", () => {
     const estimate = estimateWorkflowCost({
       nodes: [{ id: "k1", type: KIE_TYPE }],
@@ -98,6 +125,28 @@ describe("estimateWorkflowCost", () => {
     expect(item.confidence).toBe("exact");
     expect(item.estimated_cost).toBeCloseTo(2.5, 10);
     expect(estimate.total).toBeCloseTo(2.5, 10);
+  });
+
+  it("treats AtlasCloud nodes with vague billing as unknown", () => {
+    const estimate = estimateWorkflowCost({
+      nodes: [{ id: "a2", type: "atlascloud.image.Vague" }],
+      getMetadata: (type) =>
+        type === "atlascloud.image.Vague"
+          ? {
+              atlascloud_unit_pricing: {
+                model_id: "x",
+                unit_price: 1,
+                billing_unit: "units",
+                currency: "USD",
+                source: "bundle"
+              }
+            }
+          : undefined
+    });
+
+    expect(estimate.unknown_count).toBe(1);
+    expect(estimate.total).toBe(0);
+    expect(estimate.items[0].confidence).toBe("unknown");
   });
 
   it("treats fal nodes with vague billing (units/credits) as unknown", () => {

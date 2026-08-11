@@ -95,6 +95,7 @@ function makeProvider(
     getAvailableEmbeddingModels: vi.fn().mockResolvedValue([]),
     getAvailableMusicModels: vi.fn().mockResolvedValue([]),
     getAvailableVideoModels: vi.fn().mockResolvedValue([]),
+    getAvailable3DModels: vi.fn().mockResolvedValue([]),
     hasToolSupport: vi.fn().mockResolvedValue(true),
     getCapabilities: vi.fn(() => ["generate_message"]),
     ...overrides
@@ -414,6 +415,20 @@ describe("models router — extra coverage", () => {
       expect(result[0].type).toBe("video_model");
     });
 
+    it("model3dByProvider maps 3D models", async () => {
+      isConfigured.mockResolvedValue(true);
+      getProv.mockResolvedValue(
+        makeProvider({
+          getAvailable3DModels: vi
+            .fn()
+            .mockResolvedValue([{ id: "d1", name: "D", provider: "x" }])
+        })
+      );
+      const caller = createCaller(makeCtx());
+      const result = await caller.models.model3dByProvider({ provider: "x" });
+      expect(result[0].type).toBe("model_3d_model");
+    });
+
     it("embeddingByProvider maps embedding models", async () => {
       isConfigured.mockResolvedValue(true);
       getProv.mockResolvedValue(
@@ -491,12 +506,28 @@ describe("models router — extra coverage", () => {
       expect(result[0].type).toBe("video_model");
     });
 
+    it("model3d aggregates across providers", async () => {
+      listIds.mockReturnValue(["a"]);
+      isConfigured.mockResolvedValue(true);
+      getProv.mockResolvedValue(
+        makeProvider({
+          getAvailable3DModels: vi
+            .fn()
+            .mockResolvedValue([{ id: "d", name: "D", provider: "a" }])
+        })
+      );
+      const caller = createCaller(makeCtx());
+      const result = await caller.models.model3d();
+      expect(result[0].type).toBe("model_3d_model");
+    });
+
     it("aggregate returns empty when no providers configured", async () => {
       listIds.mockReturnValue([]);
       const caller = createCaller(makeCtx());
       expect(await caller.models.music()).toEqual([]);
       expect(await caller.models.asr()).toEqual([]);
       expect(await caller.models.video()).toEqual([]);
+      expect(await caller.models.model3d()).toEqual([]);
     });
   });
 

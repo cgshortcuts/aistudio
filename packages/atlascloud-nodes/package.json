@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@nodetool-ai/config": "*",
+    "@nodetool-ai/model-pricing": "*",
     "@nodetool-ai/node-sdk": "*",
     "@nodetool-ai/runtime": "*"
   },
@@ -28,6 +29,12 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./cost": {
+      "nodetool-dev": "./src/atlascloud-cost.ts",
+      "types": "./dist/atlascloud-cost.d.ts",
+      "import": "./dist/atlascloud-cost.js",
+      "default": "./dist/atlascloud-cost.js"
     },
     "./atlascloud-manifest.json": "./dist/atlascloud-manifest.json"
   },

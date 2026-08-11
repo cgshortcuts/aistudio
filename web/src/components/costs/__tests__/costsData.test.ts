@@ -35,6 +35,8 @@ describe("provider presentation", () => {
     expect(providerLabel("openai")).toBe("OpenAI");
     expect(providerColor("openai")).toBe("#4FD18B");
     expect(providerLabel("fal")).toBe("fal.ai");
+    expect(providerLabel("atlascloud")).toBe("AtlasCloud");
+    expect(providerColor("atlascloud")).toBe("#6C8CFF");
   });
 
   it("falls back deterministically for unknown providers", () => {

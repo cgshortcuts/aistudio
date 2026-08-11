@@ -1,4 +1,8 @@
-import type { NodeClass, NodeRegistry } from "@nodetool-ai/node-sdk";
+import {
+  lazyReadonlyArray,
+  type NodeClass,
+  type NodeRegistry
+} from "@nodetool-ai/node-sdk";
 import { loadPackageAssetJson } from "@nodetool-ai/config";
 import { loadReplicateNodesFromManifest } from "./replicate-factory.js";
 import type { ReplicateManifestEntry } from "./replicate-factory.js";
@@ -14,12 +18,17 @@ function loadManifest(): ReplicateManifestEntry[] {
   );
 }
 
-export const REPLICATE_NODES: readonly NodeClass[] = loadReplicateNodesFromManifest(
-  loadManifest()
+let replicateNodeClasses: readonly NodeClass[] | undefined;
+function loadReplicateNodeClasses(): readonly NodeClass[] {
+  return (replicateNodeClasses ??= loadReplicateNodesFromManifest(loadManifest()));
+}
+
+export const REPLICATE_NODES: readonly NodeClass[] = lazyReadonlyArray(
+  loadReplicateNodeClasses
 );
 
 export function registerReplicateNodes(registry: NodeRegistry): void {
-  for (const nodeClass of REPLICATE_NODES) {
+  for (const nodeClass of loadReplicateNodeClasses()) {
     registry.register(nodeClass);
   }
 }

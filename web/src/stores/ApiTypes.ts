@@ -43,8 +43,10 @@ import {
   MessageCreateRequest,
   MessageDocumentContent,
   MessageImageContent,
+  MessageModel3DContent,
   MessageTextContent,
   MessageVideoContent,
+  Model3DModel,
   Model3DRef,
   ModelPack,
   MusicModel,
@@ -168,8 +170,10 @@ export type { MessageAudioContent };
 export type { MessageCreateRequest };
 export type { MessageDocumentContent };
 export type { MessageImageContent };
+export type { MessageModel3DContent };
 export type { MessageTextContent };
 export type { MessageVideoContent };
+export type { Model3DModel };
 export type { Model3DRef };
 export type { ModelPack };
 export type { Node };
@@ -296,6 +300,16 @@ export interface KieUnitPricing {
   checked_at?: string | null;
 }
 
+/** AtlasCloud list price from the GenSpend catalog, attached client-side. */
+export interface AtlasCloudUnitPricing {
+  model_id: string;
+  unit_price: number;
+  billing_unit: string;
+  currency: string;
+  source?: "live" | "bundle";
+  checked_at?: string | null;
+}
+
 export interface NodeMetadata extends BaseNodeMetadata {
   searchInfo?: {
     score?: number;
@@ -319,6 +333,8 @@ export interface NodeMetadata extends BaseNodeMetadata {
   fal_unit_pricing?: FalUnitPricing | null;
   /** kie.ai unit pricing from generated KIE nodes / metadata index. */
   kie_unit_pricing?: KieUnitPricing | null;
+  /** AtlasCloud unit pricing from the GenSpend catalog. */
+  atlascloud_unit_pricing?: AtlasCloudUnitPricing | null;
   /**
    * Marks a node as generative — its outputs should be auto-saved as assets
    * by the backend, and the UI uses this flag to auto-show the result preview
@@ -358,6 +374,7 @@ export type MessageContent =
   | MessageImageContent
   | MessageVideoContent
   | MessageAudioContent
+  | MessageModel3DContent
   | MessageDocumentContent;
 
 // ---------------------------------------------------------------------------

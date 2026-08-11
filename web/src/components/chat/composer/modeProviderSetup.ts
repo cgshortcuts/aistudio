@@ -23,6 +23,11 @@ export const capabilityForMode = (
       return "text_to_video";
     case "audio":
       return "text_to_speech";
+    case "music":
+    case "sound":
+      return "text_to_music";
+    case "model3d":
+      return "text_to_3d";
     default:
       return null;
   }
@@ -43,6 +48,12 @@ export const setupReasonForMode = (mode: MediaMode): string | null => {
       return "Animating images needs a video provider. Connect one to continue.";
     case "audio":
       return "Generating speech needs a text-to-speech provider. Connect one to continue.";
+    case "music":
+      return "Generating music needs a music provider. Connect one to continue.";
+    case "sound":
+      return "Generating sounds needs a music or sound provider. Connect one to continue.";
+    case "model3d":
+      return "Generating 3D models needs a 3D provider. Connect one to continue.";
     default:
       return null;
   }

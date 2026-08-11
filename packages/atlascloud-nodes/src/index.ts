@@ -9,6 +9,12 @@ export {
   createAtlasNodeClass,
   resolveAssetForAtlas
 } from "./atlascloud-factory.js";
+export {
+  estimateAtlasCloudCost,
+  inferAtlasCloudQuantity,
+  reportAtlasCloudCost
+} from "./atlascloud-cost.js";
+export type { AtlasCloudCostEstimate } from "./atlascloud-cost.js";
 export type {
   AtlasManifestEntry,
   AtlasFieldDef,

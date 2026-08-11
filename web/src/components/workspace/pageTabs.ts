@@ -1,6 +1,10 @@
 // App "pages" that open as workspace tabs (type: "page") instead of their own
 // route. The title is looked up here so the tab bar and the logo menu stay in
 // sync.
+// === CUSTOM FORK START: templates-label ===
+import { TEMPLATES_PAGE_TITLE } from "../../custom/templates-label";
+// === CUSTOM FORK END ===
+
 export type PageTabKey =
   | "assets"
   | "tutorials"
@@ -16,7 +20,9 @@ export type PageTabKey =
 export const PAGE_TAB_TITLES: Record<PageTabKey, string> = {
   assets: "Assets",
   tutorials: "Tutorials",
-  examples: "Examples",
+  // === CUSTOM FORK START: templates-label ===
+  examples: TEMPLATES_PAGE_TITLE,
+  // === CUSTOM FORK END ===
   costs: "Costs",
   models: "Model Manager",
   packages: "Package Manager",

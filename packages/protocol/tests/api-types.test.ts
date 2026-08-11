@@ -44,6 +44,7 @@ import type {
   MessageImageContent,
   MessageVideoContent,
   MessageAudioContent,
+  MessageModel3DContent,
   MessageDocumentContent,
   MessageThoughtContent,
   MessageContent,
@@ -406,6 +407,15 @@ describe("MessageContent discriminated union", () => {
       audio: { type: "audio", uri: "s3://bucket/audio.mp3" }
     };
     expect(content.type).toBe("audio");
+  });
+
+  it("MessageModel3DContent", () => {
+    const content: MessageModel3DContent = {
+      type: "model_3d",
+      model_3d: { type: "model_3d", asset_id: "mesh-1" }
+    };
+    expect(content.type).toBe("model_3d");
+    expect(content.model_3d.asset_id).toBe("mesh-1");
   });
 
   it("MessageDocumentContent", () => {

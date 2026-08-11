@@ -343,6 +343,10 @@ export default defineConfig(async ({ mode }) => {
           configDir,
           "../packages/kie-nodes/src/generated/kie-unit-pricing.json"
         ),
+        "@nodetool/atlascloud-manifest": resolve(
+          configDir,
+          "../packages/atlascloud-nodes/src/atlascloud-manifest.json"
+        ),
       },
     },
     // The in-browser runner Web Worker (browserRunner.worker.ts) is bundled as
