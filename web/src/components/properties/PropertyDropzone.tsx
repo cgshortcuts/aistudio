@@ -19,6 +19,9 @@ import { useAssetUpload } from "../../serverState/useAssetUpload";
 import { CopyAssetButton } from "../common/CopyAssetButton";
 import { alphaSurfaceBg } from "../../styles/AlphaSurface";
 import { pathToFileUri } from "../../utils/localFile";
+// === CUSTOM FORK START: dropzone-paste ===
+import { useDropzonePasteTarget } from "../../custom/dropzone-paste";
+// === CUSTOM FORK END ===
 
 interface PropertyDropzoneProps {
   asset: Asset | undefined;
@@ -75,6 +78,18 @@ const PropertyDropzone = ({
       : undefined,
     type: mediaType as "image" | "audio" | "video" | "all"
   });
+
+  // === CUSTOM FORK START: dropzone-paste ===
+  const { pasteTargetId } = useDropzonePasteTarget({
+    mediaType,
+    applyAsset: (uploaded) =>
+      onChange({
+        uri: uploaded.get_url || "",
+        type: mediaType,
+        asset_id: uploaded.id
+      })
+  });
+  // === CUSTOM FORK END ===
 
   const [openViewer, setOpenViewer] = useState(false);
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -519,6 +534,9 @@ const PropertyDropzone = ({
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          // === CUSTOM FORK START: dropzone-paste ===
+          data-dropzone-paste-id={pasteTargetId}
+          // === CUSTOM FORK END ===
         >
           {uploading && (
             <Text
@@ -564,7 +582,7 @@ const PropertyDropzone = ({
               )}
             </>
           ) : !uploading ? (
-            <Tooltip title="Click to select a file or drag and drop">
+            <Tooltip title={mediaType === "image" ? "Click, drop, or paste an image" : "Click to select a file or drag and drop"}>
               <p className="prop-drop centered uppercase">Click or drop {contentType}</p>
             </Tooltip>
           ) : null}

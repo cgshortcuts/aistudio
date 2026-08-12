@@ -133,6 +133,16 @@ import featherlessColorIcon from "../../icons/providers/featherless-color.svg";
 import voyageColorIcon from "../../icons/providers/voyage-color.svg";
 import zaiIcon from "../../icons/providers/zai.svg";
 import gmiIcon from "../../icons/gmi.svg";
+import atlascloudIcon from "../../icons/providers/atlascloud.svg";
+import kieIcon from "../../icons/providers/kie.png";
+import akiIcon from "../../icons/providers/aki.svg";
+import reveIcon from "../../icons/providers/reve.svg";
+import rodinIcon from "../../icons/providers/rodin.png";
+import runpodIcon from "../../icons/providers/runpod.png";
+import vastIcon from "../../icons/providers/vast.png";
+import apifyIcon from "../../icons/providers/apify.png";
+import braveIcon from "../../icons/providers/brave.svg";
+import serpapiIcon from "../../icons/providers/serpapi.png";
 
 // Chinese providers
 import alibabacloudColorIcon from "../../icons/providers/alibabacloud-color.svg";
@@ -312,6 +322,20 @@ const providerIconMap: Record<string, string> = {
   vercel: vercelIcon,
   openrouter: openrouterIcon,
   lobehub: lobehubColorIcon,
+  atlascloud: atlascloudIcon,
+  "atlas-cloud": atlascloudIcon,
+  kie: kieIcon,
+  "kie.ai": kieIcon,
+  aki: akiIcon,
+  "aki.io": akiIcon,
+  reve: reveIcon,
+  rodin: rodinIcon,
+  runpod: runpodIcon,
+  vast: vastIcon,
+  "vast.ai": vastIcon,
+  apify: apifyIcon,
+  brave: braveIcon,
+  serpapi: serpapiIcon,
   
   // Workflow / UI
   automatic: automaticColorIcon,

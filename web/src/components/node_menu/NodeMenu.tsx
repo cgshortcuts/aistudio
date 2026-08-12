@@ -28,6 +28,9 @@ import {
   getSpacingPx
 } from "../ui_primitives";
 import { useShallow } from "zustand/react/shallow";
+// === CUSTOM FORK START: tab-node-menu ===
+import { useCloseNodeMenuOnTab } from "../../custom/tab-node-menu";
+// === CUSTOM FORK END ===
 
 const treeStyles = (theme: Theme) =>
   css({
@@ -232,6 +235,9 @@ const NodeMenu = ({ focusSearchInput = false }: NodeMenuProps) => {
   }, [getSelectedNode, handleCreateNode]);
 
   useCombo(["Escape"], closeNodeMenu);
+  // === CUSTOM FORK START: tab-node-menu ===
+  useCloseNodeMenuOnTab(isMenuOpen, closeNodeMenu);
+  // === CUSTOM FORK END ===
 
   // Ensure search is performed after menu opens with a preset term
   useEffect(() => {

@@ -7,10 +7,6 @@ import ExpandableRailAppItems from "../ExpandableRailAppItems";
 import mockTheme from "../../../__mocks__/themeMock";
 import { useWorkspaceTabsStore } from "../../../stores/WorkspaceTabsStore";
 import { tabId } from "../../../stores/WorkspaceTabsStore";
-import {
-  resetAssetSearchAutofocusStore,
-  useAssetSearchAutofocusStore
-} from "../../asset-search-autofocus";
 import { isMac } from "../../../utils/platform";
 import { RAIL_APP_MENU_LABELS } from "../railAppMenuItems";
 import { formatRailShortcut } from "../railMenuShortcuts";
@@ -59,7 +55,6 @@ const renderItems = (expanded = true) =>
 beforeEach(() => {
   mockNavigate.mockClear();
   useWorkspaceTabsStore.setState({ tabs: [], activeTabId: null });
-  resetAssetSearchAutofocusStore();
 });
 
 it("renders logo-menu destinations as rail buttons, not a popover", () => {
@@ -104,17 +99,6 @@ it("opens Settings as a page tab and focuses the workspace", async () => {
   ]);
   expect(activeTabId).toBe(expectedId);
   expect(mockNavigate).toHaveBeenCalledWith("/workspace");
-});
-
-it("requests asset search focus when Assets is opened", async () => {
-  const user = userEvent.setup();
-  renderItems();
-
-  await user.click(screen.getByRole("button", { name: rowName("Assets") }));
-
-  const state = useAssetSearchAutofocusStore.getState();
-  expect(state.surface).toBe("assets-page");
-  expect(state.generation).toBe(1);
 });
 
 it("keeps Dashboard on its route (not a tab)", async () => {

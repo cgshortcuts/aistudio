@@ -1,6 +1,6 @@
 /** @jsxImportSource @emotion/react */
 import { css } from "@emotion/react";
-import React, { memo, useMemo, useCallback } from "react";
+import React, { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import ImageIcon from "@mui/icons-material/Image";
 import VideoFileIcon from "@mui/icons-material/VideoFile";
 import AudioFileIcon from "@mui/icons-material/AudioFile";
@@ -24,7 +24,6 @@ import { useAssetActions } from "./useAssetActions";
 import { useActivateOnKey } from "../../hooks/useActivateOnKey";
 import { useTheme } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
-
 
 const styles = (theme: Theme) =>
   css({
@@ -291,6 +290,11 @@ export type AssetItemProps = {
   draggable?: boolean;
   isParent?: boolean;
   isSelected?: boolean;
+  /**
+   * When true and the asset is audio/video, the tile mounts a real media element
+   * and attempts autoplay. On hover end, playback is paused and reset.
+   */
+  isHoverPreview?: boolean;
   showDeleteButton?: boolean;
   enableContextMenu?: boolean;
   showName?: boolean;
@@ -309,6 +313,11 @@ export type AssetItemProps = {
 
 const AssetItem: React.FC<AssetItemProps> = (props) => {
   const theme = useTheme();
+  const { isHoverPreview = false } = props;
+
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
   const assetStyles = useMemo(
     () => [styles(theme), assetThumbnailActionStyles(theme)],
     [theme]
@@ -399,6 +408,39 @@ const AssetItem: React.FC<AssetItemProps> = (props) => {
     }
   }, [onDoubleClick, asset]);
 
+  // Hover-to-play preview (audio + video tiles).
+  // Capture element refs in the effect closure so cleanup still runs after unmount.
+  useEffect(() => {
+    if (!isHoverPreview) {
+      return;
+    }
+
+    const audio = isAudio ? audioRef.current : null;
+    const video = isVideo ? videoRef.current : null;
+
+    if (audio) {
+      void audio.play().catch(() => {
+        /* Autoplay might be blocked; preview just won't play. */
+      });
+    }
+    if (video) {
+      void video.play().catch(() => {
+        /* Autoplay might be blocked; preview just won't play. */
+      });
+    }
+
+    return () => {
+      if (audio) {
+        audio.pause();
+        audio.currentTime = 0;
+      }
+      if (video) {
+        video.pause();
+        video.currentTime = 0;
+      }
+    };
+  }, [isHoverPreview, isAudio, isVideo]);
+
   const result = (
     <div
       css={assetStyles}
@@ -469,6 +511,16 @@ const AssetItem: React.FC<AssetItemProps> = (props) => {
               className="placeholder"
               titleAccess={asset.content_type || "Audio file"}
             />
+            {isHoverPreview && asset.get_url && (
+              <audio
+                ref={audioRef}
+                data-testid="asset-hover-audio"
+                src={asset.get_url}
+                preload="metadata"
+                controls={false}
+                style={{ position: "absolute", width: 0, height: 0, opacity: 0 }}
+              />
+            )}
             {showDuration && asset.duration && assetItemSize > 1 && (
               <Text className="duration info">
                 {secondsToHMS(asset.duration)}
@@ -478,25 +530,47 @@ const AssetItem: React.FC<AssetItemProps> = (props) => {
         )}
         {isVideo && (
           <>
-            {!asset.thumb_url && !asset.get_url ? (
-              <VideoFileIcon
-                className="placeholder"
-                style={{ color: `var(--c_${assetType})`, zIndex: Z_INDEX.modal }}
-                titleAccess={asset.content_type || "Video file"}
+            {isHoverPreview && asset.get_url ? (
+              <video
+                ref={videoRef}
+                data-testid="asset-hover-video"
+                src={asset.get_url}
+                preload="metadata"
+                playsInline
+                controls={false}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  borderRadius: "inherit",
+                  pointerEvents: "none"
+                }}
               />
             ) : (
-              <div
-                className="image"
-                style={{
-                  backgroundImage: `url(${asset.thumb_url || asset.get_url})`
-                }}
-                aria-label={asset.id}
-              />
-            )}
+              <>
+                {!asset.thumb_url && !asset.get_url ? (
+                  <VideoFileIcon
+                    className="placeholder"
+                    style={{ color: `var(--c_${assetType})`, zIndex: Z_INDEX.modal }}
+                    titleAccess={asset.content_type || "Video file"}
+                  />
+                ) : (
+                  <div
+                    className="image"
+                    style={{
+                      backgroundImage: `url(${asset.thumb_url || asset.get_url})`
+                    }}
+                    aria-label={asset.id}
+                  />
+                )}
 
-            {/* Always show icon overlay for video if we have a thumbnail to indicate it's playble/video */}
-            {(asset.thumb_url || asset.get_url) && (
-              <VideoFileIcon style={videoIconOverlayStyle} />
+                {/* Always show icon overlay for video if we have a thumbnail to indicate it's playable/video */}
+                {(asset.thumb_url || asset.get_url) && (
+                  <VideoFileIcon style={videoIconOverlayStyle} />
+                )}
+              </>
             )}
 
             {showDuration && asset.duration && assetItemSize > 1 && (
@@ -616,8 +690,10 @@ export default memo(AssetItem, (prevProps, nextProps) => {
     prevProps.showHoverActions !== nextProps.showHoverActions ||
     prevProps.showDeleteButton !== nextProps.showDeleteButton;
 
+  const hoverPreviewChanged = prevProps.isHoverPreview !== nextProps.isHoverPreview;
+
   const shouldUpdate =
-    selectionChanged || assetChanged || functionsChanged || hoverActionsChanged;
+    selectionChanged || assetChanged || functionsChanged || hoverActionsChanged || hoverPreviewChanged;
 
   return !shouldUpdate; // memo returns true to skip re-render
 });

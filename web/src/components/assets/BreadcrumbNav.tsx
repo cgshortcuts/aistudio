@@ -107,6 +107,9 @@ function buildBreadcrumbPath(
 const BreadcrumbNav: React.FC = () => {
   const theme = useTheme();
   const currentFolderId = useAssetGridStore((state) => state.currentFolderId);
+  // === CUSTOM FORK START: asset-all-view ===
+  const allAssetsView = useAssetGridStore((state) => state.allAssetsView);
+  // === CUSTOM FORK END ===
   const currentUser = useAuth((state) => state.user);
   const { folderTree, navigateToFolderId } = useAssets();
 
@@ -126,6 +129,23 @@ const BreadcrumbNav: React.FC = () => {
     },
     [currentFolderId, navigateToFolderId]
   );
+
+  // === CUSTOM FORK START: asset-all-view ===
+  if (allAssetsView) {
+    return (
+      <div css={breadcrumbStyles} className="breadcrumb-nav">
+        <Text
+          className="breadcrumb-item current"
+          component="span"
+          aria-current="page"
+          aria-label="All assets"
+        >
+          All
+        </Text>
+      </div>
+    );
+  }
+  // === CUSTOM FORK END ===
 
   if (breadcrumbs.length <= 1) {
     return null;

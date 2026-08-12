@@ -492,7 +492,9 @@ export const NODE_EDITOR_SHORTCUTS: Shortcut[] = [
   {
     title: "Open Node Menu",
     slug: "openNodeMenu",
-    keyCombo: [" "],
+    // === CUSTOM FORK START: tab-node-menu ===
+    keyCombo: ["Tab"],
+    // === CUSTOM FORK END ===
     category: "panel",
     description: "Open Node Menu - also double-click canvas",
     registerCombo: true
@@ -592,25 +594,27 @@ export const NODE_EDITOR_SHORTCUTS: Shortcut[] = [
   {
     title: "Previous Tab",
     slug: "prevTab",
-    keyCombo: ["Control", "PageUp"],
+    keyCombo: ["PageUp"],
     altKeyCombos: [
+      ["Control", "PageUp"],
       ["Control", "Shift", "["],
       ["Control", "Alt", "ArrowLeft"]
     ],
     category: "workflow" as const,
-    description: "Activate previous workflow tab",
+    description: "Activate previous tab",
     registerCombo: true
   },
   {
     title: "Next Tab",
     slug: "nextTab",
-    keyCombo: ["Control", "PageDown"],
+    keyCombo: ["PageDown"],
     altKeyCombos: [
+      ["Control", "PageDown"],
       ["Control", "Shift", "]"],
       ["Control", "Alt", "ArrowRight"]
     ],
     category: "workflow" as const,
-    description: "Activate next workflow tab",
+    description: "Activate next tab",
     registerCombo: true
   },
   // Direct tab switching (Ctrl/Cmd 1-9)
@@ -619,7 +623,7 @@ export const NODE_EDITOR_SHORTCUTS: Shortcut[] = [
     slug: `switchToTab${n}`,
     keyCombo: ["Control", `${n}`],
     category: "workflow" as const,
-    description: `Activate workflow tab ${n}`,
+    description: `Activate tab ${n}`,
     registerCombo: true
   })),
 
@@ -801,7 +805,11 @@ export const NODE_EDITOR_SHORTCUTS: Shortcut[] = [
   {
     title: "Navigate Next Node",
     slug: "navigateNextNode",
-    keyCombo: ["Tab"],
+    // === CUSTOM FORK START: tab-node-menu ===
+    // Keep Control on Mac (keyComboMac) so this does not become Cmd+Tab.
+    keyCombo: ["Control", "Tab"],
+    keyComboMac: ["Control", "Tab"],
+    // === CUSTOM FORK END ===
     category: "editor" as const,
     description: "Navigate focus to next node in the canvas",
     registerCombo: true
@@ -809,7 +817,10 @@ export const NODE_EDITOR_SHORTCUTS: Shortcut[] = [
   {
     title: "Navigate Previous Node",
     slug: "navigatePrevNode",
-    keyCombo: ["Shift", "Tab"],
+    // === CUSTOM FORK START: tab-node-menu ===
+    keyCombo: ["Control", "Shift", "Tab"],
+    keyComboMac: ["Control", "Shift", "Tab"],
+    // === CUSTOM FORK END ===
     category: "editor" as const,
     description: "Navigate focus to previous node in the canvas",
     registerCombo: true

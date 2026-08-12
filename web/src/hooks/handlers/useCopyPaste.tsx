@@ -25,6 +25,7 @@ interface UseCopyPasteResult {
   handleCopy: (nodeId?: string) => Promise<{ nodesToCopy: Node<NodeData>[]; connectedEdges: Edge[] }>;
   handleCut: (nodeId?: string) => Promise<void>;
   handlePaste: () => Promise<void>;
+  handleNativePaste: (event: ClipboardEvent) => void;
 }
 
 export const useCopyPaste = (): UseCopyPasteResult => {
@@ -40,7 +41,7 @@ export const useCopyPaste = (): UseCopyPasteResult => {
     }))
   );
 
-  const { handleContentPaste, readClipboardContent, readClipboardText } =
+  const { handleContentPaste, handleNativePaste, readClipboardContent, readClipboardText } =
     useClipboardContentPaste();
 
   const handleCopy = useCallback(
@@ -326,5 +327,5 @@ export const useCopyPaste = (): UseCopyPasteResult => {
     readClipboardText
   ]);
 
-  return { handleCopy, handleCut, handlePaste };
+  return { handleCopy, handleCut, handlePaste, handleNativePaste };
 };

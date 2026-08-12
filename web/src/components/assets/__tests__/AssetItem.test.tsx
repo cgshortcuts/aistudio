@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ThemeProvider } from "@mui/material/styles";
 import mockTheme from "../../../__mocks__/themeMock";
 import AssetItem from "../AssetItem";
@@ -55,12 +55,46 @@ const baseImageAsset: Asset = {
   metadata: {}
 };
 
+const baseAudioAsset: Asset = {
+  id: "aud1",
+  name: "sound.mp3",
+  content_type: "audio/mpeg",
+  size: 2048,
+  created_at: "2023-01-01T00:00:00Z",
+  parent_id: "",
+  user_id: "u1",
+  get_url: "/audio/aud1.mp3",
+  thumb_url: "/audio/aud1-thumb.jpg",
+  workflow_id: null,
+  metadata: {},
+  duration: 3
+};
+
+const baseVideoAsset: Asset = {
+  id: "vid1",
+  name: "movie.mp4",
+  content_type: "video/mp4",
+  size: 4096,
+  created_at: "2023-01-01T00:00:00Z",
+  parent_id: "",
+  user_id: "u1",
+  get_url: "/video/vid1.mp4",
+  thumb_url: "/video/vid1-thumb.jpg",
+  workflow_id: null,
+  metadata: {},
+  duration: 5
+};
+
 // Mock the settings store to return a larger assetItemSize so the name is rendered
 const mockUseSettingsStore = useSettingsStore as jest.MockedFunction<typeof useSettingsStore>;
 
 describe("AssetItem", () => {
   beforeEach(() => {
     mockUseSettingsStore.mockReturnValue(4);  // Return assetItemSize directly
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
   it("renders name and filetype info", () => {
     renderWithTheme(
@@ -302,4 +336,52 @@ describe("AssetItem", () => {
   });
 
   // Skip delete button rendering due to MUI ButtonGroup theme spacing internals in test env
+
+  it("plays and stops audio preview when hover preview toggles", async () => {
+    const playSpy = jest
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockImplementation(() => Promise.resolve());
+    const pauseSpy = jest
+      .spyOn(HTMLMediaElement.prototype, "pause")
+      .mockImplementation();
+
+    const { rerender } = renderWithTheme(
+      <AssetItem asset={baseAudioAsset} showDeleteButton={false} isHoverPreview />
+    );
+
+    expect(screen.getByTestId("asset-hover-audio")).toBeInTheDocument();
+    await waitFor(() => expect(playSpy).toHaveBeenCalled());
+
+    rerender(
+      <ThemeProvider theme={mockTheme}>
+        <AssetItem asset={baseAudioAsset} showDeleteButton={false} isHoverPreview={false} />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => expect(pauseSpy).toHaveBeenCalled());
+  });
+
+  it("plays and stops video preview when hover preview toggles", async () => {
+    const playSpy = jest
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockImplementation(() => Promise.resolve());
+    const pauseSpy = jest
+      .spyOn(HTMLMediaElement.prototype, "pause")
+      .mockImplementation();
+
+    const { rerender } = renderWithTheme(
+      <AssetItem asset={baseVideoAsset} showDeleteButton={false} isHoverPreview />
+    );
+
+    expect(screen.getByTestId("asset-hover-video")).toBeInTheDocument();
+    await waitFor(() => expect(playSpy).toHaveBeenCalled());
+
+    rerender(
+      <ThemeProvider theme={mockTheme}>
+        <AssetItem asset={baseVideoAsset} showDeleteButton={false} isHoverPreview={false} />
+      </ThemeProvider>
+    );
+
+    await waitFor(() => expect(pauseSpy).toHaveBeenCalled());
+  });
 });

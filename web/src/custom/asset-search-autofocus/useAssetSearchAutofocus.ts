@@ -7,11 +7,8 @@ import {
 } from "react";
 
 import { useAutoFocusEnabled } from "../../hooks/useAutoFocusEnabled";
-import { useWorkspaceTabsStore } from "../../stores/WorkspaceTabsStore";
 import type { AssetSearchFocusSurface } from "./assetSearchAutofocusSurface";
 import { useAssetSearchAutofocusStore } from "./AssetSearchAutofocusStore";
-
-const ASSETS_PAGE_TAB_ID = "page:assets";
 
 export function useAssetSearchAutofocus(
   surface: AssetSearchFocusSurface | undefined
@@ -46,29 +43,6 @@ export function useAssetSearchAutofocus(
       setFocusNonce((nonce) => nonce + 1);
     }
   }, [surface, generation, requestedSurface, autoFocusEnabled]);
-
-  const activeTabId = useWorkspaceTabsStore((state) => state.activeTabId);
-  const isAssetsPageActive =
-    surface === "assets-page" && activeTabId === ASSETS_PAGE_TAB_ID;
-  const skipInitialAssetsActive = useRef(true);
-
-  useEffect(() => {
-    if (surface !== "assets-page") {
-      return;
-    }
-    if (!isAssetsPageActive) {
-      skipInitialAssetsActive.current = false;
-      return;
-    }
-    if (skipInitialAssetsActive.current) {
-      skipInitialAssetsActive.current = false;
-      return;
-    }
-    setExpanded(true);
-    if (autoFocusEnabled) {
-      setFocusNonce((nonce) => nonce + 1);
-    }
-  }, [surface, isAssetsPageActive, autoFocusEnabled]);
 
   return {
     expanded,

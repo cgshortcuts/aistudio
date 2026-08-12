@@ -65,6 +65,7 @@ describe("useCopyPaste handleCut", () => {
     );
     (useClipboardContentPaste as unknown as jest.Mock).mockReturnValue({
       handleContentPaste: jest.fn(),
+      handleNativePaste: jest.fn(),
       readClipboardContent: jest.fn(),
       readClipboardText: jest.fn()
     });

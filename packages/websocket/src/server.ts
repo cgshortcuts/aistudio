@@ -135,6 +135,7 @@ import falPricingEstimateRoute from "./routes/fal-pricing-estimate.js";
 import kieCreditsRoute from "./routes/kie-credits.js";
 import kiePricingRoute from "./routes/kie-pricing.js";
 import kieWebhookRoute from "./routes/kie-webhook.js";
+import atlascloudCreditsRoute from "./routes/atlascloud-credits.js";
 import {
   agentSocketRoute,
   getAgentRuntime,
@@ -1222,6 +1223,7 @@ await app.register(falPricingEstimateRoute);
 await app.register(kieCreditsRoute);
 await app.register(kiePricingRoute);
 await app.register(kieWebhookRoute);
+await app.register(atlascloudCreditsRoute);
 // Trigger webhook ingestion (`POST /api/webhooks/:token`). Registered here
 // because Fastify routes must exist before `app.listen`; the plugin reaches the
 // wakeup service and dispatcher started below through module accessors.

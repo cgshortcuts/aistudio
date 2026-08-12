@@ -2,7 +2,8 @@
  * Hook for handling clipboard content paste operations.
  *
  * This hook interprets clipboard content and creates appropriate nodes:
- * - For images: Uploads as an image asset and creates a constant Image node
+ * - For images: Uploads as an image asset and creates a constant Image node,
+ *   or fills a hovered image dropzone when the pointer is over one
  * - For files: Uploads image files as assets, creates String nodes for other files
  * - For HTML, RTF, and text: Creates a constant String node with the content
  *
@@ -24,6 +25,14 @@ import useMetadataStore from "../../stores/MetadataStore";
 import { Asset } from "../../stores/ApiTypes";
 import { isTextInputActive } from "../../utils/browser";
 import { shallow } from "zustand/shallow";
+// === CUSTOM FORK START: dropzone-paste ===
+import {
+  imageFileFromClipboardEvent,
+  markClipboardImagePasteHandled,
+  resolveClipboardImageHandler,
+  wasClipboardImagePasteJustHandled
+} from "../../custom/dropzone-paste";
+// === CUSTOM FORK END ===
 
 /**
  * Supported image file extensions for clipboard file handling
@@ -381,6 +390,41 @@ export const useClipboardContentPaste = () => {
     [createNode, addNode, getMetadata]
   );
 
+  const deliverClipboardImage = useCallback(
+    (file: File, position: { x: number; y: number }) => {
+      // === CUSTOM FORK START: dropzone-paste ===
+      markClipboardImagePasteHandled();
+      const onCompleted = resolveClipboardImageHandler((uploadedAsset) => {
+        createImageNode(uploadedAsset, position);
+      });
+      // === CUSTOM FORK END ===
+
+      uploadAsset({
+        file,
+        source: "clipboard",
+        workflow_id: workflow.id,
+        parent_id: currentFolderId || user?.id,
+        onCompleted,
+        onFailed: (error: string) => {
+          addNotification({
+            type: "error",
+            alert: true,
+            content: error
+          });
+          console.error("Failed to upload clipboard image:", error);
+        }
+      });
+    },
+    [
+      uploadAsset,
+      workflow.id,
+      currentFolderId,
+      user?.id,
+      addNotification,
+      createImageNode
+    ]
+  );
+
   /**
    * Handles the paste of clipboard content.
    * Returns true if content was handled, false if not (allowing fallback to node paste).
@@ -390,6 +434,12 @@ export const useClipboardContentPaste = () => {
     if (isTextInputActive()) {
       return false;
     }
+
+    // === CUSTOM FORK START: dropzone-paste ===
+    if (wasClipboardImagePasteJustHandled()) {
+      return true;
+    }
+    // === CUSTOM FORK END ===
 
     const mousePosition = getMousePosition();
     if (!mousePosition) {
@@ -431,27 +481,7 @@ export const useClipboardContentPaste = () => {
                       type: result.mimeType
                     });
 
-                    // Upload the image as an asset
-                    uploadAsset({
-                      file,
-                      source: "clipboard",
-                      workflow_id: workflow.id,
-                      parent_id: currentFolderId || user?.id,
-                      onCompleted: (uploadedAsset: Asset) => {
-                        createImageNode(uploadedAsset, position);
-                      },
-                      onFailed: (error: string) => {
-                        addNotification({
-                          type: "error",
-                          alert: true,
-                          content: error
-                        });
-                        console.error(
-                          "Failed to upload file from clipboard:",
-                          error
-                        );
-                      }
-                    });
+                    deliverClipboardImage(file, position);
                     return true;
                   }
                 } catch (error) {
@@ -486,24 +516,7 @@ export const useClipboardContentPaste = () => {
             }
           );
 
-          // Upload the image as an asset
-          uploadAsset({
-            file,
-            source: "clipboard",
-            workflow_id: workflow.id,
-            parent_id: currentFolderId || user?.id,
-            onCompleted: (uploadedAsset: Asset) => {
-              createImageNode(uploadedAsset, position);
-            },
-            onFailed: (error: string) => {
-              addNotification({
-                type: "error",
-                alert: true,
-                content: error
-              });
-              console.error("Failed to upload clipboard image:", error);
-            }
-          });
+          deliverClipboardImage(file, position);
           return true;
         }
         break;
@@ -526,14 +539,38 @@ export const useClipboardContentPaste = () => {
   }, [
     reactFlow,
     readClipboardContent,
-    uploadAsset,
-    addNotification,
-    workflow.id,
-    currentFolderId,
-    user?.id,
-    createImageNode,
+    deliverClipboardImage,
     createStringNode
   ]);
+
+  const handleNativePaste = useCallback(
+    (event: ClipboardEvent) => {
+      if (isTextInputActive()) {
+        return;
+      }
+      // === CUSTOM FORK START: dropzone-paste ===
+      if (wasClipboardImagePasteJustHandled()) {
+        event.preventDefault();
+        return;
+      }
+      const file = imageFileFromClipboardEvent(event);
+      if (!file) {
+        return;
+      }
+      event.preventDefault();
+      const mousePosition = getMousePosition();
+      if (!mousePosition) {
+        return;
+      }
+      const position = reactFlow.screenToFlowPosition({
+        x: mousePosition.x,
+        y: mousePosition.y
+      });
+      deliverClipboardImage(file, position);
+      // === CUSTOM FORK END ===
+    },
+    [reactFlow, deliverClipboardImage]
+  );
 
   /**
    * Checks if there is pasteable content in the clipboard (non-node content)
@@ -545,6 +582,7 @@ export const useClipboardContentPaste = () => {
 
   return {
     handleContentPaste,
+    handleNativePaste,
     hasClipboardContent,
     readClipboardContent,
     readClipboardText

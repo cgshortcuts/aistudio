@@ -43,6 +43,28 @@ describe("NODE_EDITOR_SHORTCUTS", () => {
     });
   });
 
+  describe("tab-node-menu remaps", () => {
+    it("opens the node menu with Tab", () => {
+      const shortcut = NODE_EDITOR_SHORTCUTS.find(
+        (s: Shortcut) => s.slug === "openNodeMenu"
+      );
+      expect(shortcut?.keyCombo).toEqual(["Tab"]);
+    });
+
+    it("moves node focus with Control+Tab, not Cmd+Tab on Mac", () => {
+      const next = NODE_EDITOR_SHORTCUTS.find(
+        (s: Shortcut) => s.slug === "navigateNextNode"
+      );
+      const prev = NODE_EDITOR_SHORTCUTS.find(
+        (s: Shortcut) => s.slug === "navigatePrevNode"
+      );
+      expect(next?.keyCombo).toEqual(["Control", "Tab"]);
+      expect(next?.keyComboMac).toEqual(["Control", "Tab"]);
+      expect(prev?.keyCombo).toEqual(["Control", "Shift", "Tab"]);
+      expect(prev?.keyComboMac).toEqual(["Control", "Shift", "Tab"]);
+    });
+  });
+
   describe("skipInElectron", () => {
     it("clipboard shortcuts (copy, cut, paste) should have skipInElectron set", () => {
       const clipboardSlugs = ["copy", "cut", "paste"];

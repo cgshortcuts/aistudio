@@ -230,6 +230,26 @@ describe("AssetGridStore", () => {
       expect(state.currentFolder).toBeNull();
       expect(state.parentFolder).toBeNull();
     });
+
+    // === CUSTOM FORK START: asset-all-view ===
+    it("clears allAssetsView when navigating to a folder", () => {
+      act(() => {
+        useAssetGridStore.getState().setAllAssetsView(true);
+        useAssetGridStore.getState().setCurrentFolderId("folder1");
+      });
+
+      expect(useAssetGridStore.getState().allAssetsView).toBe(false);
+    });
+
+    it("clears allAssetsView when selecting a workflow filter", () => {
+      act(() => {
+        useAssetGridStore.getState().setAllAssetsView(true);
+        useAssetGridStore.getState().setWorkflowFilter("wf-1");
+      });
+
+      expect(useAssetGridStore.getState().allAssetsView).toBe(false);
+    });
+    // === CUSTOM FORK END ===
   });
 
   describe("search functionality", () => {

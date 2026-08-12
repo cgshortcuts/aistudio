@@ -18,33 +18,10 @@ import {
 import WorkspaceTabBar from "./WorkspaceTabBar";
 import TabContent from "./TabContent";
 import WorkspaceEmptyView from "./WorkspaceEmptyView";
-import { Z_INDEX } from "../ui_primitives";
+import { tabLayerProps } from "./tabLayerStyles";
 // === CUSTOM FORK START: delete-workflow ===
 import { DeleteWorkflowHost } from "../../custom/delete-workflow";
 // === CUSTOM FORK END ===
-
-const ACTIVE_TAB_STYLE: React.CSSProperties = {
-  opacity: 1,
-  pointerEvents: "auto",
-  zIndex: Z_INDEX.raised
-};
-const INACTIVE_TAB_STYLE: React.CSSProperties = {
-  opacity: 0,
-  pointerEvents: "none",
-  zIndex: Z_INDEX.base
-};
-
-/**
- * Inactive tabs stay mounted (viewport / editor state survives switches) but
- * must not keep keyboard focus. `pointer-events: none` alone is not enough —
- * a focused search/composer inside a hidden layer still receives keydown, so
- * typing in Settings/Examples search appears to do nothing. `inert` removes
- * the subtree from focus and input processing.
- */
-const tabLayerProps = (isActive: boolean) =>
-  isActive
-    ? { style: ACTIVE_TAB_STYLE }
-    : { style: INACTIVE_TAB_STYLE, inert: true as const };
 
 const PanelLeft = React.lazy(() => import("../panels/PanelLeft"));
 const PanelRight = React.lazy(() => import("../panels/PanelRight"));

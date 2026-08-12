@@ -33,8 +33,13 @@ jest.mock("../../../stores/ContextMenuStore", () => ({
 }));
 
 jest.mock("../../../stores/AssetGridStore", () => ({
-  useAssetGridStore: (selector: (s: { viewMode: string; workflowFilter: null }) => unknown) =>
-    selector({ viewMode: "grid", workflowFilter: null })
+  useAssetGridStore: (
+    selector: (s: {
+      viewMode: string;
+      workflowFilter: null;
+      allAssetsView: boolean;
+    }) => unknown
+  ) => selector({ viewMode: "grid", workflowFilter: null, allAssetsView: false })
 }));
 
 jest.mock("../AssetGridRow", () => ({

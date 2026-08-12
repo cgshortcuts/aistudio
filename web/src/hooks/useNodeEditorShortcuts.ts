@@ -71,7 +71,6 @@ export const useNodeEditorShortcuts = (
   const saveExample = useWorkflowManager((state) => state.saveExample);
   const removeWorkflow = useWorkflowManager((state) => state.removeWorkflow);
   const getCurrentWorkflow = useWorkflowManager((state) => state.getCurrentWorkflow);
-  const openWorkflows = useWorkflowManager((state) => state.openWorkflows);
   const createNewWorkflow = useWorkflowManager((state) => state.createNew);
   const saveWorkflow = useWorkflowManager((state) => state.saveWorkflow);
   const copyPaste = useCopyPaste();
@@ -122,13 +121,12 @@ export const useNodeEditorShortcuts = (
   }, []);
   const selectedEdgeCount = useNodes(selectedEdgeCountSelector);
 
-  const { handleCopy, handlePaste, handleCut } = copyPaste;
+  const { handleCopy, handlePaste, handleCut, handleNativePaste } = copyPaste;
   const { openNodeMenu, closeNodeMenu, isMenuOpen } = nodeMenuStore;
 
   const handleOpenNodeMenu = useCallback(() => {
-    // Space toggles: close when already open. (When the menu is open its search
-    // input usually has focus, so the close-on-space-in-empty-search path in
-    // SearchInput handles that case; this covers a focused canvas.)
+    // Tab toggles: close when already open. Search focus is handled by
+    // useCloseNodeMenuOnTab; this covers a focused canvas.
     if (isMenuOpen) {
       closeNodeMenu();
       return;
@@ -220,36 +218,6 @@ export const useNodeEditorShortcuts = (
     const newWorkflow = await createNewWorkflow();
     navigate(`/editor/${newWorkflow.id}`);
   }, [createNewWorkflow, navigate]);
-
-  const handleSwitchTab = useCallback(
-    (direction: "prev" | "next") => {
-      const workflow = getCurrentWorkflow();
-      if (workflow) {
-        const currentIndex = openWorkflows.findIndex(
-          (w) => w.id === workflow.id
-        );
-        let newIndex;
-        if (direction === "prev") {
-          newIndex =
-            currentIndex <= 0 ? openWorkflows.length - 1 : currentIndex - 1;
-        } else {
-          newIndex =
-            currentIndex >= openWorkflows.length - 1 ? 0 : currentIndex + 1;
-        }
-        navigate(`/editor/${openWorkflows[newIndex].id}`);
-      }
-    },
-    [getCurrentWorkflow, openWorkflows, navigate]
-  );
-
-  const handleSwitchToTab = useCallback(
-    (index: number) => {
-      if (index < openWorkflows.length) {
-        navigate(`/editor/${openWorkflows[index].id}`);
-      }
-    },
-    [openWorkflows, navigate]
-  );
 
   const handleSave = useCallback(async () => {
     const workflow = getCurrentWorkflow();
@@ -345,9 +313,9 @@ export const useNodeEditorShortcuts = (
         case "redo":
           redoHistory();
           break;
-        // "close" / "closeTab" (Cmd+W) are handled at the workspace level
-        // (useWorkspaceMenuShortcuts) so they close the active tab for every
-        // surface, not just the node editor.
+        // "close" / "closeTab" (Cmd+W) and tab cycling (prev/next / Ctrl+1–9)
+        // are handled at the workspace level (useWorkspaceMenuShortcuts) so
+        // they work for every surface, not just the node editor.
         case "fitView":
           handleFitView({ padding: 0.5 });
           break;
@@ -362,12 +330,6 @@ export const useNodeEditorShortcuts = (
           break;
         case "zoomOut":
           reactFlow.zoomOut();
-          break;
-        case "prevTab":
-          handleSwitchTab("prev");
-          break;
-        case "nextTab":
-          handleSwitchTab("next");
           break;
         case "align":
           alignNodes({ arrangeSpacing: false });
@@ -387,11 +349,6 @@ export const useNodeEditorShortcuts = (
         case "group":
           handleGroup();
           break;
-        case "switchToTab":
-          if (data.index !== undefined) {
-            handleSwitchToTab(data.index);
-          }
-          break;
         default:
           break;
       }
@@ -407,13 +364,11 @@ export const useNodeEditorShortcuts = (
       handleFitView,
       handleNewWorkflow,
       reactFlow,
-      handleSwitchTab,
       alignNodes,
       handleSave,
       duplicateNodes,
       duplicateNodesVertical,
-      handleGroup,
-      handleSwitchToTab
+      handleGroup
     ]
   );
 
@@ -515,8 +470,6 @@ export const useNodeEditorShortcuts = (
       zoom50: { callback: () => handleZoomToPreset(0.5) },
       zoom100: { callback: () => handleZoomToPreset(1) },
       zoom200: { callback: () => handleZoomToPreset(2) },
-      prevTab: { callback: () => handleSwitchTab("prev") },
-      nextTab: { callback: () => handleSwitchTab("next") },
       moveLeft: { callback: () => handleMoveNodes({ x: -10 }) },
       moveRight: { callback: () => handleMoveNodes({ x: 10 }) },
       moveUp: { callback: () => handleMoveNodes({ y: -10 }) },
@@ -598,12 +551,6 @@ export const useNodeEditorShortcuts = (
       }
     };
 
-    // Switch-to-tab (1-9)
-    for (let i = 1; i <= 9; i++) {
-      meta[`switchToTab${i}`] = {
-        callback: () => handleSwitchToTab(i - 1)
-      };
-    }
     return meta;
   }, [
     handleCopy,
@@ -633,9 +580,7 @@ export const useNodeEditorShortcuts = (
     handleBypassSelected,
     handleToggleSelectedNodesCollapsed,
     handleFitView,
-    handleSwitchTab,
     handleMoveNodes,
-    handleSwitchToTab,
     openFind,
     handleSelectConnectedAll,
     handleSelectConnectedInputs,
@@ -668,6 +613,21 @@ export const useNodeEditorShortcuts = (
     if (!active) {
       return;
     }
+    // === CUSTOM FORK START: dropzone-paste ===
+    const onPaste = (event: ClipboardEvent) => {
+      handleNativePaste(event);
+    };
+    document.addEventListener("paste", onPaste);
+    return () => {
+      document.removeEventListener("paste", onPaste);
+    };
+    // === CUSTOM FORK END ===
+  }, [active, handleNativePaste]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
 
     const disposers: Array<() => void> = [];
 
@@ -687,10 +647,16 @@ export const useNodeEditorShortcuts = (
         return;
       }
 
-      const combos = [sc.keyCombo, ...(sc.altKeyCombos ?? [])];
+      // === CUSTOM FORK START: tab-node-menu ===
+      // keyComboMac is already OS-specific; do not remap Control → Meta.
+      const combos = [
+        isMac() && sc.keyComboMac ? sc.keyComboMac : mapComboForOS(sc.keyCombo),
+        ...(sc.altKeyCombos ?? []).map(mapComboForOS)
+      ];
+      // === CUSTOM FORK END ===
 
       combos.forEach((cmb) => {
-        const normalized = mapComboForOS(cmb)
+        const normalized = cmb
           .map((k) => k.toLowerCase())
           .sort()
           .join("+");

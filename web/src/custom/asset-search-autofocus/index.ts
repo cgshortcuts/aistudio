@@ -7,9 +7,6 @@ export {
   resetAssetSearchAutofocusStore,
   useAssetSearchAutofocusStore
 } from "./AssetSearchAutofocusStore";
-export {
-  notifyAssetsPageSearch,
-  notifyLibrarySearchIfOpening
-} from "./notifyAssetSearchFocus";
+export { notifyLibrarySearchIfOpening } from "./notifyAssetSearchFocus";
 export { useAssetSearchAutofocus } from "./useAssetSearchAutofocus";
 export { willOpenLeftPanelView } from "./willOpenLeftPanelView";

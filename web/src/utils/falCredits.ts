@@ -3,6 +3,9 @@ import { BASE_URL } from "../stores/BASE_URL";
 /** fal.ai dashboard to create Admin API keys (billing endpoint requires admin scope). */
 export const FAL_DASHBOARD_KEYS_URL = "https://fal.ai/dashboard/keys";
 
+/** fal.ai billing / credit top-up page. */
+export const FAL_BILLING_URL = "https://fal.ai/dashboard/billing";
+
 /** Whether to show a “manage keys” link for this error (skip for copy that is clearly network-only). */
 export function falCreditsDetailSuggestsKeysLink(detail: string | undefined): boolean {
   if (detail == null || detail.trim() === "") {

@@ -2,6 +2,11 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { ThemeProvider } from "@mui/material/styles";
 import mockTheme from "../../../__mocks__/themeMock";
+import {
+  findDropzonePasteTargetAt,
+  resetDropzonePasteTarget
+} from "../../../custom/dropzone-paste";
+import type { Asset } from "../../../stores/ApiTypes";
 
 // Mock the hooks
 jest.mock("../../../hooks/handlers/useFileDrop", () => ({
@@ -55,6 +60,7 @@ describe("PropertyDropzone", () => {
   beforeEach(() => {
     mockOnChange.mockClear();
     mockIsElectron = false;
+    resetDropzonePasteTarget();
     // Reset window.api
     delete (window as any).api;
   });
@@ -113,5 +119,37 @@ describe("PropertyDropzone", () => {
 
     // Dropzone should be clickable in Electron too
     expect(screen.getByText("Click or drop image")).toBeInTheDocument();
+  });
+
+  it("loads a pasted image into the dropzone under the pointer", () => {
+    renderWithTheme(
+      <PropertyDropzone
+        asset={undefined}
+        uri={undefined}
+        onChange={mockOnChange}
+        contentType="image"
+        props={mockProps as any}
+      />
+    );
+
+    const dropzone = screen.getByRole("button");
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: () => dropzone
+    });
+
+    const target = findDropzonePasteTargetAt(1, 1);
+    expect(target?.mediaType).toBe("image");
+
+    target?.applyAsset({
+      id: "asset-1",
+      get_url: "https://cdn.example.com/pasted.png"
+    } as Asset);
+
+    expect(mockOnChange).toHaveBeenCalledWith({
+      uri: "https://cdn.example.com/pasted.png",
+      type: "image",
+      asset_id: "asset-1"
+    });
   });
 });

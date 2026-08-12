@@ -19,6 +19,9 @@ import {
 import { useAssetGridStore } from "../../stores/AssetGridStore";
 import { useUpstreamValue } from "../../hooks/nodes/useNodeIO";
 import { resolveUri } from "../../utils/imageUtils";
+// === CUSTOM FORK START: dropzone-paste ===
+import { useDropzonePasteTarget } from "../../custom/dropzone-paste";
+// === CUSTOM FORK END ===
 
 interface ImageItem {
   uri: string;
@@ -200,6 +203,18 @@ const ImageListProperty = (props: PropertyProps) => {
     },
     [images, props]
   );
+
+  // === CUSTOM FORK START: dropzone-paste ===
+  const { pasteTargetId } = useDropzonePasteTarget({
+    mediaType: "image",
+    applyAsset: (asset) => {
+      if (!asset.get_url) {
+        return;
+      }
+      handleAddImages([{ uri: asset.get_url, type: "image" }]);
+    }
+  });
+  // === CUSTOM FORK END ===
 
   const handleRemoveImage = useCallback(
     (index: number) => {
@@ -551,7 +566,7 @@ const ImageListProperty = (props: PropertyProps) => {
       )}
 
       {/* Dropzone */}
-      <Tooltip title="Click to select images or drag and drop">
+      <Tooltip title="Click, drop, or paste images">
         <div
           role="button"
           tabIndex={0}
@@ -561,6 +576,9 @@ const ImageListProperty = (props: PropertyProps) => {
           onDragOver={onDragOver}
           onDragLeave={handleDragLeave}
           onDrop={onDrop}
+          // === CUSTOM FORK START: dropzone-paste ===
+          data-dropzone-paste-id={pasteTargetId}
+          // === CUSTOM FORK END ===
         >
           <p>Click or drop images here</p>
         </div>

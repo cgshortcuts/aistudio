@@ -54,6 +54,9 @@ import {
   visibleBottomPanelViews
 } from "../../custom/product-profile";
 // === CUSTOM FORK END ===
+// === CUSTOM FORK START: Provider Credits Bar ===
+import { ProviderCreditsBar } from "../../custom/provider-credits-bar";
+// === CUSTOM FORK END ===
 
 // icons
 import TimelineIcon from "@mui/icons-material/Timeline";
@@ -679,6 +682,9 @@ const PanelBottom: React.FC = () => {
               ))}
             </div>
             <div className="meta-cluster" aria-label="Workflow stats">
+              {/* === CUSTOM FORK START: Provider Credits Bar === */}
+              <ProviderCreditsBar />
+              {/* === CUSTOM FORK END === */}
               {currentWorkflowId && (
                 <span className="meta-pair">
                   <span className="meta-value">{nodeCount}</span>

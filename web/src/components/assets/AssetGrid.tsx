@@ -162,15 +162,18 @@ const AssetGrid: React.FC<AssetGridProps> = ({
     (state) => state.currentWorkflowId
   );
   // Default asset scope per surface: the in-editor sidebar follows the current
-  // workflow (re-asserted whenever the open workflow changes), while the
-  // fullscreen page opens on the global/all-assets view. A manual pick (a
-  // folder or another workflow) holds until one of these inputs changes.
+  // workflow (re-asserted whenever the open workflow changes). The fullscreen
+  // page starts at the store default (null / global). Do not re-assert null on
+  // every fullscreen mount — that wipes a manual workflow pick after a remount.
   useEffect(() => {
     if (forceGlobalAssets) {
       setWorkflowFilter(null);
       return;
     }
-    setWorkflowFilter(isFullscreenAssets ? null : currentWorkflowId ?? null);
+    if (isFullscreenAssets) {
+      return;
+    }
+    setWorkflowFilter(currentWorkflowId ?? null);
   }, [isFullscreenAssets, currentWorkflowId, setWorkflowFilter, forceGlobalAssets]);
   const openMenuType = useContextMenuStore((state) => state.openMenuType);
 
@@ -261,13 +264,23 @@ const AssetGrid: React.FC<AssetGridProps> = ({
   );
 
   const { navigateToFolderId } = useAssets();
+  // === CUSTOM FORK START: asset-all-view ===
+  const allAssetsView = useAssetGridStore((state) => state.allAssetsView);
+  // === CUSTOM FORK END ===
 
   if (selectedFolderId === null) {
-    if (user) {
-      navigateToFolderId(user?.id);
-    } else {
-      console.error("User is not logged in");
+    // === CUSTOM FORK START: asset-all-view ===
+    // All view clears the folder highlight but must not trip this Home fallback.
+    if (!allAssetsView) {
+      // === CUSTOM FORK END ===
+      if (user) {
+        navigateToFolderId(user?.id);
+      } else {
+        console.error("User is not logged in");
+      }
+      // === CUSTOM FORK START: asset-all-view ===
     }
+    // === CUSTOM FORK END ===
   }
 
   // Folders never appear on a phone: the pane leaves no room for the grid and
@@ -303,8 +316,7 @@ const AssetGrid: React.FC<AssetGridProps> = ({
           hideFolderControls={isWorkflowOutputScope}
           // === CUSTOM FORK START: asset-search-autofocus ===
           autofocusSearchSurface={assetSearchAutofocusSurface({
-            forceGlobalAssets,
-            isFullscreenAssets: Boolean(isFullscreenAssets)
+            forceGlobalAssets
           })}
           // === CUSTOM FORK END ===
         />

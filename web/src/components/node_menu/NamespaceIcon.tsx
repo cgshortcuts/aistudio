@@ -12,8 +12,6 @@ import HubIcon from "@mui/icons-material/Hub";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import ScatterPlotIcon from "@mui/icons-material/ScatterPlot";
 import ChatIcon from "@mui/icons-material/Chat";
-import BoltIcon from "@mui/icons-material/Bolt";
-import MovieFilterIcon from "@mui/icons-material/MovieFilter";
 import ApiIcon from "@mui/icons-material/Api";
 
 import openaiIcon from "../../icons/providers/openai.svg";
@@ -29,6 +27,13 @@ import groqIcon from "../../icons/providers/groq.svg";
 import deepseekColorIcon from "../../icons/providers/deepseek-color.svg";
 import xaiIcon from "../../icons/providers/xai.svg";
 import elevenlabsIcon from "../../icons/providers/elevenlabs.svg";
+import atlascloudIcon from "../../icons/providers/atlascloud.svg";
+import minimaxColorIcon from "../../icons/providers/minimax-color.svg";
+import kieIcon from "../../icons/providers/kie.png";
+import akiIcon from "../../icons/providers/aki.svg";
+import apifyIcon from "../../icons/providers/apify.png";
+import reveIcon from "../../icons/providers/reve.svg";
+import rodinIcon from "../../icons/providers/rodin.png";
 // === CUSTOM FORK START: BytePlus ===
 import byteplusIcon from "../../custom/byteplus/byteplus.png";
 // === CUSTOM FORK END ===
@@ -64,17 +69,22 @@ const NAMESPACE_ICONS: Record<string, IconEntry> = {
   // Providers
   anthropic: { kind: "svg", src: anthropicIcon },
   claude: { kind: "svg", src: claudeColorIcon, preserveInDark: true },
-  apify: { kind: "mui", Component: BoltIcon },
+  apify: { kind: "svg", src: apifyIcon, preserveInDark: true },
+  atlascloud: { kind: "svg", src: atlascloudIcon },
+  aki: { kind: "svg", src: akiIcon, preserveInDark: true },
   elevenlabs: { kind: "svg", src: elevenlabsIcon },
   fal: { kind: "svg", src: falColorIcon, preserveInDark: true },
   gemini: { kind: "svg", src: geminiColorIcon, preserveInDark: true },
   google: { kind: "svg", src: geminiColorIcon, preserveInDark: true },
-  kie: { kind: "mui", Component: MovieFilterIcon },
+  kie: { kind: "svg", src: kieIcon, preserveInDark: true },
   messaging: { kind: "mui", Component: ChatIcon },
+  minimax: { kind: "svg", src: minimaxColorIcon, preserveInDark: true },
   mistral: { kind: "svg", src: mistralColorIcon, preserveInDark: true },
   openai: { kind: "svg", src: openaiIcon },
   ollama: { kind: "svg", src: ollamaIcon },
   replicate: { kind: "svg", src: replicateIcon },
+  reve: { kind: "svg", src: reveIcon },
+  rodin: { kind: "svg", src: rodinIcon, preserveInDark: true },
   groq: { kind: "svg", src: groqIcon },
   deepseek: { kind: "svg", src: deepseekColorIcon, preserveInDark: true },
   xai: { kind: "svg", src: xaiIcon },

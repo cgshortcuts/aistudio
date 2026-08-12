@@ -271,15 +271,18 @@ export const assetsRouter = router({
     .output(listOutput)
     .query(async ({ ctx, input }) => {
       // Default to the user's home folder when no filters at all are set.
-      const effectiveParentId =
-        input.parent_id === undefined &&
-        !input.content_type &&
-        !input.workflow_id &&
-        !input.node_id &&
-        !input.job_id &&
-        !input.timeline_id
+      // === CUSTOM FORK START: asset-all-view ===
+      const effectiveParentId = input.all
+        ? undefined
+        : input.parent_id === undefined &&
+            !input.content_type &&
+            !input.workflow_id &&
+            !input.node_id &&
+            !input.job_id &&
+            !input.timeline_id
           ? ctx.userId
           : input.parent_id;
+      // === CUSTOM FORK END ===
 
       const [assets, cursor] = await Asset.paginate(ctx.userId, {
         parentId: effectiveParentId,

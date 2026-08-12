@@ -4,10 +4,7 @@ import {
   resetAssetSearchAutofocusStore,
   useAssetSearchAutofocusStore
 } from "../AssetSearchAutofocusStore";
-import {
-  notifyAssetsPageSearch,
-  notifyLibrarySearchIfOpening
-} from "../notifyAssetSearchFocus";
+import { notifyLibrarySearchIfOpening } from "../notifyAssetSearchFocus";
 
 describe("notifyAssetSearchFocus", () => {
   beforeEach(() => {
@@ -47,15 +44,5 @@ describe("notifyAssetSearchFocus", () => {
     });
 
     expect(useAssetSearchAutofocusStore.getState().generation).toBe(0);
-  });
-
-  it("requests assets-page focus", () => {
-    act(() => {
-      notifyAssetsPageSearch();
-    });
-
-    const state = useAssetSearchAutofocusStore.getState();
-    expect(state.generation).toBe(1);
-    expect(state.surface).toBe("assets-page");
   });
 });

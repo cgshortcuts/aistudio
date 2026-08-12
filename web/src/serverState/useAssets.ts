@@ -20,6 +20,9 @@ import {
   useStarredAssetFilter
 } from "../custom/asset-stars";
 // === CUSTOM FORK END ===
+// === CUSTOM FORK START: asset-all-view ===
+import { fetchAllLibraryAssets } from "../custom/asset-all-view";
+// === CUSTOM FORK END ===
 
 type FilterOptions = {
   searchTerm: string;
@@ -68,6 +71,9 @@ export const useAssets = (_initialFolderId: string | null = null) => {
   const sizeFilter = useAssetGridStore((state) => state.sizeFilter);
   const typeFilter = useAssetGridStore((state) => state.typeFilter);
   const workflowFilter = useAssetGridStore((state) => state.workflowFilter);
+  // === CUSTOM FORK START: asset-all-view ===
+  const allAssetsView = useAssetGridStore((state) => state.allAssetsView);
+  // === CUSTOM FORK END ===
   const addNotification = useNotificationStore(
     (state) => state.addNotification
   );
@@ -94,8 +100,37 @@ export const useAssets = (_initialFolderId: string | null = null) => {
   } = useQuery({
     queryKey: ["assets", { parent_id: currentFolderId }],
     queryFn: fetchAssets,
-    enabled: !!currentFolderId && !workflowFilter
+    // === CUSTOM FORK START: asset-all-view ===
+    enabled: !!currentFolderId && !workflowFilter && !allAssetsView
+    // === CUSTOM FORK END ===
   });
+
+  // === CUSTOM FORK START: asset-all-view ===
+  // Unscoped list (same as workflow filter): includes parent_id null autosaves.
+  const fetchAllAssets = useCallback(async () => {
+    return fetchAllLibraryAssets(async ({ page_size }) => {
+      const data = await trpcClient.assets.list.query({
+        all: true,
+        page_size
+      });
+      return {
+        assets: normalizeAssetList(data.assets),
+        next: data.next
+      };
+    });
+  }, []);
+
+  const {
+    data: allLibraryAssets,
+    error: allAssetsError,
+    isLoading: isLoadingAllAssets
+  } = useQuery({
+    queryKey: ["assets", { all: true, user_id: currentUser.id, v: 2 }],
+    queryFn: fetchAllAssets,
+    enabled: allAssetsView && !workflowFilter,
+    staleTime: 30000
+  });
+  // === CUSTOM FORK END ===
 
   // Fetch assets filtered by workflow_id when workflowFilter is active
   const fetchWorkflowAssets = useCallback(async () => {
@@ -125,10 +160,25 @@ export const useAssets = (_initialFolderId: string | null = null) => {
         queryKey: ["assets", { workflow_id: workflowFilter }]
       });
     }
+    // === CUSTOM FORK START: asset-all-view ===
+    if (allAssetsView) {
+      return queryClient.invalidateQueries({
+        queryKey: ["assets", { all: true, user_id: currentUser.id, v: 2 }]
+      });
+    }
+    // === CUSTOM FORK END ===
     return queryClient.invalidateQueries({
       queryKey: ["assets", { parent_id: currentFolderId }]
     });
-  }, [queryClient, currentFolderId, workflowFilter]);
+  }, [
+    queryClient,
+    currentFolderId,
+    workflowFilter,
+    // === CUSTOM FORK START: asset-all-view ===
+    allAssetsView,
+    currentUser.id
+    // === CUSTOM FORK END ===
+  ]);
 
   const fetchAllFolders = useCallback(async () => {
     return await loadFolderTree(settings.assetsOrder);
@@ -154,9 +204,13 @@ export const useAssets = (_initialFolderId: string | null = null) => {
 
   const processedAssets = useMemo(() => {
     // When workflow filter is active, use workflow-filtered assets
+    // === CUSTOM FORK START: asset-all-view ===
     const sourceAssets = workflowFilter
       ? (workflowFilteredAssets?.assets as Asset[] | undefined)
-      : currentFolderAssets?.assets;
+      : allAssetsView
+        ? (allLibraryAssets?.assets as Asset[] | undefined)
+        : currentFolderAssets?.assets;
+    // === CUSTOM FORK END ===
 
     if (!sourceAssets) {return [];}
 
@@ -185,7 +239,16 @@ export const useAssets = (_initialFolderId: string | null = null) => {
         );
       }
     });
-  }, [currentFolderAssets, workflowFilteredAssets, workflowFilter, settings.assetsOrder]);
+  }, [
+    currentFolderAssets,
+    workflowFilteredAssets,
+    workflowFilter,
+    settings.assetsOrder,
+    // === CUSTOM FORK START: asset-all-view ===
+    allAssetsView,
+    allLibraryAssets
+    // === CUSTOM FORK END ===
+  ]);
 
   const filterAssets = useCallback(
     (assetsToFilter: Asset[], options: FilterOptions) => {
@@ -259,8 +322,23 @@ export const useAssets = (_initialFolderId: string | null = null) => {
         queryKey: ["assets", { workflow_id: workflowFilter }]
       });
     }
+    // === CUSTOM FORK START: asset-all-view ===
+    if (allAssetsView) {
+      queryClient.invalidateQueries({
+        queryKey: ["assets", { all: true, user_id: currentUser.id, v: 2 }]
+      });
+    }
+    // === CUSTOM FORK END ===
     queryClient.invalidateQueries({ queryKey: ["folderTree"] });
-  }, [queryClient, currentFolderId, workflowFilter]);
+  }, [
+    queryClient,
+    currentFolderId,
+    workflowFilter,
+    // === CUSTOM FORK START: asset-all-view ===
+    allAssetsView,
+    currentUser.id
+    // === CUSTOM FORK END ===
+  ]);
 
   const notifyMutationError = useCallback(
     (content: string) => (err: Error) => {
@@ -343,10 +421,18 @@ export const useAssets = (_initialFolderId: string | null = null) => {
 
   const isLoading = workflowFilter
     ? isLoadingWorkflowAssets
-    : (isLoadingCurrentFolder || isLoadingFolderTree);
+    // === CUSTOM FORK START: asset-all-view ===
+    : allAssetsView
+      ? isLoadingAllAssets || isLoadingFolderTree
+      // === CUSTOM FORK END ===
+      : (isLoadingCurrentFolder || isLoadingFolderTree);
   const error = workflowFilter
     ? workflowFilterError
-    : (currentFolderError || folderTreeError);
+    // === CUSTOM FORK START: asset-all-view ===
+    : allAssetsView
+      ? allAssetsError || folderTreeError
+      // === CUSTOM FORK END ===
+      : (currentFolderError || folderTreeError);
 
   const fetchAssetsRecursive = useCallback(
     async (folderId: string) => {

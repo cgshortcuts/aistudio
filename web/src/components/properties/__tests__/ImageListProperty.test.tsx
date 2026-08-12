@@ -3,6 +3,11 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { ThemeProvider } from "@mui/material/styles";
 import mockTheme from "../../../__mocks__/themeMock";
 import ImageListProperty from "../ImageListProperty";
+import {
+  findDropzonePasteTargetAt,
+  resetDropzonePasteTarget
+} from "../../../custom/dropzone-paste";
+import type { Asset } from "../../../stores/ApiTypes";
 
 // Mock NodeContext — useUpstreamValue (added to ImageListProperty) calls useNodes
 // which requires a NodeProvider. Provide a minimal stub so tests that render
@@ -59,6 +64,7 @@ describe("ImageListProperty", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockUpstreamValue = undefined;
+    resetDropzonePasteTarget();
   });
 
   it("resolves connected upstream image URIs against BASE_URL", () => {
@@ -182,5 +188,35 @@ describe("ImageListProperty", () => {
       fireEvent.dragLeave(dropzone);
       expect(dropzone).not.toHaveClass("drag-over");
     }
+  });
+
+  it("appends a pasted image when the pointer is over the dropzone", () => {
+    const onChange = jest.fn();
+    render(
+      <ThemeProvider theme={mockTheme}>
+        <ImageListProperty
+          {...defaultProps}
+          value={[{ uri: "http://example.com/existing.jpg", type: "image" }]}
+          onChange={onChange}
+        />
+      </ThemeProvider>
+    );
+
+    const dropzone = document.querySelector(".dropzone");
+    expect(dropzone).not.toBeNull();
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: () => dropzone
+    });
+
+    findDropzonePasteTargetAt(1, 1)?.applyAsset({
+      id: "asset-1",
+      get_url: "https://cdn.example.com/pasted.png"
+    } as Asset);
+
+    expect(onChange).toHaveBeenCalledWith([
+      { uri: "http://example.com/existing.jpg", type: "image" },
+      { uri: "https://cdn.example.com/pasted.png", type: "image" }
+    ]);
   });
 });

@@ -9,7 +9,3 @@ export function notifyLibrarySearchIfOpening(
     requestAssetSearchFocus("library");
   }
 }
-
-export function notifyAssetsPageSearch(): void {
-  requestAssetSearchFocus("assets-page");
-}

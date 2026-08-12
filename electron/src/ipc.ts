@@ -359,6 +359,9 @@ export function initializeIpcHandlers(): void {
     IpcChannels.CLIPBOARD_READ_IMAGE,
     async (_event, type) => {
       const image = clipboard.readImage(type);
+      if (image.isEmpty()) {
+        return "";
+      }
       return image.toDataURL();
     },
   );

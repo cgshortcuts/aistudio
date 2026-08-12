@@ -1,15 +1,34 @@
 # Provider brand icons
 
-Vendored from [`@lobehub/icons-static-svg`](https://github.com/lobehub/lobe-icons)
-version **1.91.0**. The package ships thousands of icons; we only use the 109 in
+Most icons are vendored from [`@lobehub/icons-static-svg`](https://github.com/lobehub/lobe-icons)
+version **1.91.0**. The package ships thousands of icons; we only use the ones in
 this directory, so we copied them in and dropped the dependency.
 
-To add an icon, copy it from the upstream repo (or a newer release of the npm
-package) into this directory and note the version here if it differs.
+To add a LobeHub icon, copy it from the upstream repo (or a newer release of the
+npm package) into this directory and note the version here if it differs.
+
+## Site favicons / brand marks (not from LobeHub)
+
+These were saved from each provider's public site favicon or logo asset when
+LobeHub had no matching mark (or the site mark was clearer):
+
+| File | Source |
+| --- | --- |
+| `atlascloud.svg` | Mark extracted from https://atlascloud.ai/logo.svg |
+| `kie.png` | https://kie.ai/logo.png |
+| `aki.svg` | https://aki.io/static/favicon/favicon.svg |
+| `reve.svg` | https://api.reve.com/icon.svg |
+| `rodin.png` | Favicon from https://hyperhuman.deemos.com/ |
+| `serpapi.png` | Favicon from https://serpapi.com/ |
+| `apify.png` | Favicon from https://docs.apify.com/ |
+| `brave.svg` | https://brave.com/static-assets/images/brave-logo-sans-text.svg |
+| `dataforseo.png` | Favicon from https://dataforseo.com/ |
+| `runpod.png` | Favicon from https://www.runpod.io/ |
+| `vast.png` | Favicon from https://vast.ai/ |
 
 ## License
 
-The icons are published under the **MIT license** (per the package's
+The LobeHub icons are published under the **MIT license** (per the package's
 `package.json` and the upstream repo's
 [LICENSE](https://github.com/lobehub/lobe-icons/blob/master/LICENSE)):
 

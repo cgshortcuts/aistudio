@@ -105,6 +105,9 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
     (state) => state.settings.assetItemSize
   );
   const workflowFilter = useAssetGridStore((state) => state.workflowFilter);
+  // === CUSTOM FORK START: asset-all-view ===
+  const allAssetsView = useAssetGridStore((state) => state.allAssetsView);
+  // === CUSTOM FORK END ===
   // === CUSTOM FORK START: asset-stars ===
   const starredFilter = useStarredAssetFilter();
   // === CUSTOM FORK END ===
@@ -126,6 +129,11 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
   const preparedItems = useMemo(() => {
     return prepareItems(assets || [], expandedTypes);
   }, [assets, expandedTypes]);
+
+  // Hover preview: at most one audio/video tile plays at a time.
+  const [hoverPreviewAssetId, setHoverPreviewAssetId] = useState<
+    string | null
+  >(null);
 
   // Extract visual order of assets excluding dividers – this is the order that
   // users actually see and therefore the order that shift-range selection must
@@ -287,7 +295,9 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
       onDragStart,
       onDoubleClick: onDoubleClick || (() => {}),
       expandedTypes,
-      toggleExpanded
+      toggleExpanded,
+      hoverPreviewAssetId,
+      setHoverPreviewAssetId
     };
   }, [
     preparedItems,
@@ -299,7 +309,8 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
     onDragStart,
     onDoubleClick,
     expandedTypes,
-    toggleExpanded
+    toggleExpanded,
+    hoverPreviewAssetId
     // Note: selectedAssetIds is NOT included here!
   ]);
 
@@ -408,7 +419,11 @@ const AssetGridContent: React.FC<AssetGridContentProps> = memo(({
                 ? STARRED_ASSETS_EMPTY_TITLE
                 : workflowFilter
                   ? "No outputs from this workflow yet"
-                  : "This folder is empty"
+                  // === CUSTOM FORK START: asset-all-view ===
+                  : allAssetsView
+                    ? "No assets yet"
+                    // === CUSTOM FORK END ===
+                    : "This folder is empty"
             }
             description={
               starredFilter

@@ -43,6 +43,8 @@ interface AssetGridRowProps {
     onDoubleClick: (_asset: Asset) => void;
     expandedTypes: Set<string>;
     toggleExpanded: (_type: string) => void;
+    hoverPreviewAssetId: string | null;
+    setHoverPreviewAssetId: (assetId: string | null) => void;
   };
 }
 
@@ -57,7 +59,9 @@ const AssetGridRow: React.FC<AssetGridRowProps> = ({ index, style, data }) => {
     handleSelectAsset,
     onDoubleClick,
     expandedTypes,
-    toggleExpanded
+    toggleExpanded,
+    hoverPreviewAssetId,
+    setHoverPreviewAssetId
   } = data;
 
   const theme = useTheme();
@@ -231,6 +235,20 @@ const AssetGridRow: React.FC<AssetGridRowProps> = ({ index, style, data }) => {
           <div
             className="asset-grid-row-item"
             key={`asset-${item.id}`}
+            onMouseEnter={() => {
+              if (!item.content_type) {
+                return;
+              }
+              if (
+                item.content_type.startsWith("video/") ||
+                item.content_type.startsWith("audio/")
+              ) {
+                setHoverPreviewAssetId(item.id);
+              }
+            }}
+            onMouseLeave={() => {
+              setHoverPreviewAssetId(null);
+            }}
             style={{
               width: `${gridDimensions.itemWidth}px`,
               height: `${
@@ -247,6 +265,7 @@ const AssetGridRow: React.FC<AssetGridRowProps> = ({ index, style, data }) => {
               isSelected={isSelected}
               onSelect={selectHandlers[item.id]}
               onDoubleClick={onDoubleClick}
+              isHoverPreview={hoverPreviewAssetId === item.id}
             />
           </div>
         );

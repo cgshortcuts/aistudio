@@ -20,3 +20,4 @@ export * from "./delete-workflow";
 export * from "./asset-stars";
 export * from "./asset-search-autofocus";
 export * from "./asset-generation-info";
+export * from "./dropzone-paste";

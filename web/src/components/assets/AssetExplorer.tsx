@@ -44,8 +44,15 @@ const gridFillStyles = css({
  * with the Collections, Models, and Workspaces pages.
  */
 const AssetExplorer: React.FC = memo(() => {
-  const { folderFiles, isLoading, error, refetchAssetsAndFolders } =
+  const { folderFiles, folderTree, isLoading, error, refetchAssetsAndFolders } =
     useAssets();
+
+  // Only gate the page on the true first load. Switching the workflow filter
+  // flips isLoading while folderTree is already known; unmounting AssetGrid
+  // then remounts it and the fullscreen default-scope effect clears the
+  // selection — so the first workflow click appears to fail.
+  const isInitialLoad = folderTree == null && isLoading;
+  const isInitialError = folderTree == null && error != null;
 
   return (
     <ManagerPageLayout
@@ -57,16 +64,16 @@ const AssetExplorer: React.FC = memo(() => {
       actions={<StorageAnalytics assets={folderFiles} />}
     >
       <Box css={gridFillStyles}>
-        {isLoading ? (
+        {isInitialLoad ? (
           <FlexColumn justify="center" align="center" sx={{ flex: 1 }}>
             <LoadingSpinner size="large" text="Loading assets" />
           </FlexColumn>
-        ) : error ? (
+        ) : isInitialError ? (
           <FlexColumn justify="center" align="center" sx={{ flex: 1 }}>
             <EmptyState
               variant="error"
               title="Could not load assets"
-              description={error.message || "An error occurred. Please try again."}
+              description={error?.message || "An error occurred. Please try again."}
               actionText="Retry"
               onAction={refetchAssetsAndFolders}
             />

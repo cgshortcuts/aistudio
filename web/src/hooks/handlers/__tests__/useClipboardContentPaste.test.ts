@@ -9,6 +9,12 @@ import useAuth from "../../../stores/useAuth";
 import useMetadataStore from "../../../stores/MetadataStore";
 import * as MousePosition from "../../../utils/MousePosition";
 import * as Browser from "../../../utils/browser";
+import {
+  registerDropzonePasteTarget,
+  resetClipboardImagePasteHandled,
+  resetDropzonePasteTarget
+} from "../../../custom/dropzone-paste";
+import type { Asset } from "../../../stores/ApiTypes";
 
 // Mock dependencies
 jest.mock("@xyflow/react", () => ({
@@ -121,11 +127,14 @@ describe("useClipboardContentPaste", () => {
     });
 
     (window as unknown as { api?: unknown }).api = undefined;
+    resetDropzonePasteTarget();
+    resetClipboardImagePasteHandled();
   });
 
   it("returns handleContentPaste and hasClipboardContent functions", () => {
     const { result } = renderHook(() => useClipboardContentPaste());
     expect(result.current.handleContentPaste).toBeDefined();
+    expect(result.current.handleNativePaste).toBeDefined();
     expect(result.current.hasClipboardContent).toBeDefined();
     expect(result.current.readClipboardContent).toBeDefined();
   });
@@ -210,6 +219,56 @@ describe("useClipboardContentPaste", () => {
       );
       global.fetch = originalFetch;
     });
+
+    it("loads the clipboard image into a dropzone under the pointer", async () => {
+      const applyAsset = jest.fn();
+      registerDropzonePasteTarget({
+        id: "zone-a",
+        mediaType: "image",
+        applyAsset
+      });
+      const zone = document.createElement("div");
+      zone.setAttribute("data-dropzone-paste-id", "zone-a");
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: () => zone
+      });
+
+      const uploadedAsset = {
+        id: "asset-1",
+        get_url: "https://cdn.example.com/pasted.png"
+      } as Asset;
+      mockUploadAsset.mockImplementation(
+        (args: { onCompleted?: (asset: Asset) => void }) => {
+          args.onCompleted?.(uploadedAsset);
+        }
+      );
+
+      const pngDataUrl =
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2W9oQAAAAASUVORK5CYII=";
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        blob: async () =>
+          new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" })
+      } as Response);
+      (window as unknown as {
+        api?: { clipboard?: { readImage?: jest.Mock } };
+      }).api = {
+        clipboard: {
+          readImage: jest.fn().mockResolvedValue(pngDataUrl)
+        }
+      };
+
+      const { result } = renderHook(() => useClipboardContentPaste());
+
+      await act(async () => {
+        await result.current.handleContentPaste();
+      });
+
+      expect(applyAsset).toHaveBeenCalledWith(uploadedAsset);
+      expect(mockAddNode).not.toHaveBeenCalled();
+      global.fetch = originalFetch;
+    });
   });
 
   describe("readClipboardContent", () => {
@@ -223,6 +282,48 @@ describe("useClipboardContentPaste", () => {
 
       expect(content!.type).toBe("unknown");
       expect(content!.data).toBeNull();
+    });
+  });
+
+  describe("handleNativePaste", () => {
+    it("uploads an image from the paste event without clipboard.read", () => {
+      const uploadedAsset = {
+        id: "asset-1",
+        get_url: "https://cdn.example.com/pasted.png"
+      } as Asset;
+      mockUploadAsset.mockImplementation(
+        (args: { onCompleted?: (asset: Asset) => void }) => {
+          args.onCompleted?.(uploadedAsset);
+        }
+      );
+
+      const file = new File(
+        [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
+        "paste.png",
+        { type: "image/png" }
+      );
+      const preventDefault = jest.fn();
+      const event = {
+        preventDefault,
+        clipboardData: {
+          items: [{ kind: "file", type: "image/png", getAsFile: () => file }],
+          files: [file]
+        }
+      } as unknown as ClipboardEvent;
+
+      const { result } = renderHook(() => useClipboardContentPaste());
+      act(() => {
+        result.current.handleNativePaste(event);
+      });
+
+      expect(preventDefault).toHaveBeenCalled();
+      expect(mockUploadAsset).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: "clipboard",
+          workflow_id: "workflow-123"
+        })
+      );
+      expect(mockAddNode).toHaveBeenCalled();
     });
   });
 });

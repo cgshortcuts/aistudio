@@ -133,6 +133,17 @@ describe("assets router", () => {
       });
     });
 
+    it("skips the home-folder default when all is true", async () => {
+      (Asset.paginate as ReturnType<typeof vi.fn>).mockResolvedValue([[], ""]);
+
+      const caller = createCaller(makeCtx());
+      await caller.assets.list({ all: true });
+      expect(Asset.paginate).toHaveBeenCalledWith(
+        "user-1",
+        expect.objectContaining({ parentId: undefined })
+      );
+    });
+
     it("skips the home-folder default when a non-parent filter is active", async () => {
       (Asset.paginate as ReturnType<typeof vi.fn>).mockResolvedValue([[], ""]);
 

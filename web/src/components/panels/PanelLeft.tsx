@@ -47,10 +47,7 @@ import { ExpandableRailToolbar } from "../../custom/rail-hover-labels";
 import { useCloseLeftPanelOnClickAway } from "../../custom/left-panel-clickaway";
 // === CUSTOM FORK END ===
 // === CUSTOM FORK START: asset-search-autofocus ===
-import {
-  notifyAssetsPageSearch,
-  notifyLibrarySearchIfOpening
-} from "../../custom/asset-search-autofocus/notifyAssetSearchFocus";
+import { notifyLibrarySearchIfOpening } from "../../custom/asset-search-autofocus/notifyAssetSearchFocus";
 // === CUSTOM FORK END ===
 // === CUSTOM FORK START: Product Profile ===
 import {
@@ -271,9 +268,6 @@ const PanelContent = memo(function PanelContent({
     });
     navigate("/workspace");
     handlePanelToggle("assets");
-    // === CUSTOM FORK START: asset-search-autofocus ===
-    notifyAssetsPageSearch();
-    // === CUSTOM FORK END ===
   }, [openTab, navigate, handlePanelToggle]);
 
   if (activeView === "nodes") {

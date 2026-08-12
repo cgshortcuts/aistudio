@@ -36,7 +36,11 @@ export const listInput = z.object({
   node_id: z.string().optional(),
   job_id: z.string().optional(),
   timeline_id: z.string().optional(),
-  page_size: z.number().int().min(1).max(10000).default(10000)
+  page_size: z.number().int().min(1).max(10000).default(10000),
+  // === CUSTOM FORK START: asset-all-view ===
+  /** When true, list every asset for the user (no parent_id home default). */
+  all: z.boolean().optional()
+  // === CUSTOM FORK END ===
 });
 export type ListInput = z.infer<typeof listInput>;
 

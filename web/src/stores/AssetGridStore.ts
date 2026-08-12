@@ -82,6 +82,12 @@ interface AssetGridState {
   // Workflow filter
   workflowFilter: string | null;
   setWorkflowFilter: (workflowId: string | null) => void;
+
+  // === CUSTOM FORK START: asset-all-view ===
+  /** Library-wide view: every non-folder asset (folders + workflows). */
+  allAssetsView: boolean;
+  setAllAssetsView: (active: boolean) => void;
+  // === CUSTOM FORK END ===
 }
 
 export type AssetGridStoreApi = StoreApi<AssetGridState>;
@@ -123,10 +129,20 @@ const createAssetGridStore = (
     set({
       currentFolder: folder,
       currentFolderId: folder?.id ?? null,
-      parentFolder: null
+      parentFolder: null,
+      // === CUSTOM FORK START: asset-all-view ===
+      allAssetsView: false
+      // === CUSTOM FORK END ===
     }),
   setCurrentFolderId: (folderId) =>
-    set({ currentFolderId: folderId, currentFolder: null, parentFolder: null }),
+    set({
+      currentFolderId: folderId,
+      currentFolder: null,
+      parentFolder: null,
+      // === CUSTOM FORK START: asset-all-view ===
+      allAssetsView: false
+      // === CUSTOM FORK END ===
+    }),
   setDeleteDialogOpen: (open) => set({ deleteDialogOpen: open }),
   setFilteredAssets: (assets) => set({ filteredAssets: assets }),
   setIsHorizontal: (isHorizontal) => set({ isHorizontal }),
@@ -211,7 +227,18 @@ const createAssetGridStore = (
 
   // Workflow filter
   workflowFilter: null,
-  setWorkflowFilter: (workflowId) => set({ workflowFilter: workflowId })
+  setWorkflowFilter: (workflowId) =>
+    set({
+      workflowFilter: workflowId,
+      // === CUSTOM FORK START: asset-all-view ===
+      ...(workflowId ? { allAssetsView: false } : {})
+      // === CUSTOM FORK END ===
+    }),
+
+  // === CUSTOM FORK START: asset-all-view ===
+  allAssetsView: false,
+  setAllAssetsView: (active) => set({ allAssetsView: active })
+  // === CUSTOM FORK END ===
 }),
       {
         name: persistName,

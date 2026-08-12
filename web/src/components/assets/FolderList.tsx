@@ -18,6 +18,9 @@ import { useAssetGridStore } from "../../stores/AssetGridStore";
 import { Asset } from "../../stores/ApiTypes";
 import { useTheme } from "@mui/material/styles";
 import type { Theme } from "@mui/material/styles";
+// === CUSTOM FORK START: asset-all-view ===
+import { AllAssetsNavItem } from "../../custom/asset-all-view";
+// === CUSTOM FORK END ===
 
 // Layout constants for folder tree
 const ROW_HEIGHT_REM = 1.5; // compact row height in em
@@ -190,6 +193,9 @@ const FolderList: React.FC<FolderListProps> = ({ isHorizontal }) => {
   const setWorkflowFilter = useAssetGridStore(
     (state) => state.setWorkflowFilter
   );
+  // === CUSTOM FORK START: asset-all-view ===
+  const allAssetsView = useAssetGridStore((state) => state.allAssetsView);
+  // === CUSTOM FORK END ===
 
   // Control which folders are expanded; disable single-click expansion
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(
@@ -350,7 +356,13 @@ const FolderList: React.FC<FolderListProps> = ({ isHorizontal }) => {
               <FolderItem
                 folder={folder as Asset}
                 onSelect={() => handleFolderSelect(folder)}
-                isSelected={!workflowFilter && selectedFolderIds.includes(folder.id)}
+                isSelected={
+                  !workflowFilter &&
+                  // === CUSTOM FORK START: asset-all-view ===
+                  !allAssetsView &&
+                  // === CUSTOM FORK END ===
+                  selectedFolderIds.includes(folder.id)
+                }
               >
                 {!isRoot && (
                   <button
@@ -394,13 +406,19 @@ const FolderList: React.FC<FolderListProps> = ({ isHorizontal }) => {
             <FolderItem
               folder={folder as Asset}
               onSelect={() => handleFolderSelect(folder)}
-              isSelected={!workflowFilter && selectedFolderIds.includes(folder.id)}
+              isSelected={
+                !workflowFilter &&
+                // === CUSTOM FORK START: asset-all-view ===
+                !allAssetsView &&
+                // === CUSTOM FORK END ===
+                selectedFolderIds.includes(folder.id)
+              }
             />
           </div>
         </Box>
       );
     },
-    [workflowFilter, expandedFolderIds, selectedFolderIds, handleRowDoubleClick, handleFolderSelect, handleFolderClick, handleExpandFolder, noop, hasChildNodes]
+    [workflowFilter, expandedFolderIds, selectedFolderIds, handleRowDoubleClick, handleFolderSelect, handleFolderClick, handleExpandFolder, noop, hasChildNodes, allAssetsView]
   );
 
   const rootFolder: RootFolder = useMemo(() => ({
@@ -420,7 +438,12 @@ const FolderList: React.FC<FolderListProps> = ({ isHorizontal }) => {
         minWidth: isHorizontal ? LIST_MIN_WIDTH : "auto"
       }}
     >
-      <div className="folder-list">{renderFolder(rootFolder, 0, true)}</div>
+      <div className="folder-list">
+        {/* === CUSTOM FORK START: asset-all-view === */}
+        <AllAssetsNavItem />
+        {/* === CUSTOM FORK END === */}
+        {renderFolder(rootFolder, 0, true)}
+      </div>
     </div>
   );
 };

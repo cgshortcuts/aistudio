@@ -38,6 +38,16 @@ import googleColorIcon from "../../icons/providers/google-color.svg";
 import cohereColorIcon from "../../icons/providers/cohere-color.svg";
 import jinaIcon from "../../icons/providers/jina.svg";
 import voyageColorIcon from "../../icons/providers/voyage-color.svg";
+import kieIcon from "../../icons/providers/kie.png";
+import akiIcon from "../../icons/providers/aki.svg";
+import reveIcon from "../../icons/providers/reve.svg";
+import rodinIcon from "../../icons/providers/rodin.png";
+import serpapiIcon from "../../icons/providers/serpapi.png";
+import apifyIcon from "../../icons/providers/apify.png";
+import braveIcon from "../../icons/providers/brave.svg";
+import dataforseoIcon from "../../icons/providers/dataforseo.png";
+import runpodIcon from "../../icons/providers/runpod.png";
+import vastIcon from "../../icons/providers/vast.png";
 import evolinkIcon from "../../icons/evolink.svg";
 import gmiIcon from "../../icons/gmi.svg";
 
@@ -301,14 +311,17 @@ export const PROVIDER_META: ProviderMeta[] = [
     description: "Chat, image, and video models behind one key.",
     section: "gateways",
     docsUrl: "https://www.atlascloud.ai/",
-    icon: atlascloudIcon
+    icon: atlascloudIcon,
+    mono: true
   },
   {
     key: "REVE_API_KEY",
     name: "Reve",
     description: "Image creation, editing, and remix with strong prompt adherence.",
     section: "media",
-    docsUrl: "https://api.reve.com/"
+    docsUrl: "https://api.reve.com/",
+    icon: reveIcon,
+    mono: true
   },
   {
     key: "MESHY_API_KEY",
@@ -323,7 +336,8 @@ export const PROVIDER_META: ProviderMeta[] = [
     name: "Rodin",
     description: "Rodin AI 3D model generation.",
     section: "media",
-    docsUrl: "https://hyperhuman.deemos.com/"
+    docsUrl: "https://hyperhuman.deemos.com/",
+    icon: rodinIcon
   },
   {
     key: "EVOLINK_API_KEY",
@@ -346,35 +360,40 @@ export const PROVIDER_META: ProviderMeta[] = [
     name: "AKI",
     description: "AKI.IO AI Model Hub.",
     section: "gateways",
-    docsUrl: "https://aki.io/"
+    docsUrl: "https://aki.io/",
+    icon: akiIcon
   },
   {
     key: "KIE_API_KEY",
     name: "Kie.ai",
     description: "Kie.ai unified model access.",
     section: "gateways",
-    docsUrl: "https://kie.ai/"
+    docsUrl: "https://kie.ai/",
+    icon: kieIcon
   },
   {
     key: "SERPAPI_API_KEY",
     name: "SerpAPI",
     description: "Web search via SerpAPI.",
     section: "search",
-    docsUrl: "https://serpapi.com/"
+    docsUrl: "https://serpapi.com/",
+    icon: serpapiIcon
   },
   {
     key: "APIFY_API_KEY",
     name: "Apify",
     description: "Web search via Apify Google Search Scraper.",
     section: "search",
-    docsUrl: "https://docs.apify.com/"
+    docsUrl: "https://docs.apify.com/",
+    icon: apifyIcon
   },
   {
     key: "BRAVE_API_KEY",
     name: "Brave Search",
     description: "Brave Search web API.",
     section: "search",
-    docsUrl: "https://brave.com/search/api/"
+    docsUrl: "https://brave.com/search/api/",
+    icon: braveIcon
   },
   {
     key: "DATA_FOR_SEO_LOGIN",
@@ -382,6 +401,7 @@ export const PROVIDER_META: ProviderMeta[] = [
     description: "Web search via DataForSEO.",
     section: "search",
     docsUrl: "https://docs.dataforseo.com/",
+    icon: dataforseoIcon,
     fields: [
       { key: "DATA_FOR_SEO_LOGIN", label: "Login" },
       { key: "DATA_FOR_SEO_PASSWORD", label: "Password", secret: true }
@@ -392,14 +412,16 @@ export const PROVIDER_META: ProviderMeta[] = [
     name: "RunPod",
     description: `Rent GPU pods to run ${APP_DISPLAY_NAME} workers.`,
     section: "compute",
-    docsUrl: "https://docs.runpod.io/"
+    docsUrl: "https://docs.runpod.io/",
+    icon: runpodIcon
   },
   {
     key: "VAST_API_KEY",
     name: "Vast.ai",
     description: `Rent marketplace GPUs to run ${APP_DISPLAY_NAME} workers.`,
     section: "compute",
-    docsUrl: "https://docs.vast.ai/"
+    docsUrl: "https://docs.vast.ai/",
+    icon: vastIcon
   },
   {
     key: "LLAMA_API_KEY",

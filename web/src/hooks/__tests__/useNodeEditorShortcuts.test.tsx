@@ -85,6 +85,39 @@ jest.mock("../../contexts/WorkflowManagerContext", () => ({
     })
 }));
 
+// Tab cycling lives in useWorkspaceMenuShortcuts; this hook must not register it.
+jest.mock("../../stores/WorkspaceTabsStore", () => ({
+  useWorkspaceTabsStore: Object.assign(
+    (selector: (state: {
+      activeTabId: null;
+      tabs: [];
+      closeTab: () => void;
+      getState?: () => unknown;
+    }) => unknown) =>
+      selector({
+        activeTabId: null,
+        tabs: [],
+        closeTab: jest.fn()
+      }),
+    {
+      getState: () => ({
+        activeTabId: null,
+        tabs: [],
+        closeTab: jest.fn()
+      })
+    }
+  )
+}));
+
+jest.mock("../../stores/PanelStore", () => ({
+  usePanelStore: (
+    selector: (state: { handleViewChange: () => void }) => unknown
+  ) =>
+    selector({
+      handleViewChange: jest.fn()
+    })
+}));
+
 jest.mock("@xyflow/react", () => ({
   useReactFlow: () => ({
     zoomIn: jest.fn(),
@@ -101,6 +134,7 @@ jest.mock("../handlers/useCopyPaste", () => ({
   useCopyPaste: () => ({
     handleCopy: jest.fn(),
     handlePaste: jest.fn(),
+    handleNativePaste: jest.fn(),
     handleCut: jest.fn()
   })
 }));
@@ -208,13 +242,16 @@ describe("useNodeEditorShortcuts", () => {
     expect(unregisterComboCallback).not.toHaveBeenCalled();
   });
 
-  it("registers space shortcut when editor is active", () => {
+  it("registers tab shortcut when editor is active", () => {
     renderHook(() => useNodeEditorShortcuts(true));
 
     const calls = (registerComboCallback as jest.Mock).mock.calls as Array<
       [string]
     >;
-    const hasSpaceShortcut = calls.some(([combo]) => combo === " ");
-    expect(hasSpaceShortcut).toBe(true);
+    const combos = calls.map(([combo]) => combo);
+    expect(combos).toContain("tab");
+    expect(combos).toContain("control+tab");
+    expect(combos).toContain("control+shift+tab");
+    expect(combos).not.toContain(" ");
   });
 });
